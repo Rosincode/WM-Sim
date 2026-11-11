@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { DOCKS, HALL, LANE_LENGTH, LANE_SLOTS, LEVEL_Y, POINTS, laneSlot, shelfLocations, type Point } from '../sim/layout';
 import type { Truck, Warehouse } from '../sim/warehouse';
 import { createPcMesh } from './scene/pc';
+import { palletSticker } from './scene/textures';
 
 // 3D-weergave van de processtaat. Leest alleen de sim; wijzigt niets.
 
@@ -27,14 +28,26 @@ function box(w: number, h: number, d: number, color: string) {
   return mesh;
 }
 
+let stickerMat: THREE.Material | null = null;
+
 function pallet(color = '#a5784a') {
   const g = new THREE.Group();
   const base = box(1, 0.12, 1, '#8d6e4a');
   base.position.y = 0.06;
   const load = box(0.9, 0.7, 0.9, color);
   load.position.y = 0.47;
-  g.add(base, load);
+  // Palletsticker aan beide lange kanten; alleen zichtbaar als de pallet er een heeft
+  stickerMat ??= new THREE.MeshStandardMaterial({ map: palletSticker(), roughness: 0.6 });
+  const sticker = new THREE.Group();
+  for (const side of [1, -1]) {
+    const s = new THREE.Mesh(new THREE.PlaneGeometry(0.26, 0.17), stickerMat);
+    s.position.set(0, 0.3, side * 0.456);
+    s.rotation.y = side > 0 ? 0 : Math.PI;
+    sticker.add(s);
+  }
+  g.add(base, load, sticker);
   g.userData.load = load;
+  g.userData.sticker = sticker;
   return g;
 }
 
@@ -252,7 +265,9 @@ export function createWarehouseView(
       laneLabels[i].out.set(outCount || (staging && i === sim.outDock) ? `${d.outId} · ${outCount}/${LANE_SLOTS}` : '');
       sim.laneIn[i].forEach((p, k) => {
         laneInMeshes[i][k].visible = !!p;
-        if (p) setPalletColor(laneInMeshes[i][k], skuColor(p.sku));
+        if (!p) return;
+        setPalletColor(laneInMeshes[i][k], skuColor(p.sku));
+        (laneInMeshes[i][k].userData.sticker as THREE.Object3D).visible = !p.unlabeled;
       });
       sim.laneOut[i].forEach((id, k) => (laneOutMeshes[i][k].visible = !!id));
     });

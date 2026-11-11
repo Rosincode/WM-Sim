@@ -429,6 +429,22 @@ function drawLocationLabel(g: CanvasRenderingContext2D, id: string, arrow: 'up' 
   barcode(g, 110, 104, 380, 70, hashString(id));
 }
 
+/** Palletsticker: voor elke pallet dezelfde afbeelding; het nummer leest de scanner. */
+export function palletSticker() {
+  return canvasTexture(384, 256, (g, w, h) => {
+    g.fillStyle = '#fbfbf6';
+    g.fillRect(0, 0, w, h);
+    g.strokeStyle = '#111';
+    g.lineWidth = 8;
+    g.strokeRect(4, 4, w - 8, h - 8);
+    g.fillStyle = '#111';
+    g.font = 'bold 60px Arial';
+    g.textBaseline = 'top';
+    g.fillText('PALLET', 22, 20);
+    barcode(g, 22, 100, w - 44, 132, 4711);
+  });
+}
+
 /** Locatielabel voor op de stellingligger. */
 export function locationLabel(id: string, arrow: 'up' | 'down', scale = 1) {
   return canvasTexture(512 * scale, 192 * scale, (g) => {

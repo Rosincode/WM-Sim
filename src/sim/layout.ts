@@ -73,6 +73,11 @@ export const shelfLocations = () => SHELVES;
 /** Hoogte (y) waarop een pallet staat per niveau; zie de stellingen in src/ui/scene/warehouse.ts. */
 export const LEVEL_Y = [0, 0, 2, 4];
 
+/** Een stellinglocatie heeft drie palletplekken naast elkaar; verschuiving (x) van elke plek ten opzichte van het midden. */
+export const SLOT_DX = [-1.3, 0, 1.3];
+/** Stuks op een volle pallet als de hal niet opgeeft hoeveel er van een artikel op passen. */
+export const PER_PALLET = 20;
+
 /** Interactiepunten op de vloer (naast de docks). */
 export const POINTS = {
   /** De pc met de WMS-app. */

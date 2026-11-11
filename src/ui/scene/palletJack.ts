@@ -9,9 +9,9 @@ import { paint, type Hall, type RackPallet, type Solid } from './warehouse';
 interface Options {
   hall: Hall;
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
-  /** Voorraadmutaties in de sim (dezelfde als van de heftruck). */
-  take: (locId: string, maxQty: number) => Load | null;
-  place: (locId: string, load: Load, fromLocId: string) => void;
+  /** Pallets uit en in de stellingen van de sim (dezelfde als van de heftruck). */
+  take: (palletId: string) => Load | null;
+  place: (locId: string, load: Load, fromLocId: string, slot: number) => void;
   onStockChange: () => void;
   /** Pallets die los op de vloer staan; de heftruck en de pompwagen delen die. */
   loose: { list(): Loose[]; take(l: Loose): Carried; drop(c: Carried, x: number, z: number, r: number): void };
@@ -126,11 +126,9 @@ export function createPalletJack({ hall, bounds, take, place, onStockChange, loo
         return;
       }
       const p = t.rack!;
-      if (!p.last) return;
-      const load = take(p.locId, p.qty);
+      const load = take(p.id);
       if (!load) return;
-      const key = `${p.locId}:${p.index}`;
-      attach({ load, from: p.locId, key, mesh: hall.buildLoad(load.sku, load.qty, key) });
+      attach({ load, from: p.locId, key: load.id, mesh: hall.buildLoad(load.sku, load.qty, load.id, !load.unlabeled) });
       onStockChange();
       return;
     }
@@ -140,7 +138,7 @@ export function createPalletJack({ hall, bounds, take, place, onStockChange, loo
       const slot = slotHere();
       if (slot) {
         detach();
-        place(slot.locId, c.load, c.from);
+        place(slot.locId, c.load, c.from, slot.index);
         onStockChange();
       } else if (hall.inRack(f.x, f.z)) {
         return; // in de stelling alleen op een vrije plek: de vorken blijven omhoog
@@ -161,7 +159,7 @@ export function createPalletJack({ hall, bounds, take, place, onStockChange, loo
   function updateHint() {
     const keys = '<b>Q</b>: vorken omhoog/omlaag · <b>R</b>: pompwagen loslaten';
     if (carried) {
-      const what = `${carried.load.qty}× ${carried.load.sku}`;
+      const what = `${carried.load.unlabeled ? 'pallet zonder sticker' : carried.load.id} · ${carried.load.qty}× ${carried.load.sku}`;
       const f = forkPoint();
       const slot = slotHere();
       hint = slot
@@ -176,8 +174,7 @@ export function createPalletJack({ hall, bounds, take, place, onStockChange, loo
       return;
     }
     const t = nearestTarget(REACH);
-    if (t?.rack && !t.rack.last) hint = `Pak eerst de buitenste pallet van ${t.rack.locId} (meest rechts) · <b>R</b>: loslaten`;
-    else if (t) hint = `<b>Q</b>: pallet ${t.rack ? `van ${t.rack.locId}` : 'van de vloer'} optillen · <b>R</b>: loslaten`;
+    if (t) hint = `<b>Q</b>: pallet ${t.rack ? `van ${t.rack.locId}` : 'van de vloer'} optillen · <b>R</b>: loslaten`;
     else hint = `Pompwagen · schuif de vorken onder een pallet op de vloer · ${keys}`;
   }
 
@@ -221,7 +218,7 @@ export function createPalletJack({ hall, bounds, take, place, onStockChange, loo
       detach();
       if (s.load) {
         const { from, key, ...load } = s.load;
-        attach({ load, from, key, mesh: hall.buildLoad(load.sku, load.qty, key) });
+        attach({ load, from, key, mesh: hall.buildLoad(load.sku, load.qty, key, !load.unlabeled) });
       }
     }
   }

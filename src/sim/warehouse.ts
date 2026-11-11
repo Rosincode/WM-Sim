@@ -2,7 +2,7 @@ import type { Item, Order } from '../shared/contract';
 import { publish, type Direction, type ProcessEvent, type ScanKind } from './events';
 import { articles, isBlocked, skus } from './catalog';
 import {
-  DOCKS, LANE_SLOTS, LOCATIONS, POINTS,
+  DOCKS, LANE_SLOTS, LOCATIONS, PER_PALLET, POINTS, SLOT_DX,
   dist, lanePoint, location, shelfLocations, type Dock, type Point,
 } from './layout';
 import { offlineGateway, type WmsGateway, type WmsReply } from './wms';
@@ -12,7 +12,18 @@ import { offlineGateway, type WmsGateway, type WmsReply } from './wms';
 // geen voorraadcontroles. Elke handeling van de speler gaat eerst als vraag naar de WMS (src/sim/wms.ts);
 // pas na akkoord gebeurt hij fysiek. Weigert de WMS, dan gebeurt er niets en ziet de speler de melding.
 
-export type Pallet = { id: string; sku: string; qty: number };
+/**
+ * id = het nummer op de palletsticker. unlabeled = er zit nog geen sticker op: de speler moet er zelf een
+ * plakken (labelPallet) voordat de pallet gescand kan worden. De voorraad bij de start heeft al stickers.
+ */
+export type Pallet = { id: string; sku: string; qty: number; unlabeled?: boolean };
+/** Een pallet in een stelling: op welke locatie, en op welke van de palletplekken daar (0 = links). */
+export type StoredPallet = Pallet & { locationId: string; slot: number };
+/**
+ * Een pallet die fysiek is verplaatst terwijl de WMS hem nog op locationId heeft staan.
+ * at = de stellinglocatie waar hij nu staat; leeg zolang hij op de vorken of los op de vloer staat.
+ */
+type MovedPallet = { locationId: string; sku: string; qty: number; at?: string | null };
 export type TruckStatus = 'arriving' | 'waiting' | 'checkedIn' | 'departing';
 export type Truck = {
   id: string;
@@ -54,6 +65,9 @@ const DEMO_MAX_OPEN_ORDERS = 2;
 /** Zo dichtbij (m) moet je staan om op een gescande locatie iets neer te zetten of te pakken. */
 const REACH = 3.2;
 const DOCK_REACH = 4.5;
+/** Zo dichtbij (m) moet je bij een pallet staan om zijn verplaatsing te boeken (ook vanaf de heftruck). */
+const PALLET_REACH = 4;
+const SLOTS = SLOT_DX.map((_, i) => i);
 
 const rand = (n: number) => Math.floor(Math.random() * n);
 const pad = (n: number, w = 3) => String(n).padStart(w, '0');
@@ -63,17 +77,24 @@ interface Options {
   gateway?: WmsGateway;
   /** true: er is geen WMS-app om orders in te voeren (mock); de sim speelt dan zelf klant via create_order. */
   demoOrders?: () => boolean;
+  /** Stuks op een volle pallet van een artikel (de hal weet hoeveel dozen erop passen). */
+  perPallet?: (sku: string) => number;
 }
 
-export function createWarehouse({ gateway = offlineGateway, demoOrders = () => false }: Options = {}) {
+export function createWarehouse({ gateway = offlineGateway, demoOrders = () => false, perPallet = () => PER_PALLET }: Options = {}) {
   const stock = new Map<string, number>(); // wat er fysiek in de stellingen staat; sleutel: locationId|sku
   const orders: SimOrder[] = [];
   // Per dock een inslagbaan (pallets) en een uitslagbaan (order-id's).
   const laneIn: (Pallet | null)[][] = DOCKS.map(() => Array(LANE_SLOTS).fill(null));
   const laneOut: (string | null)[][] = DOCKS.map(() => Array(LANE_SLOTS).fill(null));
   const trucks: { in: Truck | null; out: Truck | null } = { in: null, out: null };
-  /** Pallets die op de heftruck (of los op de vloer) staan: fysiek weg uit de stelling, in de WMS nog niet. */
-  const forks = new Map<string, { locationId: string; sku: string; qty: number }>();
+  /** De pallets in de stellingen, op het nummer van hun sticker. Samen zijn ze gelijk aan `stock`: zie palletize(). */
+  const racked = new Map<string, StoredPallet>();
+  /**
+   * Pallets die met de heftruck of pompwagen zijn verplaatst en nog niet geboekt: fysiek weg van hun oude
+   * locatie, in de WMS nog niet. De speler boekt de verplaatsing door de palletsticker op de nieuwe locatie te scannen.
+   */
+  const moved = new Map<string, MovedPallet>();
   /** Pallets die iemand van een inslaglocatie heeft opgepakt: fysiek van het dock af, in de WMS staan ze er nog. */
   const transit = new Map<string, { fromId: string; sku: string; qty: number }>();
   const messages: Message[] = [];
@@ -92,7 +113,18 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
   let pending = 0;
   /** Telt elke wijziging in de fysieke wereld; zo herkent de UI een verouderde WMS-stand. */
   let revision = 0;
-  const touch = () => void revision++;
+  const touch = () => {
+    revision++;
+    palletize();
+  };
+  const newPalletId = () => `PAL-${stamp}-${pad(seq.pallet++, 4)}`;
+  /** true tijdens het laden van de beginstand: die pallets hebben hun sticker al. */
+  let seeding = false;
+  /** Een pallet die er later bij komt (vrachtwagen, ontvangst of correctie in de WMS) heeft nog geen sticker. */
+  const newPallet = (sku: string, qty: number): Pallet =>
+    seeding ? { id: newPalletId(), sku, qty } : { id: newPalletId(), sku, qty, unlabeled: true };
+  const what = (p: Pallet) => `${p.qty}× ${p.sku}`;
+  const nameOf = (p: Pallet) => (p.unlabeled ? `pallet zonder sticker (${what(p)})` : p.id);
 
   // --- Berichten ---
   function say(text: string, kind: Message['kind'] = 'info') {
@@ -153,6 +185,77 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     return !!l && l.type !== 'dock';
   };
 
+  // --- Pallets in de stellingen ---
+  const palletsAt = (loc: string) => [...racked.values()].filter((p) => p.locationId === loc);
+  const freeSlot = (loc: string) => {
+    const taken = new Set(palletsAt(loc).map((p) => p.slot));
+    return SLOTS.find((s) => !taken.has(s));
+  };
+
+  /**
+   * Houdt de pallets gelijk met de voorraad per locatie. De WMS kent (nog) geen pallets, alleen aantallen:
+   * komt er voorraad bij, dan vult die een aangebroken pallet aan of komt er een pallet met een nieuw nummer;
+   * gaat er voorraad af (een pick, een correctie in de WMS), dan wordt de buitenste pallet kleiner of verdwijnt.
+   * Een pallet die in zijn geheel wordt verplaatst houdt zijn nummer.
+   */
+  function palletize() {
+    const want = new Map<string, Map<string, number>>();
+    for (const [k, qty] of stock) {
+      const [loc, sku] = k.split('|');
+      if (!want.has(loc)) want.set(loc, new Map());
+      want.get(loc)!.set(sku, qty);
+    }
+    const have = new Map<string, StoredPallet[]>();
+    for (const p of racked.values()) {
+      if (!have.has(p.locationId)) have.set(p.locationId, []);
+      have.get(p.locationId)!.push(p);
+    }
+    for (const loc of new Set([...want.keys(), ...have.keys()])) {
+      const lines = want.get(loc) ?? new Map<string, number>();
+      let here = (have.get(loc) ?? []).sort((a, b) => a.slot - b.slot);
+      for (const p of here) if (!lines.has(p.sku)) racked.delete(p.id);
+      here = here.filter((p) => lines.has(p.sku));
+      for (const [sku, qty] of lines) {
+        const mine = here.filter((p) => p.sku === sku);
+        let diff = qty - mine.reduce((n, p) => n + p.qty, 0);
+        if (diff < 0) {
+          // Te veel: eerst van de geboekte pallets, de buitenste het eerst
+          const order = [...mine].sort((a, b) => Number(moved.has(a.id)) - Number(moved.has(b.id)) || b.slot - a.slot);
+          for (const p of order) {
+            if (diff === 0) break;
+            const take = Math.min(-diff, p.qty);
+            p.qty -= take;
+            diff += take;
+            if (p.qty > 0) continue;
+            racked.delete(p.id);
+            here = here.filter((x) => x !== p);
+          }
+        } else if (diff > 0) {
+          const booked = mine.filter((p) => !moved.has(p.id));
+          for (const p of booked) {
+            const room = Math.min(diff, perPallet(sku) - p.qty);
+            if (room <= 0) continue;
+            p.qty += room;
+            diff -= room;
+          }
+          while (diff > 0) {
+            const slot = SLOTS.find((x) => !here.some((p) => p.slot === x));
+            if (slot === undefined) break;
+            const p = { ...newPallet(sku, Math.min(diff, perPallet(sku))), locationId: loc, slot };
+            racked.set(p.id, p);
+            here.push(p);
+            diff -= p.qty;
+          }
+          // Alle plekken bezet: de rest komt op de laatste pallet van dit artikel (zonder zo'n pallet blijft hij uit beeld).
+          const last = here.filter((p) => p.sku === sku && !moved.has(p.id)).pop();
+          if (diff > 0 && last) last.qty += diff;
+        }
+      }
+    }
+  }
+  /** De pallets in de stellingen, voor de hal. unbooked = verplaatst en nog niet geboekt in de WMS. */
+  const pallets = () => [...racked.values()].map((p) => ({ ...p, unbooked: moved.has(p.id) }));
+
   const order = (id: string) => orders.find((o) => o.id === id);
   const truck = (id: string) => [trucks.in, trucks.out].find((t) => t?.id === id) ?? null;
   const carriedOrder = () => (carry?.kind === 'order' ? order(carry.orderId) : undefined);
@@ -207,12 +310,39 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     now.cargo.splice(i, 1);
     laneIn[t.dock][laneIn[t.dock].lastIndexOf(null)] = pallet; // doorschuiven: de eerste pallet staat het verst de hal in
     touch();
-    return done(`Ontvangen op ${inId}: ${pallet.id}, ${pallet.qty}× ${pallet.sku}.`);
+    return done(`Ontvangen op ${inId}: ${what(pallet)}. Plak er een palletsticker op.`);
+  }
+
+  /**
+   * Plakt een palletsticker op een pallet (op een inslaglocatie of in een stelling): daarmee ligt de voorraad
+   * op die pallet onder een barcode vast (register_pallet). Later drukt de WMS de sticker af op een printer in de hal.
+   */
+  async function labelPallet(id: string): Promise<ScanResult> {
+    const find = () => {
+      const stored = racked.get(id);
+      if (stored) return { pallet: stored as Pallet, locationId: stored.locationId };
+      for (const d of DOCKS) {
+        const pallet = laneIn[d.index].find((x) => x?.id === id);
+        if (pallet) return { pallet, locationId: d.inId };
+      }
+      return null;
+    };
+    const before = find();
+    if (!before?.pallet.unlabeled) return refused('Hier staat geen pallet zonder sticker.');
+    const { pallet, locationId } = before;
+    const r = await ask({ type: 'PalletLabeled', palletId: id, sku: pallet.sku, qty: pallet.qty, locationId });
+    if (!r.ok) return wmsRefused(r, ' de palletsticker');
+    const now = find();
+    if (!now) return refused('De pallet is intussen weg.');
+    delete now.pallet.unlabeled;
+    touch();
+    return done(`Sticker ${id} geplakt: ${what(now.pallet)} op ${now.locationId} vastgelegd.`);
   }
 
   function pickUpPallet(d: Dock, slot: number): ScanResult {
     const pallet = laneIn[d.index][slot];
     if (!pallet || carry) return refused('Hier valt niets op te pakken.');
+    if (pallet.unlabeled) return refused('Plak eerst een palletsticker op deze pallet.');
     scanned('pallet', pallet.id, true, d.inId);
     laneIn[d.index][slot] = null;
     transit.set(pallet.id, { fromId: d.inId, sku: pallet.sku, qty: pallet.qty });
@@ -251,6 +381,8 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     if (carry?.kind === 'pallet' && carry.pallet.id === pallet.id) carry = null;
     transit.delete(pallet.id);
     add(locId, pallet.sku, pallet.qty);
+    const slot = freeSlot(locId); // de pallet houdt zijn nummer; zonder vrije plek gaat hij op in de voorraad daar
+    if (slot !== undefined) racked.set(pallet.id, { ...pallet, locationId: locId, slot });
     touch();
     return done(`${pallet.id} weggezet op ${locId}.`);
   }
@@ -294,6 +426,11 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     const o = carriedOrder();
     if (!o || o.status !== 'picking') return refused('Je hebt geen order onderhanden.');
     if (openLines(o).length === 0) return completePick(o.id);
+    const unbooked = [...moved].find(([, m]) => m.at === locId);
+    if (unbooked) {
+      scanned('location', locId, false, locId);
+      return refused(`Op ${locId} staat ${unbooked[0]}, die nog niet geboekt is: scan eerst de palletsticker.`);
+    }
     const line = openLines(o).find((l) => qtyAt(locId, l.sku) > 0);
     if (!line) {
       scanned('location', locId, false, locId);
@@ -387,42 +524,80 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     return { ok: true, text };
   }
 
-  // ========== Heftruck: hele pallets tussen stellinglocaties verplaatsen ==========
+  // ========== Heftruck en pompwagen: hele pallets verplaatsen ==========
 
-  /** Haalt (maximaal maxQty van) het grootste artikel van een locatie; de pallet staat daarna op de vorken. */
-  function forkliftTake(locId: string, maxQty: number): Pallet | null {
-    const top = stockAt(locId).sort((a, b) => b.qty - a.qty)[0];
-    if (!top) return null;
-    const qty = Math.min(maxQty, top.qty);
-    const pallet = { id: `PAL-${stamp}-${pad(seq.pallet++, 4)}`, sku: top.sku, qty };
-    add(locId, top.sku, -qty);
-    forks.set(pallet.id, { locationId: locId, sku: top.sku, qty });
+  /** Haalt een pallet uit de stelling; hij staat daarna op de vorken. In de WMS staat hij nog op zijn oude locatie. */
+  function forkliftTake(palletId: string): Pallet | null {
+    const p = racked.get(palletId);
+    if (!p) return null;
+    racked.delete(palletId);
+    add(p.locationId, p.sku, -p.qty);
+    const m = moved.get(palletId);
+    if (m) m.at = null; // was al verplaatst en nog niet geboekt: de WMS-locatie blijft de oude
+    else moved.set(palletId, { locationId: p.locationId, sku: p.sku, qty: p.qty, at: null });
     touch();
-    say(`Heftruck: ${qty}× ${top.sku} van ${locId} gepakt.`);
+    say(`${p.unlabeled ? 'Pallet zonder sticker' : p.id} (${what(p)}) van ${p.locationId} gepakt.`);
+    const { locationId: _from, slot: _slot, ...pallet } = p;
     return pallet;
   }
 
   /**
-   * Zet een pallet van de vorken op een stellinglocatie en meldt de verplaatsing bij de WMS (confirm_putaway).
-   * De pallet staat er dan al; weigert de WMS, dan blijft de WMS leidend en trekt de volgende stand het recht.
+   * Zet een pallet van de vorken op een stellinglocatie. Dat is alleen fysiek: de voorraadmutatie volgt pas
+   * als de speler de palletsticker op de nieuwe locatie scant (zie scanPallet).
+   * @param fromLocationId waar de WMS de pallet heeft staan, voor een pallet die de sim niet (meer) volgt.
+   * @param slot de palletplek op de locatie (0 = links).
    */
-  function forkliftPlace(locId: string, pallet: Pallet, fromLocationId: string) {
+  function forkliftPlace(locId: string, pallet: Pallet, fromLocationId: string, slot = 0) {
+    const taken = new Set(palletsAt(locId).map((p) => p.slot));
+    if (taken.has(slot)) slot = SLOTS.find((x) => !taken.has(x)) ?? slot;
+    const m = moved.get(pallet.id) ?? { locationId: fromLocationId, sku: pallet.sku, qty: pallet.qty };
     add(locId, pallet.sku, pallet.qty);
-    touch();
-    if (fromLocationId === locId) {
-      forks.delete(pallet.id);
-      say(`${pallet.id} teruggezet op ${locId}.`);
+    racked.set(pallet.id, { ...pallet, locationId: locId, slot });
+    if (m.locationId === locId) {
+      moved.delete(pallet.id); // terug op de plek waar de WMS hem heeft: er valt niets te boeken
+      touch();
+      say(`${nameOf(pallet)} teruggezet op ${locId}.`);
       return;
     }
-    void ask({
-      type: 'PutawayDone', sku: pallet.sku, qty: pallet.qty,
-      fromLocationId, locationId: locId, palletId: pallet.id,
-    }).then((r) => {
-      forks.delete(pallet.id);
-      touch();
-      if (r.ok) say(`${pallet.id} verplaatst van ${fromLocationId} naar ${locId}.`, 'ok');
-      else say(`WMS weigert de verplaatsing van ${fromLocationId} naar ${locId}: ${r.error} De WMS blijft leidend.`, 'err');
-    });
+    moved.set(pallet.id, { ...m, at: locId });
+    touch();
+    say(
+      pallet.unlabeled
+        ? `De pallet staat nu op ${locId}. Plak er een sticker op en scan die om de verplaatsing te boeken.`
+        : `${pallet.id} staat nu op ${locId}. Scan de palletsticker om de verplaatsing te boeken.`,
+    );
+  }
+
+  /** Boekt een verplaatste pallet op de locatie waar hij nu staat (confirm_putaway van de oude naar de nieuwe locatie). */
+  async function bookMove(id: string): Promise<ScanResult> {
+    const m = moved.get(id);
+    const to = racked.get(id)?.locationId;
+    if (!m || !to) return refused(`${id} staat niet (meer) op een locatie.`);
+    const from = m.locationId;
+    const r = await ask({ type: 'PutawayDone', sku: m.sku, qty: m.qty, fromLocationId: from, locationId: to, palletId: id });
+    scanned('pallet', id, r.ok, to);
+    if (!r.ok) return wmsRefused(r, ` de verplaatsing van ${id} naar ${to}`);
+    // Is hij intussen alweer opgepakt of verzet, dan staat hij in de WMS nu op `to` en moet hij opnieuw gescand worden.
+    const now = moved.get(id);
+    if (racked.get(id)?.locationId === to) moved.delete(id);
+    else if (now) now.locationId = to;
+    touch();
+    return done(`${id} verplaatst van ${from} naar ${to}: ${m.qty}× ${m.sku} omgeboekt.`);
+  }
+
+  /** Een gescande palletsticker. Staat de pallet op een andere locatie dan in de WMS, dan boekt de scan de verplaatsing. */
+  function scanPallet(id: string, pos: Point): Promise<ScanResult> | ScanResult {
+    const p = racked.get(id);
+    if (!p) return { ok: false, text: `${id} staat niet op een locatie. Zet hem in een stelling en scan hem daar.` };
+    if (p.unlabeled) return { ok: false, text: 'Op deze pallet zit nog geen sticker.' };
+    if (!moved.has(id)) {
+      scanned('pallet', id, true, p.locationId);
+      return { ok: true, text: `${id}: ${p.qty}× ${p.sku} op ${p.locationId}.` };
+    }
+    const loc = location(p.locationId)!;
+    if (dist({ x: loc.x + SLOT_DX[p.slot], z: loc.z }, pos) > PALLET_REACH)
+      return { ok: false, text: `Loop naar ${id} op ${p.locationId} om de verplaatsing te boeken.` };
+    return guard(() => bookMove(id));
   }
 
   // ========== Interacties rond de speler (E) ==========
@@ -442,7 +617,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
       if (carry) return i('Handen vol');
       if (t.cargo.length === 0) return i(`Scan ${t.id}: uitmelden`, () => checkOut(t.id));
       const p = t.cargo[0];
-      return i(`Scan ${p.id} en los (${p.qty}× ${p.sku}, nog ${t.cargo.length})`, () => unload(t.id));
+      return i(`Los een pallet (${what(p)}, nog ${t.cargo.length})`, () => unload(t.id));
     }
 
     const o = carriedOrder();
@@ -467,7 +642,12 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
         if (carry.fromId === d.inId) push(interaction(`Pallet terugzetten op ${d.inId}`, inPoint, () => returnPallet(d)), 1.5);
       } else if (!carry && inSlot >= 0) {
         const p = laneIn[d.index][inSlot]!;
-        push(interaction(`Scan ${p.id} op ${d.inId} en pak op (${p.qty}× ${p.sku})`, inPoint, () => pickUpPallet(d, inSlot)), 1.5);
+        push(
+          p.unlabeled
+            ? interaction(`Plak een palletsticker op de pallet op ${d.inId} (${what(p)})`, inPoint, () => labelPallet(p.id))
+            : interaction(`Scan ${p.id} op ${d.inId} en pak op (${what(p)})`, inPoint, () => pickUpPallet(d, inSlot)),
+          1.5,
+        );
       }
 
       const outPoint = lanePoint(d.laneOut, pos);
@@ -522,7 +702,13 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
           1.8,
         );
       } else {
-        push(interaction(`Scan ${name}: wat staat hier?`, section, () => lookAt(section.id)), 1.8);
+        const bare = levels.flatMap((l) => palletsAt(l.id)).find((p) => p.unlabeled);
+        push(
+          bare
+            ? interaction(`Plak een palletsticker op de pallet op ${bare.locationId} (${what(bare)})`, section, () => labelPallet(bare.id))
+            : interaction(`Scan ${name}: wat staat hier?`, section, () => lookAt(section.id)),
+          1.8,
+        );
       }
     }
     return list;
@@ -552,8 +738,10 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
   /**
    * Verwerkt een scan van de handscanner. Wat de scan betekent hangt af van wat je bij je hebt: een pallet
    * (wegzetten), een order onderhanden (picken) of een afgemelde order (klaarzetten). null = alleen kijken.
+   * Een palletsticker boekt de verplaatsing van die pallet.
    */
   async function scan(code: string, pos: Point): Promise<ScanResult | null> {
+    if (racked.has(code) || moved.has(code)) return scanPallet(code, pos);
     const loc = location(code);
     if (!loc) return null;
     const o = carriedOrder();
@@ -591,13 +779,25 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
       const d = laneOut[outDock].includes(null) ? DOCKS[outDock] : DOCKS.find((x) => laneOut[x.index].includes(null));
       return d ? { point: d.laneOut, text: `Zet ${o.id} klaar op ${d.outId}` } : null;
     }
+    const unbooked = [...moved].find(([, m]) => m.at);
+    if (unbooked) {
+      const at = location(unbooked[1].at!);
+      const text = racked.get(unbooked[0])?.unlabeled
+        ? `Plak een sticker op de pallet op ${unbooked[1].at} en scan die om de verplaatsing te boeken`
+        : `Scan de sticker van ${unbooked[0]} op ${unbooked[1].at} om de verplaatsing te boeken`;
+      return { point: at, level: at?.level, text };
+    }
     const inPoint = ti ? DOCKS[ti.dock].truck : undefined;
     const outPoint = to ? DOCKS[to.dock].truck : undefined;
     if (ti?.status === 'waiting') return { point: inPoint, text: `Meld ${ti.id} aan bij ${ti.dockId}` };
     if (ti?.status === 'checkedIn' && ti.cargo.length && laneIn[ti.dock].includes(null))
       return { point: inPoint, text: `Los ${ti.id} (${plural(ti.cargo.length, 'pallet')})` };
     const full = DOCKS.find((d) => laneIn[d.index].some((p) => p));
-    if (full) return { point: full.laneIn, text: `Zet de pallets van ${full.inId} weg` };
+    if (full)
+      return {
+        point: full.laneIn,
+        text: laneIn[full.index].findLast((p) => p)?.unlabeled ? `Plak palletstickers op de pallets van ${full.inId}` : `Zet de pallets van ${full.inId} weg`,
+      };
     if (ti?.status === 'checkedIn' && !ti.cargo.length) return { point: inPoint, text: `Meld ${ti.id} uit` };
     if (to?.status === 'waiting') return { point: outPoint, text: `Meld ${to.id} aan bij ${to.dockId}` };
     if (to?.status === 'checkedIn') {
@@ -628,9 +828,10 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     const cargo: Pallet[] =
       direction === 'in'
         ? Array.from({ length: 2 + rand(3) }, () => ({
-            id: `PAL-${stamp}-${pad(seq.pallet++, 4)}`,
+            id: newPalletId(),
             sku: inbound[rand(inbound.length)],
             qty: 5 * (2 + rand(5)),
+            unlabeled: true, // een binnenkomende pallet krijgt zijn sticker pas in de hal
           }))
         : [];
     return { id, direction, dockId: DOCKS[dock].id, dock, status: 'arriving', t: 0, cargo, loaded: [] };
@@ -703,7 +904,8 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
       laneOut,
       trucks,
       outDock,
-      forks: [...forks],
+      forks: [...moved],
+      pallets: [...racked.values()],
       transit: [...transit],
       articles: articles(),
       seq: { truckIn: seq.truckIn, truckOut: seq.truckOut },
@@ -731,8 +933,13 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
       trucks[slot] = next;
     }
     outDock = s.outDock;
-    forks.clear();
-    for (const [id, f] of s.forks ?? []) forks.set(id, f);
+    moved.clear();
+    for (const [id, f] of s.forks ?? []) moved.set(id, f);
+    racked.clear();
+    for (const p of s.pallets ?? []) racked.set(p.id, p);
+    seeding = !s.pallets; // een speler met een oudere versie stuurt geen pallets: palletize() maakt ze, met sticker
+    palletize();
+    seeding = false;
     transit.clear();
     for (const [id, t] of s.transit ?? []) transit.set(id, t);
     seq.truckIn = Math.max(seq.truckIn, s.seq.truckIn);
@@ -756,15 +963,19 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     picks: [],
   });
 
-  /** Zet de stellingvoorraad gelijk aan de WMS, minus wat fysiek onderweg is (heftruck, lopende picks). */
+  /** Zet de stellingvoorraad gelijk aan de WMS, met wat fysiek anders staat: verplaatste pallets en lopende picks. */
   function setShelfStock(items: Item[]) {
     stock.clear();
     for (const it of items) if (isShelf(it.locationId) && it.qty > 0) add(it.locationId, it.sku, it.qty);
-    for (const f of forks.values()) add(f.locationId, f.sku, -f.qty);
+    for (const m of moved.values()) {
+      add(m.locationId, m.sku, -m.qty);
+      if (m.at) add(m.at, m.sku, m.qty);
+    }
     for (const o of orders) {
       if (o.status !== 'picking') continue;
       for (const p of o.picks) if (!p.booked) add(p.locationId, p.sku, -p.qty);
     }
+    palletize();
   }
 
   /**
@@ -793,7 +1004,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
       for (const [sku, qty] of want) {
         const short = qty - (have.get(sku) ?? 0);
         if (short > 0 && lane.includes(null)) {
-          lane[lane.lastIndexOf(null)] = { id: `PAL-${stamp}-${pad(seq.pallet++, 4)}`, sku, qty: short };
+          lane[lane.lastIndexOf(null)] = newPallet(sku, short);
         }
       }
     }
@@ -833,16 +1044,19 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
   function loadSnapshot(items: Item[], wmsOrders: Order[], source: string) {
     laneIn.forEach((lane) => lane.fill(null));
     laneOut.forEach((lane) => lane.fill(null));
-    forks.clear();
+    moved.clear();
+    racked.clear();
     transit.clear();
     carry = null;
     if (trucks.out) trucks.out.loaded = [];
     orders.length = 0;
+    seeding = true; // de voorraad waarmee de hal begint heeft al palletstickers
     setShelfStock(items);
+    seeding = false;
     for (const it of items) {
       const lane = laneIn[DOCKS.findIndex((d) => d.inId === it.locationId)];
       if (it.qty > 0 && lane?.includes(null)) {
-        lane[lane.lastIndexOf(null)] = { id: `PAL-${stamp}-${pad(seq.pallet++, 4)}`, sku: it.sku, qty: it.qty };
+        lane[lane.lastIndexOf(null)] = { id: newPalletId(), sku: it.sku, qty: it.qty }; // beginstand: met sticker
       }
     }
     const open = wmsOrders.filter(isOpen);
@@ -877,6 +1091,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     stockList,
     worldStock,
     stockAt,
+    pallets,
     forkliftTake,
     forkliftPlace,
     order,

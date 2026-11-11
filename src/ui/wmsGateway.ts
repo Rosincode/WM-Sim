@@ -4,7 +4,8 @@ import type { WmsGateway } from '../sim/wms';
 
 // Vult de poort van de sim (src/sim/wms.ts) in met de WMS-client: elke processtap wordt een API-aanroep
 // en het antwoord van de WMS gaat terug naar de sim. Stappen waar de client nog geen methode voor heeft
-// (aanmelden, pick per regel, klaarzetten, inladen, uitmelden: zie docs/wms/04) gaan door zonder aanroep.
+// (aanmelden, pick per regel, klaarzetten, inladen, uitmelden: zie docs/wms/04; palletsticker plakken:
+// docs/wms/07) gaan door zonder aanroep. Een palletverplaatsing komt hier binnen als PutawayDone.
 
 /** true = de WMS heeft de stap verwerkt; false = geen endpoint in de client. Gooit bij een weigering. */
 async function call(e: ProcessEvent): Promise<boolean> {

@@ -5,15 +5,16 @@ import type { Collider, Hall, RackPallet, Slot, Solid } from './warehouse';
 // Rijden: W/S, sturen: A/D, vorken: pijl omhoog/omlaag.
 // Oppakken: steek de vorken onder een pallet en hef. Neerzetten: zak tot de pallet staat.
 
-export type Load = { id: string; sku: string; qty: number };
+/** id = het nummer van de palletsticker; unlabeled = er zit nog geen sticker op. */
+export type Load = { id: string; sku: string; qty: number; unlabeled?: boolean };
 
 interface Options {
   hall: Hall;
   colliders: Collider[];
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
-  /** Voorraadmutaties in de sim. */
-  take: (locId: string, maxQty: number) => Load | null;
-  place: (locId: string, load: Load, fromLocId: string) => void;
+  /** Pallets uit en in de stellingen van de sim; slot = de palletplek op de locatie. */
+  take: (palletId: string) => Load | null;
+  place: (locId: string, load: Load, fromLocId: string, slot: number) => void;
   /** Aangeroepen na een mutatie zodat de hal de stellingen opnieuw tekent. */
   onStockChange: () => void;
 }
@@ -241,11 +242,9 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
         return;
       }
       const p = t.rack!;
-      if (!p.last) continue;
-      const load = take(p.locId, p.qty);
+      const load = take(p.id);
       if (!load) continue;
-      const key = `${p.locId}:${p.index}`;
-      attach({ load, from: p.locId, key, mesh: hall.buildLoad(load.sku, load.qty, key) });
+      attach({ load, from: p.locId, key: load.id, mesh: hall.buildLoad(load.sku, load.qty, load.id, !load.unlabeled) });
       onStockChange();
       return;
     }
@@ -260,7 +259,7 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
       if (prevH > rest && forkH <= rest) {
         carriage.remove(c.mesh);
         carried = null;
-        place(slot.locId, c.load, c.from);
+        place(slot.locId, c.load, c.from, slot.index);
         onStockChange();
       }
       return;
@@ -331,7 +330,7 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
       carried = null;
       if (s.load) {
         const { from, key, ...load } = s.load;
-        attach({ load, from, key, mesh: hall.buildLoad(load.sku, load.qty, key) });
+        attach({ load, from, key, mesh: hall.buildLoad(load.sku, load.qty, key, !load.unlabeled) });
       }
     }
     if (withLoose) applyLoose(s.loose);
@@ -343,7 +342,7 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
       for (const l of loose) l.mesh.removeFromParent();
       loose.length = 0;
       for (const { from, key, x, z, r, ...load } of list) {
-        const mesh = hall.buildLoad(load.sku, load.qty, key);
+        const mesh = hall.buildLoad(load.sku, load.qty, key, !load.unlabeled);
         mesh.position.set(x, 0, z);
         mesh.rotation.set(0, r, 0);
         g.parent?.add(mesh);
@@ -374,7 +373,7 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
     const f = forkPoint();
     const h = forkH.toFixed(2);
     if (carried) {
-      const what = `${carried.load.qty}× ${carried.load.sku}`;
+      const what = `${carried.load.unlabeled ? 'pallet zonder sticker' : carried.load.id} · ${carried.load.qty}× ${carried.load.sku}`;
       if (slot) {
         const near = Math.hypot(slot.x - f.x, slot.z - f.z) <= REACH + 0.1;
         hint = near
@@ -401,8 +400,7 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
       return;
     }
     const name = best.rack ? `op ${best.rack.locId}` : 'op de vloer';
-    if (best.rack && !best.rack.last) hint = `Pak eerst de buitenste pallet van ${best.rack.locId} (meest rechts)`;
-    else if (forkH <= best.y + 0.1 && forkH > best.y - 0.1) hint = `<b>↑</b> heffen om de pallet ${name} op te pakken`;
+    if (forkH <= best.y + 0.1 && forkH > best.y - 0.1) hint = `<b>↑</b> heffen om de pallet ${name} op te pakken`;
     else hint = `Pallet ${name} staat op ${best.y.toFixed(2)} m · zet de vorken op ${(best.y + 0.06).toFixed(2)} m (nu ${h} m)`;
   }
 

@@ -4,7 +4,7 @@ import type { ScanTarget } from './scene/warehouse';
 
 // Wat de speler in first person vasthoudt: 1 = handscanner, 2 = tablet met de WMS-app.
 // De scanner legt elke scan voor aan de WMS (onScan) en toont het antwoord; wat er op een locatie ligt
-// leest hij uit de WMS-gegevens die via setData() binnenkomen. Het beeld van de tablet is de WMS-app zelf.
+// leest hij uit de WMS-gegevens die via setData() binnenkomen. Hij leest locatielabels en palletstickers. Het beeld van de tablet is de WMS-app zelf.
 
 export type Tool = 'scanner' | 'tablet';
 export type WmsSnapshot = {
@@ -43,7 +43,7 @@ function wrap(g: CanvasRenderingContext2D, text: string, maxWidth: number) {
 
 /** Antwoord van de WMS op een scan. */
 export type ScanReply = { ok: boolean; text: string };
-type Scan = { code: string | null; time: string; reply?: ScanReply | 'wait' };
+type Scan = { code: string | null; time: string; reply?: ScanReply | 'wait'; /** Bij een palletsticker: wat er op de pallet staat. */ pallet?: ScanTarget['pallet'] };
 /** Afmetingen van het tabletscherm in meters. */
 export const TABLET_SCREEN = { w: 0.2368, h: 0.148 };
 const SCAN_RANGE = 8;
@@ -223,9 +223,9 @@ export function createHandheld({ camera, canvas, world, scanTargets, onScan }: O
       g.fillStyle = '#9fb3c8';
       g.font = '26px Arial';
       g.fillText('Richt op een', 20, 150);
-      g.fillText('locatielabel', 20, 186);
-      g.fillText('en klik om te', 20, 222);
-      g.fillText('scannen.', 20, 258);
+      g.fillText('locatielabel of', 20, 186);
+      g.fillText('palletsticker en', 20, 222);
+      g.fillText('klik om te scannen.', 20, 258);
     } else if (!lastScan.code) {
       g.fillStyle = '#ff8a80';
       g.font = 'bold 34px Arial';
@@ -244,11 +244,14 @@ export function createHandheld({ camera, canvas, world, scanTargets, onScan }: O
       g.fillText(lastScan.code, 20, 134, w - 40);
       g.fillStyle = '#9fb3c8';
       g.font = '22px Arial';
-      const kind = loc ? { dock: 'Dock', rack: 'Bulklocatie', pick: 'Picklocatie' }[loc.type] : 'Onbekend in WMS';
+      const pal = lastScan.pallet;
+      const kind = pal
+        ? pal.locationId ? `Pallet · op ${pal.locationId}` : 'Pallet · niet op een locatie'
+        : loc ? { dock: 'Dock', rack: 'Bulklocatie', pick: 'Picklocatie' }[loc.type] : 'Onbekend in WMS';
       g.fillText(loc?.blocked ? `${kind} · geblokkeerd` : kind, 20, 178);
       g.fillStyle = '#24384d';
       g.fillRect(20, 198, w - 40, 2);
-      const lines = stockAt(lastScan.code);
+      const lines = pal ? [{ sku: pal.sku, qty: pal.qty }] : stockAt(lastScan.code);
       if (lines.length === 0) {
         g.fillStyle = '#9fb3c8';
         g.font = '26px Arial';
@@ -343,7 +346,7 @@ export function createHandheld({ camera, canvas, world, scanTargets, onScan }: O
       }
     }
 
-    const current: Scan = { code: best ? best.code : null, time: clock() };
+    const current: Scan = { code: best ? best.code : null, time: clock(), pallet: best?.pallet };
     lastScan = current;
     scans++;
     scanTimer = 0.4;

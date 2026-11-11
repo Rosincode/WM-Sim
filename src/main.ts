@@ -222,9 +222,12 @@ window.addEventListener('keydown', (e) => {
 });
 
 // Processim (vrachtwagens, banen, taken). De voorraad in de stellingen tekent de hal zelf.
-const warehouse = mountWarehouse({ scene, camera, player, rackStock: false });
+const warehouse = mountWarehouse({ scene, camera, player, rackStock: false, perPallet: hall.palletCapacity });
 warehouse.onWmsData((data) => handheld.setData(data)); // wat de scanner over een locatie laat zien komt uit de WMS
-const refreshHall = () => hall.setStock(warehouse.stockList().filter((s) => !s.locationId.startsWith('DOCK')));
+const refreshHall = () => {
+  hall.setPallets(warehouse.pallets());
+  hall.setLoose(forklift.loose.list().map((l) => ({ ...l.load, x: l.x, z: l.z, r: l.r }))); // ook hun stickers zijn te scannen
+};
 setInterval(refreshHall, 500);
 
 // --- Heftruck: instappen met R, rijden met W/A/S/D, vorken met pijl omhoog/omlaag ---
@@ -401,7 +404,8 @@ renderer.setAnimationLoop((now) => {
     if (jack.held && jack.hint) list.push(hintPrompt(jack.hint));
     const action = warehouse.action();
     if (action) list.push({ key: 'E', html: esc(action.label), off: !action.enabled });
-    if (handheld.aimed) list.push({ key: 'Klik', html: `Label <b>${esc(handheld.aimed)}</b> scannen` });
+    if (handheld.aimed)
+      list.push({ key: 'Klik', html: `${handheld.aimed.startsWith('PAL-') ? 'Palletsticker' : 'Label'} <b>${esc(handheld.aimed)}</b> scannen` });
     if (driving) {
       list.push({ key: 'R', html: 'Uitstappen' });
     } else if (jack.held) {

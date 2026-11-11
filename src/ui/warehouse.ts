@@ -32,12 +32,15 @@ export function mountWarehouse({
   camera,
   player,
   rackStock = true,
+  perPallet,
 }: {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   player: THREE.Object3D;
   /** false: de hal tekent de stellingvoorraad zelf (src/ui/scene/warehouse). */
   rackStock?: boolean;
+  /** Stuks op een volle pallet van een artikel. */
+  perPallet?: (sku: string) => number;
 }) {
   // Elke speler heeft zijn eigen mock-WMS. Zodra de wereld (mede) van een andere speler komt, loopt die mock
   // niet meer gelijk en slaan we hem over; de echte WMS is voor iedereen dezelfde en blijft altijd leidend.
@@ -45,6 +48,7 @@ export function mountWarehouse({
   const sim: Warehouse = createWarehouse({
     gateway: createWmsGateway({ bypass: mockOutOfStep }),
     demoOrders: () => wms.client.mode === 'mock', // met een echte WMS komen orders uit de WMS-app
+    perPallet,
   });
   const view = createWarehouseView(scene, player, sim, { rackStock });
   const hud = createProcessHud(sim);
@@ -202,13 +206,15 @@ export function mountWarehouse({
     orders: () => sim.orders,
     /** Id van de order die deze speler onderhanden heeft, anders null. */
     carriedOrder: () => (sim.carry?.kind === 'order' ? sim.carry.orderId : null),
+    /** De pallets in de stellingen, voor de hal. */
+    pallets: () => sim.pallets(),
     /** Draagt de speler iets (pallet of orderbak)? Voor de houding van de figuur. */
     carrying: () => !!sim.carry,
     /** Wat de toets E op deze plek doet (enabled: false = kan nu niet), of null als hier niets te doen is. */
     action: () => action,
     /** Wat de speler draagt, voor andere spelers: '' (niets), 'order' of het artikel van de pallet. */
     carryLabel: () => (sim.carry?.kind === 'pallet' ? sim.carry.pallet.sku : sim.carry ? 'order' : ''),
-    /** De handscanner las een locatielabel: de sim legt de scan voor aan de WMS. null = alleen kijken. */
+    /** De handscanner las een locatielabel of palletsticker: de sim legt de scan voor aan de WMS. null = alleen kijken. */
     scan: (code: string) => sim.scan(code, pos()),
     /** De stand uit de WMS, telkens als die verandert (voor het scherm van de handscanner). */
     onWmsData(l: (d: WmsData) => void) {
@@ -224,7 +230,7 @@ export function mountWarehouse({
       },
       setAuthority: sim.setAuthority,
     },
-    /** Voor de heftruck: hele pallets van en naar stellinglocaties. */
+    /** Voor de heftruck en de pompwagen: hele pallets uit en in de stellingen. */
     forkliftTake: sim.forkliftTake,
     forkliftPlace: sim.forkliftPlace,
     update(dt: number) {

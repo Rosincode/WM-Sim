@@ -21,7 +21,9 @@ export type ProcessEvent =
   | { type: 'PickStarted'; orderId: string }
   | { type: 'PickLineConfirmed'; orderId: string; sku: string; qty: number; locationId: string }
   | { type: 'OrderStaged'; orderId: string; dockId: string }
-  | { type: 'OrderLoaded'; orderId: string; truckId: string; dockId: string };
+  | { type: 'OrderLoaded'; orderId: string; truckId: string; dockId: string }
+  /** Er is een palletsticker geplakt: de voorraad op die pallet ligt nu onder een barcode vast (docs/wms/07). */
+  | { type: 'PalletLabeled'; palletId: string; sku: string; qty: number; locationId: string };
 
 export type ProcessEventType = ProcessEvent['type'];
 
@@ -38,6 +40,7 @@ export const WMS_ACTIONS: Record<ProcessEventType, string> = {
   PickLineConfirmed: 'confirm_pick_line',
   OrderStaged: 'stage_order',
   OrderLoaded: 'load_order',
+  PalletLabeled: 'register_pallet',
 };
 
 /** Wat de WMS met de stap deed. linked = echt in de WMS verwerkt; false = alleen lokaal (nog geen endpoint). */

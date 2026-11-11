@@ -1,11 +1,10 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import type { Item } from '../../shared/contract';
-import { DOCKS, HALL as FLOOR, LANE_LENGTH, ROW_Z, SECTION_X as BAY_X } from '../../sim/layout';
+import { DOCKS, HALL as FLOOR, LANE_LENGTH, ROW_Z, SECTION_X as BAY_X, SLOT_DX } from '../../sim/layout';
 import * as tex from './textures';
 
 // Het magazijngebouw: vloer, wanden, dak, docks, stellingen, pallets en verlichting.
-// Alleen weergave: de voorraad komt binnen via setStock().
+// Alleen weergave: de pallets in de stellingen komen binnen via setPallets().
 
 // Plattegrond (maten, docks, stellingrijen) komt uit src/sim/layout.ts.
 export const HALL = { ...FLOOR, h: 8.5 };
@@ -31,10 +30,15 @@ export type Solid = {
   /** Beweegt mee met de vorken van de heftruck. */
   lift?: boolean;
 };
-export type ScanTarget = { code: string; position: THREE.Vector3 };
-/** Een pallet zoals hij nu in de stelling staat. `last` = de buitenste van zijn locatie (die pak je als eerste). */
-export type RackPallet = { locId: string; index: number; last: boolean; x: number; y: number; z: number; qty: number; sku: string; /** Bovenkant van de lading. */ top: number };
-export type Slot = { locId: string; x: number; y: number; z: number };
+/** pallet: het label is een palletsticker; locationId is leeg als de pallet los op de vloer staat. */
+export type ScanTarget = { code: string; position: THREE.Vector3; pallet?: { sku: string; qty: number; locationId: string | null } };
+/** Een pallet zoals de sim hem in een stelling heeft staan. slot = de palletplek op de locatie (0 = links). */
+export type PalletView = { id: string; locationId: string; slot: number; sku: string; qty: number; unlabeled?: boolean; /** Verplaatst, nog niet geboekt. */ unbooked?: boolean };
+/** Een pallet zoals hij nu in de stelling staat. index = de palletplek op zijn locatie. */
+export type RackPallet = { id: string; locId: string; index: number; x: number; y: number; z: number; qty: number; sku: string; /** Bovenkant van de lading. */ top: number };
+export type Slot = { locId: string; /** De palletplek op de locatie (0 = links). */ index: number; x: number; y: number; z: number };
+/** Een pallet die los op de vloer staat (r = draaiing). */
+export type LoosePallet = { id: string; sku: string; qty: number; x: number; z: number; r: number; unlabeled?: boolean };
 
 export const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
 export const UNIT_CYL = new THREE.CylinderGeometry(1, 1, 1, 20);
@@ -506,10 +510,27 @@ export function createWarehouse(scene: THREE.Scene) {
     m.castShadow = true;
     m.receiveShadow = true;
   }
-  for (const m of [pallets, cartons, wraps]) {
+  // Palletstickers: op de lading, aan beide gangpadkanten. Oranje = verplaatst en nog niet geboekt.
+  const STICKER_Y = PALLET_H + 0.125;
+  const STICKER_Z = 0.517; // net buiten de dozen en de wikkelfolie
+  const STICKER_X = 0.617;
+  const stickerGeo = new THREE.PlaneGeometry(0.26, 0.17);
+  const stickerMat = new THREE.MeshStandardMaterial({ map: tex.palletSticker(), roughness: 0.6 });
+  const stickers = new THREE.InstancedMesh(stickerGeo, stickerMat, MAX_PALLETS * 2);
+  stickers.setColorAt(0, new THREE.Color(1, 1, 1));
+  stickers.receiveShadow = true;
+  for (const m of [pallets, cartons, wraps, stickers]) {
     m.count = 0;
     m.frustumCulled = false;
     scene.add(m);
+  }
+  // Scanbare stickers komen achter de vaste labels in scanTargets: de scanner leest die lijst elke keer opnieuw.
+  const fixedTargets = scanTargets.length;
+  let rackStickers: ScanTarget[] = [];
+  let looseStickers: ScanTarget[] = [];
+  function refreshTargets() {
+    scanTargets.length = fixedTargets;
+    scanTargets.push(...rackStickers, ...looseStickers);
   }
 
   function slotsFor(id: string): [number, number, number][] | null {
@@ -519,7 +540,7 @@ export function createWarehouse(scene: THREE.Scene) {
       const x = BAY_X[+rack[2] - 1];
       const y = LEVEL_Y[+rack[3] - 1];
       if (z === undefined || x === undefined || y === undefined) return null;
-      return [-1.3, 0, 1.3].map((dx) => [x + dx, y === 0 ? 0 : y + 0.01, z]);
+      return SLOT_DX.map((dx) => [x + dx, y === 0 ? 0 : y + 0.01, z]);
     }
     return null;
   }
@@ -531,8 +552,7 @@ export function createWarehouse(scene: THREE.Scene) {
     [0.3, 0.24, 0.5],
     [0.4, 0.4, 0.33],
   ];
-  const SLOTS_PER_LOCATION = 3;
-  /** Hoe vaak een doos gehalveerd mag worden om een grote voorraad toch op 3 pallets te krijgen. */
+  /** Hoe vaak een doos gehalveerd mag worden om een pallet met meer stuks dan er normaal op passen toch te tonen. */
   const MAX_SHRINK = 3;
   const m4 = new THREE.Matrix4();
   const q = new THREE.Quaternion();
@@ -564,12 +584,8 @@ export function createWarehouse(scene: THREE.Scene) {
     return s;
   }
 
-  /** Stuks per pallet voor een hele locatie: zo groot dat de voorraad op de 3 palletplekken past. */
-  function perPalletAt(sku: string, total: number) {
-    let s = stacking(sku, 0);
-    for (let k = 1; k <= MAX_SHRINK && s.capacity * SLOTS_PER_LOCATION < total; k++) s = stacking(sku, k);
-    return s.capacity;
-  }
+  /** Stuks op een volle pallet van dit artikel, met de gewone doosmaat: zo groot maakt de sim nieuwe pallets. */
+  const palletCapacity = (sku: string) => stacking(sku, 0).capacity;
 
   /** Hoogte van een pallet met lading (bovenkant van de bovenste laag dozen). */
   function loadHeight(sku: string, qty: number) {
@@ -614,8 +630,11 @@ export function createWarehouse(scene: THREE.Scene) {
     return { cartons, wrap };
   }
 
-  /** Losse pallet met lading (voor op de vorken of los op de vloer); zelfde uiterlijk als in de stelling. */
-  function buildLoad(sku: string, qty: number, jitterKey: string) {
+  /**
+   * Losse pallet met lading (voor op de vorken of los op de vloer); zelfde uiterlijk als in de stelling.
+   * @param sticker false: er zit nog geen palletsticker op.
+   */
+  function buildLoad(sku: string, qty: number, jitterKey: string, sticker = true) {
     const g = new THREE.Group();
     const { cartons: list, wrap } = loadLayout(sku, qty, jitterKey);
     const base = new THREE.Mesh(palletGeo, woodMat);
@@ -637,65 +656,68 @@ export function createWarehouse(scene: THREE.Scene) {
       w.scale.set(wrap.sx, wrap.sy, wrap.sz);
       g.add(w);
     }
+    if (sticker)
+      for (const [x, z, ry] of [[0, STICKER_Z, 0], [0, -STICKER_Z, Math.PI], [STICKER_X, 0, Math.PI / 2], [-STICKER_X, 0, -Math.PI / 2]]) {
+        const s = new THREE.Mesh(stickerGeo, stickerMat);
+        s.position.set(x, STICKER_Y, z);
+        s.rotation.y = ry;
+        g.add(s);
+      }
     return g;
   }
 
   let stockSignature = '';
   let rackPallets: RackPallet[] = [];
   let solids: Solid[] = fixedSolids;
-  const palletCount = new Map<string, number>();
+  /** Bezette palletplekken per locatie. */
+  const usedSlots = new Map<string, Set<number>>();
 
-  /** Tekent de voorraad: per locatie 1-3 pallets, de laatste pallet bevat de rest. */
-  function setStock(items: Item[]) {
-    const perLoc = new Map<string, { qty: number; sku: string; top: number }>();
-    for (const it of items) {
-      if (it.qty <= 0) continue;
-      const cur = perLoc.get(it.locationId) ?? { qty: 0, sku: it.sku, top: 0 };
-      cur.qty += it.qty;
-      if (it.qty > cur.top) {
-        cur.top = it.qty;
-        cur.sku = it.sku;
-      }
-      perLoc.set(it.locationId, cur);
-    }
-    const signature = [...perLoc].map(([id, v]) => `${id}:${v.qty}:${v.sku}`).sort().join('|');
+  /** Tekent de pallets in de stellingen, elk op zijn eigen plek, met zijn sticker als hij die heeft. */
+  function setPallets(list: PalletView[]) {
+    const signature = list.map((p) => `${p.id}:${p.locationId}:${p.slot}:${p.qty}:${p.sku}:${p.unlabeled ? 0 : p.unbooked ? 2 : 1}`).join('|');
     if (signature === stockSignature) return;
     stockSignature = signature;
 
     let np = 0;
     let nc = 0;
     let nw = 0;
+    let ns = 0;
     rackPallets = [];
-    palletCount.clear();
-    for (const [id, { qty, sku }] of perLoc) {
-      const slots = slotsFor(id);
-      if (!slots) continue;
-      // 1 doos = 1 stuk: volle pallets vooraan, de buitenste pallet heeft de rest
-      const perPallet = perPalletAt(sku, qty);
-      const count = Math.min(slots.length, Math.ceil(qty / perPallet));
-      palletCount.set(id, count);
-      for (let i = 0; i < count && np < MAX_PALLETS; i++) {
-        const [sx, sy, sz] = slots[i];
-        const onPallet = i === count - 1 ? qty - i * perPallet : perPallet;
-        const key = `${id}:${i}`;
-        const r = tex.rng(tex.hashString(key));
-        const px = sx + (r() - 0.5) * 0.06;
-        const pz = sz + (r() - 0.5) * 0.05;
-        q.setFromEuler(euler.set(0, (r() - 0.5) * 0.05, 0));
-        pallets.setMatrixAt(np++, m4.compose(pos.set(px, sy, pz), q, scl.set(1, 1, 1)));
-        rackPallets.push({ locId: id, index: i, last: i === count - 1, x: px, y: sy, z: pz, qty: onPallet, sku, top: sy + loadHeight(sku, onPallet) });
+    rackStickers = [];
+    usedSlots.clear();
+    for (const p of list) {
+      const slot = slotsFor(p.locationId)?.[p.slot];
+      if (!slot || p.qty <= 0 || np >= MAX_PALLETS) continue;
+      const used = usedSlots.get(p.locationId) ?? new Set<number>();
+      used.add(p.slot);
+      usedSlots.set(p.locationId, used);
+      const [sx, sy, sz] = slot;
+      const r = tex.rng(tex.hashString(`${p.locationId}:${p.slot}`));
+      const px = sx + (r() - 0.5) * 0.06;
+      const pz = sz + (r() - 0.5) * 0.05;
+      q.setFromEuler(euler.set(0, (r() - 0.5) * 0.05, 0));
+      pallets.setMatrixAt(np++, m4.compose(pos.set(px, sy, pz), q, scl.set(1, 1, 1)));
+      rackPallets.push({ id: p.id, locId: p.locationId, index: p.slot, x: px, y: sy, z: pz, qty: p.qty, sku: p.sku, top: sy + loadHeight(p.sku, p.qty) });
 
-        const { cartons: list, wrap } = loadLayout(sku, onPallet, key);
-        for (const c of list) {
-          if (nc >= MAX_CARTONS) break;
-          q.setFromEuler(euler.set(0, c.ry, 0));
-          cartons.setMatrixAt(nc, m4.compose(pos.set(px + c.x, sy + c.y, pz + c.z), q, scl.set(c.sx, c.sy, c.sz)));
-          cartons.setColorAt(nc++, tint.setRGB(c.r, c.g, c.b));
-        }
-        if (wrap) {
-          q.identity();
-          wraps.setMatrixAt(nw++, m4.compose(pos.set(px, sy + wrap.y, pz), q, scl.set(wrap.sx, wrap.sy, wrap.sz)));
-        }
+      // De opbouw hangt aan het palletnummer: een pallet ziet er op elke plek hetzelfde uit.
+      const { cartons: boxes, wrap } = loadLayout(p.sku, p.qty, p.id);
+      for (const c of boxes) {
+        if (nc >= MAX_CARTONS) break;
+        q.setFromEuler(euler.set(0, c.ry, 0));
+        cartons.setMatrixAt(nc, m4.compose(pos.set(px + c.x, sy + c.y, pz + c.z), q, scl.set(c.sx, c.sy, c.sz)));
+        cartons.setColorAt(nc++, tint.setRGB(c.r, c.g, c.b));
+      }
+      if (wrap) {
+        q.identity();
+        wraps.setMatrixAt(nw++, m4.compose(pos.set(px, sy + wrap.y, pz), q, scl.set(wrap.sx, wrap.sy, wrap.sz)));
+      }
+      if (p.unlabeled) continue;
+      for (const side of [1, -1]) {
+        const position = new THREE.Vector3(px, sy + STICKER_Y, pz + side * STICKER_Z);
+        q.setFromEuler(euler.set(0, side > 0 ? 0 : Math.PI, 0));
+        stickers.setMatrixAt(ns, m4.compose(position, q, scl.set(1, 1, 1)));
+        stickers.setColorAt(ns++, p.unbooked ? tint.setRGB(1, 0.62, 0.2) : tint.setRGB(1, 1, 1));
+        rackStickers.push({ code: p.id, position, pallet: { sku: p.sku, qty: p.qty, locationId: p.locationId } });
       }
     }
     solids = [
@@ -705,8 +727,31 @@ export function createWarehouse(scene: THREE.Scene) {
     pallets.count = np;
     cartons.count = nc;
     wraps.count = nw;
-    for (const m of [pallets, cartons, wraps]) m.instanceMatrix.needsUpdate = true;
-    if (cartons.instanceColor) cartons.instanceColor.needsUpdate = true;
+    stickers.count = ns;
+    for (const m of [pallets, cartons, wraps, stickers]) m.instanceMatrix.needsUpdate = true;
+    for (const m of [cartons, stickers]) if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    refreshTargets();
+  }
+
+  let looseSignature = '';
+  /** Pallets die los op de vloer staan: hun stickers zijn ook te scannen. */
+  function setLoose(list: LoosePallet[]) {
+    const signature = list.map((l) => `${l.id}:${l.x}:${l.z}:${l.r}:${l.unlabeled ? 0 : 1}`).join('|');
+    if (signature === looseSignature) return;
+    looseSignature = signature;
+    looseStickers = [];
+    for (const l of list) {
+      if (l.unlabeled) continue;
+      const cos = Math.cos(l.r);
+      const sin = Math.sin(l.r);
+      for (const [dx, dz] of [[0, STICKER_Z], [0, -STICKER_Z], [STICKER_X, 0], [-STICKER_X, 0]])
+        looseStickers.push({
+          code: l.id,
+          position: new THREE.Vector3(l.x + dx * cos + dz * sin, STICKER_Y, l.z - dx * sin + dz * cos),
+          pallet: { sku: l.sku, qty: l.qty, locationId: null },
+        });
+    }
+    refreshTargets();
   }
 
   /** Dichtstbijzijnde vrije palletplek in de stellingen bij punt (x, hoogte, z), of null. */
@@ -717,15 +762,15 @@ export function createWarehouse(scene: THREE.Scene) {
       BAY_X.forEach((_, s) =>
         LEVEL_Y.forEach((_, l) => {
           const locId = `R${r + 1}-${String(s + 1).padStart(2, '0')}-${l + 1}`;
-          const n = palletCount.get(locId) ?? 0;
-          if (n >= SLOTS_PER_LOCATION) return;
-          const [sx, sy, sz] = slotsFor(locId)![n];
-          if (Math.abs(height - sy) > 1.3) return;
-          const d = Math.hypot(x - sx, z - sz);
-          if (d < bestD) {
-            bestD = d;
-            best = { locId, x: sx, y: sy, z: sz };
-          }
+          const used = usedSlots.get(locId);
+          slotsFor(locId)!.forEach(([sx, sy, sz], index) => {
+            if (used?.has(index) || Math.abs(height - sy) > 1.3) return;
+            const d = Math.hypot(x - sx, z - sz);
+            if (d < bestD) {
+              bestD = d;
+              best = { locId, index, x: sx, y: sy, z: sz };
+            }
+          });
         }),
       ),
     );
@@ -742,12 +787,14 @@ export function createWarehouse(scene: THREE.Scene) {
     solids: () => solids,
     loadHeight,
     scanTargets,
-    setStock,
+    setPallets,
+    setLoose,
     /** De pallets die nu in de stellingen staan. */
     rackPallets: () => rackPallets,
     nearestFreeSlot,
     inRack,
     buildLoad,
+    palletCapacity,
   };
 }
 
