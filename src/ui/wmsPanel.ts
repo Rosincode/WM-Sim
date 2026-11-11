@@ -1,10 +1,11 @@
 import { wms } from '../integrations/wms';
 
-// Klein paneel rechtsboven: status van de WMS-koppeling + inlogformulier.
+// Status van de WMS-koppeling + inlogformulier. Staat op het scherm van de pc in het magazijn (src/ui/pcScreen.ts).
 
 const css = `
 .wms-panel { position: fixed; right: 16px; top: 16px; width: 280px; padding: 12px 14px; border-radius: 8px;
   background: rgba(0,0,0,.7); color: #fff; font: 14px system-ui, sans-serif; line-height: 1.4; }
+.wms-panel.embedded { position: static; width: auto; padding: 0; background: none; }
 .wms-panel b { display: block; margin-bottom: 4px; }
 .wms-panel .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
 .wms-panel input { box-sizing: border-box; width: 100%; margin: 4px 0; padding: 6px 8px; border-radius: 4px;
@@ -19,14 +20,15 @@ const css = `
 .wms-panel .hint { color: #9aa0a6; font-size: 12px; }
 `;
 
-export function mountWmsPanel() {
+/** Zonder parent zweeft het paneel rechtsboven; met parent staat het in dat element (het scherm van de pc). */
+export function mountWmsPanel(parent?: HTMLElement) {
   const style = document.createElement('style');
   style.textContent = css;
   document.head.appendChild(style);
 
   const panel = document.createElement('div');
-  panel.className = 'wms-panel';
-  document.body.appendChild(panel);
+  panel.className = parent ? 'wms-panel embedded' : 'wms-panel';
+  (parent ?? document.body).appendChild(panel);
 
   let showForm = false;
   let message = '';

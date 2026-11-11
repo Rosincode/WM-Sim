@@ -156,7 +156,7 @@ const forklift = createForklift({
 forklift.group.position.set(-10, 0, 3.5);
 forklift.group.rotation.y = Math.PI / 2;
 scene.add(forklift.group, forklift.marker);
-if (import.meta.env.DEV) Object.assign(window, { wmDebug: { forklift, setDriving: (on: boolean) => setDriving(on) } });
+if (import.meta.env.DEV) Object.assign(window, { wmDebug: { forklift, hall, setDriving: (on: boolean) => setDriving(on) } });
 
 const driveHint = document.createElement('div');
 driveHint.style.cssText =

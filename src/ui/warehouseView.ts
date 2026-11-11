@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { LANE_SLOTS, LEVEL_Y, POINTS, laneSlot, shelfLocations, type Point } from '../sim/layout';
 import type { Truck, Warehouse } from '../sim/warehouse';
+import { createPcMesh } from './scene/pc';
 
 // 3D-weergave van de processtaat. Leest alleen de sim; wijzigt niets.
 
@@ -130,20 +131,18 @@ export function createWarehouseView(
   yard.receiveShadow = true;
   root.add(yard);
 
-  // --- Vaste objecten: banen en orderterminal ---
+  // --- Vaste objecten: banen en de pc (orderterminal + WMS-aanmelding) ---
   root.add(floorMark(POINTS.laneIn, 4, 2.6, '#4fc3f7'), floorMark(POINTS.laneOut, 4, 2.6, '#81c784'));
-  const desk = box(1.4, 1, 0.7, '#607d8b');
-  desk.position.set(POINTS.terminal.x, 0.5, POINTS.terminal.z);
-  const screen = box(0.8, 0.5, 0.05, '#80deea');
-  screen.position.set(POINTS.terminal.x, 1.35, POINTS.terminal.z - 0.2);
-  root.add(desk, screen);
+  const pc = createPcMesh();
+  pc.group.position.set(POINTS.terminal.x, 0, POINTS.terminal.z);
+  root.add(pc.group);
 
   const labels = {
     laneIn: label(), laneOut: label(), terminal: label(), truckIn: label(4.5), truckOut: label(4.5),
   };
   labels.laneIn.sprite.position.set(POINTS.laneIn.x, 2.2, POINTS.laneIn.z);
   labels.laneOut.sprite.position.set(POINTS.laneOut.x, 2.2, POINTS.laneOut.z);
-  labels.terminal.sprite.position.set(POINTS.terminal.x, 2.4, POINTS.terminal.z);
+  labels.terminal.sprite.position.set(POINTS.terminal.x, 2.2, POINTS.terminal.z);
   labels.truckIn.sprite.position.set(-17.5, 4.3, POINTS.truckIn.z);
   labels.truckOut.sprite.position.set(-17.5, 4.3, POINTS.truckOut.z);
   Object.values(labels).forEach((l) => root.add(l.sprite));
@@ -227,7 +226,7 @@ export function createWarehouseView(
     labels.laneIn.set(`Inslag ${inCount}/${LANE_SLOTS}`);
     labels.laneOut.set(`Uitgaand ${outCount}/${LANE_SLOTS}`);
     const open = sim.orders.filter((o) => o.status === 'open').length;
-    labels.terminal.set(`Orderterminal · ${open} open`);
+    labels.terminal.set(`PC · ${open} open order${open === 1 ? '' : 's'}`);
 
     sim.laneIn.forEach((p, i) => {
       laneInMeshes[i].visible = !!p;
@@ -270,5 +269,5 @@ export function createWarehouseView(
     }
   }
 
-  return { update };
+  return { update, setPcScreen: pc.setScreen };
 }
