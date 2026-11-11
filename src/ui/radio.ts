@@ -80,6 +80,8 @@ export function createRadio() {
 
   /** De browser hield het geluid tegen (nog geen klik of toets van deze speler): bij de eerstvolgende opnieuw proberen. */
   let blocked = false;
+  /** Tot dit tijdstip ziet iedereen, ook ver weg, een melding dat de radio is geschakeld. */
+  let noticeUntil = 0;
   function play() {
     const i = station;
     blocked = false;
@@ -96,6 +98,7 @@ export function createRadio() {
     station = i;
     failed = false;
     blocked = false;
+    noticeUntil = performance.now() + 5000;
     if (i < 0) {
       audio.pause();
       audio.removeAttribute('src');
@@ -139,8 +142,13 @@ export function createRadio() {
     },
     /** Tekst voor de speler die bij de radio staat, anders leeg. */
     get hint() {
-      if (distance > NEAR) return '';
       const s = STATIONS[station];
+      if (distance > NEAR) {
+        // Niet bij de radio: alleen kort melden dat iemand hem schakelde, of dat de browser het geluid nog tegenhoudt
+        if (s && blocked) return `Radio staat aan (${s.name}): klik of druk op een toets om hem te horen`;
+        if (performance.now() > noticeUntil) return '';
+        return s ? `Radio aan: <b>${s.name}</b>` : 'Radio uit';
+      }
       const next = STATIONS[station + 1];
       if (!s) return `<b>M</b>: radio aanzetten (${STATIONS[0].name})`;
       return `Radio: <b>${s.name}</b>${failed ? ' (geen verbinding)' : ''} · <b>M</b>: ${next ? next.name : 'uitzetten'}`;
@@ -149,7 +157,7 @@ export function createRadio() {
     update(listener: THREE.Vector3) {
       group.getWorldPosition(world);
       distance = Math.hypot(listener.x - world.x, listener.z - world.z);
-      if (station >= 0) audio.volume = MAX_VOLUME * THREE.MathUtils.clamp(4 / Math.max(distance, 1), 0.06, 1);
+      if (station >= 0) audio.volume = MAX_VOLUME * THREE.MathUtils.clamp(6 / Math.max(distance, 1), 0.35, 1); // in de hele hal goed te horen
     },
   };
 }
