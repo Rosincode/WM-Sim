@@ -11,6 +11,7 @@ import { createPlayerView, type ViewMode } from './ui/playerView';
 import { createHandheld } from './ui/handheld';
 import { createWarehouse, HALL } from './ui/scene/warehouse';
 import { createForklift } from './ui/scene/forklift';
+import { createCharacter } from './ui/scene/character';
 import { mountWarehouse } from './ui/warehouse';
 
 startWmsBridge(); // aanmelden bij het WMS gebeurt op de pc in het magazijn (src/ui/pcScreen.ts)
@@ -42,17 +43,8 @@ const hall = createWarehouse(scene);
 
 
 // --- Speler (zichtbaar in third person en overzicht) ---
-const player = new THREE.Group();
-const body = new THREE.Mesh(
-  new THREE.CapsuleGeometry(0.3, 1.0, 8, 16),
-  new THREE.MeshStandardMaterial({ color: '#ee5a12', roughness: 0.85 }),
-);
-body.position.y = 0.8;
-body.castShadow = true;
-const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 20, 14), new THREE.MeshStandardMaterial({ color: '#f2c200', roughness: 0.4 }));
-head.position.y = 1.62;
-head.castShadow = true;
-player.add(body, head);
+const character = createCharacter();
+const player = character.group;
 player.position.set(-12, 0, 10);
 player.rotation.y = Math.PI / 2;
 scene.add(player);
@@ -217,6 +209,8 @@ renderer.setAnimationLoop((now) => {
 
   forklift.update(dt, now / 1000);
   view.update(dt);
+  // heupen net boven de zitting; forklift.seat is de plek van het hoofd
+  if (player.visible) character.update(dt, { seated: driving, seatHipY: forklift.seat.y - 0.56, carrying: warehouse.carrying() });
 
   const hintText = driving ? forklift.hint : view.mode !== 'overview' && nearForklift() ? '<b>R</b>: in de heftruck stappen' : '';
   if (driveHint.innerHTML !== hintText) driveHint.innerHTML = hintText;

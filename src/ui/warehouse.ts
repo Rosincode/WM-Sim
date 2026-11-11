@@ -79,6 +79,8 @@ export function mountWarehouse({
 
   return {
     stockList: () => sim.stockList(),
+    /** Draagt de speler iets (pallet of orderbak)? Voor de houding van de figuur. */
+    carrying: () => !!sim.carry,
     /** Voor de heftruck: hele pallets van en naar stellinglocaties. */
     forkliftTake: sim.forkliftTake,
     forkliftPlace: sim.forkliftPlace,
