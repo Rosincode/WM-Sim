@@ -56,6 +56,8 @@ interface Options {
     readonly group: THREE.Object3D;
     readonly forkHeight: number;
   };
+  /** De radio in de hal: de gekozen zender (-1 = uit) geldt voor alle spelers. */
+  radio: { readonly station: number; setStation(i: number): void; onChange(l: () => void): void };
   /** Staat deze speler op de heftruck? Dan zijn plek t.o.v. de truck (y: hoogte boven de vorken), anders null. */
   rider(): { x: number; z: number; y?: number } | null;
   /** Is deze speler los van de grond (springen, vallen)? */
@@ -241,8 +243,29 @@ export function mountMultiplayer(o: Options) {
     room.send('p', pose);
   }
 
+  // ---------- Radio: de laatst gekozen zender geldt voor iedereen ----------
+  let radioRev = 0;
+  let radioWriter = room.id;
+  const sendRadio = () => room.send('r', { rev: radioRev, w: radioWriter, s: o.radio.station });
+  o.radio.onChange(() => {
+    radioRev++;
+    radioWriter = room.id;
+    sendRadio();
+  });
+
   room.on((kind, from, data) => {
+    if (kind === 'r' && isObj(data) && typeof data.rev === 'number' && typeof data.w === 'string') {
+      if (data.rev > radioRev || (data.rev === radioRev && data.w > radioWriter)) {
+        radioRev = data.rev;
+        radioWriter = data.w;
+        o.radio.setStation(num(data.s, -1));
+      } else if (data.rev < radioRev) {
+        sendRadio(); // de afzender loopt achter (schakelde voordat hij verbonden was): stuur de actuele stand terug
+      }
+      return;
+    }
     if (kind === 'hi') {
+      if (radioRev > 0) sendRadio(); // nieuwe speler: laat horen wat er op staat
       // Nieuwe speler: laat direct zien waar je staat; de host stuurt de wereld mee.
       // Een tabblad op de achtergrond speelt niet mee (de game staat daar stil): geen figuur laten zien.
       if (!document.hidden) sendPose(true);

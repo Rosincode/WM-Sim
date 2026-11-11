@@ -244,6 +244,7 @@ const multiplayer = params.has('solo')
       shared: warehouse.shared,
       carryLabel: warehouse.carryLabel,
       forklift,
+      radio,
       airborne: () => view.airborne,
       rider: () => {
         const on = view.standingOn;

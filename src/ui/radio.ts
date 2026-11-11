@@ -2,6 +2,7 @@ import * as THREE from 'three';
 
 // Radio in het magazijn: speelt de live stream van een echte zender (internetradio).
 // M (als je erbij staat): uit → PiratenRadio.nl → 100% NL → uit. Verder weg klinkt hij zachter.
+// De radio is van iedereen: wat één speler kiest, horen alle spelers (zie src/ui/multiplayer.ts).
 // De voorkant (luidspreker en display) wijst naar de -Z-kant.
 
 const STATIONS = [
@@ -77,33 +78,65 @@ export function createRadio() {
     draw();
   });
 
+  /** De browser hield het geluid tegen (nog geen klik of toets van deze speler): bij de eerstvolgende opnieuw proberen. */
+  let blocked = false;
+  function play() {
+    const i = station;
+    blocked = false;
+    audio.play().catch((err: unknown) => {
+      if (station !== i || (err instanceof DOMException && err.name === 'AbortError')) return; // intussen doorgeschakeld
+      if (err instanceof DOMException && err.name === 'NotAllowedError') blocked = true;
+      else failed = true;
+      draw();
+    });
+  }
+
   function tune(i: number) {
+    if (i === station) return;
     station = i;
     failed = false;
+    blocked = false;
     if (i < 0) {
       audio.pause();
       audio.removeAttribute('src');
       audio.load();
     } else {
       audio.src = STATIONS[i].url;
-      audio.play().catch((err: unknown) => {
-        if (station !== i || (err instanceof DOMException && err.name === 'AbortError')) return; // intussen doorgeschakeld
-        failed = true;
-        draw();
-      });
+      play();
     }
     draw();
   }
 
+  const changeListeners: (() => void)[] = [];
   window.addEventListener('keydown', (e) => {
     const t = e.target;
     if (e.code !== 'KeyM' || e.repeat || t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return;
-    if (distance <= NEAR) tune(station + 1 < STATIONS.length ? station + 1 : -1);
+    if (distance > NEAR) return;
+    tune(station + 1 < STATIONS.length ? station + 1 : -1);
+    changeListeners.forEach((l) => l());
   });
+  // Een andere speler zette de radio aan voordat deze speler iets had aangeraakt: nu mag het geluid wel.
+  const retry = () => {
+    if (blocked && station >= 0) play();
+  };
+  window.addEventListener('pointerdown', retry);
+  window.addEventListener('keydown', retry);
 
   const world = new THREE.Vector3();
   return {
     group,
+    /** De gekozen zender (index), -1 = uit. De radio is van iedereen: multiplayer deelt deze stand. */
+    get station() {
+      return station;
+    },
+    /** Een andere speler schakelde de radio: overnemen. */
+    setStation(i: number) {
+      tune(Number.isInteger(i) && i >= 0 && i < STATIONS.length ? i : -1);
+    },
+    /** Deze speler schakelde zelf de radio (met M). */
+    onChange(l: () => void) {
+      changeListeners.push(l);
+    },
     /** Tekst voor de speler die bij de radio staat, anders leeg. */
     get hint() {
       if (distance > NEAR) return '';
