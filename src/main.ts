@@ -13,7 +13,7 @@ import { createTabletApp } from './ui/tabletApp';
 import { createWarehouse, HALL } from './ui/scene/warehouse';
 import { createForklift } from './ui/scene/forklift';
 import { createExterior } from './ui/scene/exterior';
-import { createCharacter } from './ui/scene/character';
+import { createCharacter, type HandTarget } from './ui/scene/character';
 import { mountWarehouse } from './ui/warehouse';
 import { mountMultiplayer } from './ui/multiplayer';
 
@@ -110,7 +110,10 @@ function applyMode(mode: ViewMode) {
   hall.roof.visible = !overview; // dak weg zodat je van boven naar binnen kijkt
   scene.fog = overview ? DISTANCE_HAZE : HAZE;
   scene.background = overview ? OUTSIDE : INSIDE;
-  handheld.setActive(mode === 'first' && !driving); // in de heftruck heb je je handen aan het stuur
+  // In de heftruck: linkerhand op het stuur, scanner/tablet in de rechterhand, eigen lichaam (zonder hoofd) in beeld
+  handheld.setActive(mode === 'first');
+  handheld.setSeated(driving);
+  character.setFirstPerson(mode === 'first' && driving);
 }
 
 const BOUNDS = { minX: -HALL.w / 2 + 0.6, maxX: HALL.w / 2 - 0.6, minZ: -HALL.d / 2 + 0.6, maxZ: HALL.d / 2 - 0.6 };
@@ -200,7 +203,7 @@ function setDriving(on: boolean) {
     player.position.copy(spot);
     player.rotation.y = f.rotation.y;
   } else {
-    view.setVehicle({ object: forklift.group, seat: forklift.seat });
+    view.setVehicle({ object: forklift.group, seat: forklift.seat, eye: forklift.eye });
   }
 }
 
@@ -231,18 +234,28 @@ wms.onChange(() => void refreshWms());
 
 // --- Loop ---
 let last = performance.now();
+const wheelHand: HandTarget = { point: new THREE.Vector3(), normal: new THREE.Vector3() };
+const toolHand: HandTarget = { point: new THREE.Vector3(), hideHand: true };
 
 renderer.setAnimationLoop((now) => {
   const dt = THREE.MathUtils.clamp((now - last) / 1000, 0, 0.1); // eerste frame kan een tijdstip vóór het laden hebben
   last = now;
 
   forklift.update(dt, now / 1000);
-  const shot = params.get('shot')?.split(',').map(Number); // TMP-SHOT
-  if (shot) player.position.x += shot[1] * dt; // TMP-SHOT
   view.update(dt);
-  if (shot) { const a = THREE.MathUtils.degToRad(shot[0]); const d = shot[2] ?? 2.6; camera.position.set(player.position.x + Math.cos(a) * d, 1.25, player.position.z + Math.sin(a) * d); camera.lookAt(player.position.x, 0.95, player.position.z); } // TMP-SHOT
   // heupen net boven de zitting; forklift.seat is de plek van het hoofd
-  if (player.visible) character.update(dt, { seated: driving, seatHipY: forklift.seat.y - 0.56, carrying: warehouse.carrying() });
+  handheld.update(dt, view.moving, driving ? view.look : undefined);
+  if (player.visible) {
+    // Rijdend: linkerhand plat op het stuur; in first person houdt de rechterhand de scanner of tablet vast
+    let leftHand: HandTarget | undefined;
+    let rightHand: HandTarget | undefined;
+    if (driving) {
+      forklift.steeringGrip(wheelHand.point, wheelHand.normal!);
+      leftHand = wheelHand;
+      if (handheld.wristWorld(toolHand.point)) rightHand = toolHand;
+    }
+    character.update(dt, { seated: driving, seatHipY: forklift.seat.y - 0.56, carrying: warehouse.carrying(), leftHand, rightHand });
+  }
 
   multiplayer?.update(dt);
 
@@ -255,7 +268,6 @@ renderer.setAnimationLoop((now) => {
   if (driveHint.innerHTML !== hintText) driveHint.innerHTML = hintText;
   driveHint.style.display = hintText ? 'block' : 'none';
   warehouse.update(dt);
-  handheld.update(dt, view.moving);
 
   if (postFx) composer.render(dt);
   else renderer.render(scene, camera);

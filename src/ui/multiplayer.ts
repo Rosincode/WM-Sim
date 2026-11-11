@@ -12,7 +12,7 @@ import { SKU_COLORS } from './warehouseView';
 // - Eén speler is host (wie het langst binnen is): alleen daar ontstaan nieuwe vrachtwagens en orders.
 // WMS-acties blijven lokaal: wie een handeling doet, meldt die zelf bij zijn WMS.
 
-const TICK_S = 0.1;
+const TICK_MS = 100;
 const HEARTBEAT_MS = 1000;
 const HOST_RESEND_MS = 10_000;
 const NAME_KEY = 'wm-sim.name';
@@ -274,8 +274,8 @@ export function mountMultiplayer(o: Options) {
 
   window.addEventListener('pagehide', () => room.leave());
 
-  let tick = 0;
-  let chipTimer = 0;
+  let tickAt = 0;
+  let chipAt = 0;
 
   return {
     /** Naam van de speler die nu met de heftruck rijdt, of null. */
@@ -308,12 +308,14 @@ export function mountMultiplayer(o: Options) {
         }
       }
 
-      if ((chipTimer += dt) > 1) {
-        chipTimer = 0;
+      // Echte tijd, niet de (afgekapte) frametijd: ook bij een lage framerate blijft het netwerk op tempo.
+      const now = performance.now();
+      if (now - chipAt > 500) {
+        chipAt = now;
         refreshChip();
       }
-      if ((tick += dt) < TICK_S) return;
-      tick = 0;
+      if (now - tickAt < TICK_MS) return;
+      tickAt = now;
       if (room.status !== 'online') return;
 
       sendPose();

@@ -21,6 +21,7 @@ interface Options {
 const TABS = ['Voorraad', 'Orders', 'Locaties'] as const;
 const SCAN_RANGE = 8;
 const SCAN_CONE = 0.075; // rad: hoe nauwkeurig je op een label moet richten
+const SEAT_SHIFT = 0.08; // zittend houd je de scanner iets verder naar rechts, naast het stuur
 
 function mesh(geo: THREE.BufferGeometry, mat: THREE.Material, x = 0, y = 0, z = 0) {
   const m = new THREE.Mesh(geo, mat);
@@ -58,9 +59,14 @@ export function createHandheld({ camera, canvas, world, scanTargets, onOpenApp }
   const shell = new THREE.MeshStandardMaterial({ color: '#25272b', roughness: 0.55, metalness: 0.1 });
   const rubberMat = new THREE.MeshStandardMaterial({ color: '#111214', roughness: 0.9 });
   const accent = new THREE.MeshStandardMaterial({ color: '#f2b705', roughness: 0.5 });
-  const glove = new THREE.MeshStandardMaterial({ color: '#2d3035', roughness: 0.92 });
+  const glove = new THREE.MeshStandardMaterial({ color: '#4a4d52', roughness: 0.92 }); // zelfde handschoen als het personage
   const sleeve = new THREE.MeshStandardMaterial({ color: '#ee5a12', roughness: 0.85 });
   const band = new THREE.MeshStandardMaterial({ color: '#cfd3d6', roughness: 0.35, metalness: 0.6 });
+
+  // Zittend (heftruck) houd je het apparaat in één hand, de rechter; die arm is dan van het eigen lichaam.
+  const seatedHidden: THREE.Object3D[] = []; // onderarmen en de linkerhand aan de tablet
+  const scannerWrist = new THREE.Object3D(); // waar de pols van de rechterhand zit
+  const tabletWrist = new THREE.Object3D();
 
   // ---------- Scanner ----------
   const scannerRig = new THREE.Group();
@@ -106,7 +112,10 @@ export function createHandheld({ camera, canvas, world, scanTargets, onOpenApp }
     const thumb = mesh(new THREE.CapsuleGeometry(0.0125, 0.046, 6, 12), glove, -0.027, 0.03, 0.004);
     thumb.rotation.x = -1.0;
     grip.add(thumb);
-    grip.add(forearm(new THREE.Vector3(0.03, -0.05, 0.06), new THREE.Vector3(0.13, -0.3, 0.4), sleeve, band));
+    const arm = forearm(new THREE.Vector3(0.03, -0.05, 0.06), new THREE.Vector3(0.13, -0.3, 0.4), sleeve, band);
+    scannerWrist.position.set(0.03, -0.05, 0.06);
+    grip.add(arm, scannerWrist);
+    seatedHidden.push(arm);
     scannerRig.add(grip);
   }
 
@@ -116,7 +125,7 @@ export function createHandheld({ camera, canvas, world, scanTargets, onOpenApp }
   const beam = mesh(new THREE.BoxGeometry(0.0025, 0.0025, 1), laserMat);
   const line = mesh(new THREE.PlaneGeometry(1, 1), laserMat);
   beam.visible = line.visible = false;
-  root.add(beam, line);
+  camera.add(beam, line); // niet aan root: die draait zittend los van de kijkrichting
 
   // ---------- Tablet ----------
   const tabletRig = new THREE.Group();
@@ -133,9 +142,13 @@ export function createHandheld({ camera, canvas, world, scanTargets, onOpenApp }
       thumb.rotation.z = s * 0.3;
       const palm = mesh(new THREE.SphereGeometry(1, 20, 14), glove, s * 0.156, -0.062, -0.008);
       palm.scale.set(0.028, 0.05, 0.028);
-      tabletRig.add(thumb, palm);
-      tabletRig.add(forearm(new THREE.Vector3(s * 0.16, -0.09, 0), new THREE.Vector3(s * 0.26, -0.36, 0.3), sleeve, band));
+      const arm = forearm(new THREE.Vector3(s * 0.16, -0.09, 0), new THREE.Vector3(s * 0.26, -0.36, 0.3), sleeve, band);
+      tabletRig.add(thumb, palm, arm);
+      seatedHidden.push(arm);
+      if (s < 0) seatedHidden.push(thumb, palm); // links
     }
+    tabletWrist.position.set(0.16, -0.09, 0);
+    tabletRig.add(tabletWrist);
   }
 
   // Richtpunt
@@ -153,6 +166,8 @@ export function createHandheld({ camera, canvas, world, scanTargets, onOpenApp }
   let lastScan: { code: string | null; time: string } | null = null;
   let scanTimer = 0;
   let bobPhase = 0;
+  let seated = false;
+  let seatK = 0; // 0..1 overgang naar de eenhandige houding
   const raise = { scanner: 0, tablet: 0 };
 
   const stockAt = (id: string) => data.stock.filter((s) => s.locationId === id);
@@ -403,6 +418,7 @@ export function createHandheld({ camera, canvas, world, scanTargets, onOpenApp }
   const camDir = new THREE.Vector3();
   const tmp = new THREE.Vector3();
   const NOSE = new THREE.Vector3(0.115, -0.14, -0.5);
+  const nose = new THREE.Vector3();
 
   function scan() {
     camera.getWorldPosition(camPos);
@@ -440,9 +456,12 @@ export function createHandheld({ camera, canvas, world, scanTargets, onOpenApp }
 
     // laserstraal van de scannerneus naar het richtpunt, plus de lijn op het oppervlak
     const end = tmp.set(0, 0, -(dist - 0.01));
-    beam.position.copy(NOSE).add(end).multiplyScalar(0.5);
-    beam.scale.z = NOSE.distanceTo(end);
-    beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), end.clone().sub(NOSE).normalize());
+    nose.copy(NOSE);
+    nose.x += SEAT_SHIFT * seatK;
+    nose.applyQuaternion(root.quaternion);
+    beam.position.copy(nose).add(end).multiplyScalar(0.5);
+    beam.scale.z = nose.distanceTo(end);
+    beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), end.clone().sub(nose).normalize());
     line.position.copy(end);
     line.scale.set(dist * 0.09, dist * 0.0022, 1);
   }
@@ -486,6 +505,9 @@ export function createHandheld({ camera, canvas, world, scanTargets, onOpenApp }
   }, 20000);
 
   const tabletPos = new THREE.Vector3();
+  const AXIS_X = new THREE.Vector3(1, 0, 0);
+  const AXIS_Y = new THREE.Vector3(0, 1, 0);
+  const qTmp = new THREE.Quaternion();
 
   return {
     get tool() {
@@ -503,14 +525,41 @@ export function createHandheld({ camera, canvas, world, scanTargets, onOpenApp }
         focus = false;
       }
     },
+    /** Zittend in de heftruck: apparaat in de rechterhand, zonder eigen onderarmen (die tekent het lichaam). */
+    setSeated(on: boolean) {
+      seated = on;
+      for (const o of seatedHidden) o.visible = !on;
+    },
+    /** Wereldpositie van de pols van de hand die het apparaat vasthoudt; false als er niets in beeld is. */
+    wristWorld(out: THREE.Vector3) {
+      const rig = tool === 'scanner' ? scannerRig : tabletRig;
+      if (!active || !rig.visible) return false;
+      (tool === 'scanner' ? scannerWrist : tabletWrist).getWorldPosition(out);
+      return true;
+    },
     setData(d: WmsSnapshot) {
       data = d;
       drawScanner();
       drawTablet();
     },
-    /** @param moving 0..1: hoe hard de speler loopt (voor de loopbeweging). */
-    update(dt: number, moving: number) {
+    /**
+     * @param moving 0..1: hoe hard de speler loopt (voor de loopbeweging).
+     * @param look kijkrichting vanaf de stoel (zittend): het apparaat blijft dan binnen armbereik.
+     */
+    update(dt: number, moving: number, look?: { yaw: number; pitch: number }) {
       const k = 1 - Math.exp(-dt * 12);
+      seatK += ((seated ? 1 : 0) - seatK) * k;
+      if (seated && look) {
+        // De hand volgt je blik alleen zover de arm reikt; kijk je verder weg, dan schuift het apparaat uit beeld.
+        const yaw = THREE.MathUtils.clamp(look.yaw, -1.2, 0.15);
+        const pitch = THREE.MathUtils.clamp(look.pitch, -0.45, 0.35);
+        root.quaternion
+          .setFromAxisAngle(AXIS_X, -look.pitch)
+          .multiply(qTmp.setFromAxisAngle(AXIS_Y, yaw - look.yaw))
+          .multiply(qTmp.setFromAxisAngle(AXIS_X, pitch));
+      } else {
+        root.quaternion.identity();
+      }
       raise.scanner += ((active && tool === 'scanner' ? 1 : 0) - raise.scanner) * k;
       raise.tablet += ((active && tool === 'tablet' ? 1 : 0) - raise.tablet) * k;
       scannerRig.visible = raise.scanner > 0.02;
@@ -524,17 +573,18 @@ export function createHandheld({ camera, canvas, world, scanTargets, onOpenApp }
       // scanner: schuin omhoog zodat je het schermpje ziet; bij scannen even naar voren richten
       scanTimer = Math.max(0, scanTimer - dt);
       const aim = Math.min(1, scanTimer / 0.15);
-      scannerRig.position.set(0.16 + bobX - aim * 0.03, -0.185 + bobY - (1 - raise.scanner) * 0.4 + aim * 0.03, -0.44 - aim * 0.05);
+      scannerRig.position.set(0.16 + SEAT_SHIFT * seatK + bobX - aim * 0.03, -0.185 + bobY - (1 - raise.scanner) * 0.4 + aim * 0.03, -0.44 - aim * 0.05);
       scannerRig.rotation.set(0.78 - aim * 0.6, 0.3 - aim * 0.12, 0);
       beam.visible = line.visible = scanTimer > 0 && active;
       laserMat.opacity = Math.min(1, scanTimer / 0.12);
       windowMat.color.setRGB(scanTimer > 0 ? 5 : 0.23, 0.03, 0.03);
 
       // tablet: laag voor de borst, met F dichterbij om te lezen
-      tabletPos.set(bobX, focus ? -0.02 : -0.135, focus ? -0.235 : -0.38);
+      tabletPos.set(bobX + 0.2 * seatK, focus ? -0.02 : -0.135, focus ? -0.235 : -0.38);
       tabletPos.y += bobY - (1 - raise.tablet) * 0.45;
       tabletRig.position.lerp(tabletPos, 1 - Math.exp(-dt * 14));
       tabletRig.rotation.x += ((focus ? -0.06 : -0.42) - tabletRig.rotation.x) * k;
+      tabletRig.rotation.y = -0.3 * seatK; // in één hand rechts: scherm naar je toe gedraaid
     },
   };
 }
