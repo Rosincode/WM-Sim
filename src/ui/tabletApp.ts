@@ -1,10 +1,10 @@
 import * as THREE from 'three';
-import { CSS3DObject, CSS3DRenderer } from 'three/addons/renderers/CSS3DRenderer.js';
 import { TABLET_SCREEN } from './handheld';
-import { createAppFrame, getAppUrl } from './wmsApp';
+import { createAppFrame } from './wmsApp';
 
 // De echte WMS-app op het scherm van de tablet. Een iframe kan niet als textuur in WebGL, dus het ligt als
-// HTML-laag precies over het beeldvlak van de 3D-tablet (CSS3D) en beweegt met de tablet mee.
+// HTML-laag over het beeldvlak van de 3D-tablet. De tablet wordt recht naar de camera gehouden, waardoor
+// het scherm op beeld een rechthoek is: het iframe wordt alleen verschoven en geschaald (2D, geen 3D-transform).
 // In de hand is het alleen kijken; met F komt de tablet dichtbij en kun je de app bedienen.
 
 /** Schermresolutie van de tablet in CSS-pixels (zelfde verhouding als het beeldvlak). */
@@ -12,14 +12,15 @@ const W = 1024;
 const H = Math.round(W * (TABLET_SCREEN.h / TABLET_SCREEN.w));
 
 const css = `
-.tab3d { display: flex; flex-direction: column; width: ${W}px; height: ${H}px; background: #fff; overflow: hidden;
-  font: 13px system-ui, sans-serif; }
-.tab3d-bar { display: none; align-items: center; gap: 10px; padding: 4px 8px; background: #25272b; color: #cfd3d6; }
-.tab3d.focus .tab3d-bar { display: flex; }
-.tab3d-bar span { flex: 1; }
-.tab3d-bar button { border: 0; border-radius: 4px; padding: 2px 10px; background: #c62828; color: #fff; font: inherit; cursor: pointer; }
-.tab3d .wms-app { flex: 1; }
-.tab3d:not(.focus) .wms-app form, .tab3d:not(.focus) .wms-app .note { display: none; }
+.tab2d { position: fixed; left: 0; top: 0; z-index: 5; display: none; flex-direction: column; width: ${W}px; height: ${H}px;
+  transform-origin: 0 0; background: #fff; overflow: hidden; pointer-events: none; font: 13px system-ui, sans-serif; }
+.tab2d.focus { pointer-events: auto; }
+.tab2d-bar { display: none; align-items: center; gap: 10px; padding: 4px 8px; background: #25272b; color: #cfd3d6; }
+.tab2d.focus .tab2d-bar { display: flex; }
+.tab2d-bar span { flex: 1; }
+.tab2d-bar button { border: 0; border-radius: 4px; padding: 2px 10px; background: #c62828; color: #fff; font: inherit; cursor: pointer; }
+.tab2d .wms-app { flex: 1; }
+.tab2d:not(.focus) .wms-app form, .tab2d:not(.focus) .wms-app .note { display: none; }
 `;
 
 interface Options {
@@ -36,29 +37,20 @@ export function createTabletApp({ camera, display, onClose }: Options) {
   document.head.appendChild(style);
 
   const el = document.createElement('div');
-  el.className = 'tab3d';
-  el.innerHTML = `<div class="tab3d-bar"><span>Tablet · WMS-app — F of Esc: wegleggen</span><button title="Wegleggen">✕</button></div>`;
+  el.className = 'tab2d';
+  el.innerHTML = `<div class="tab2d-bar"><span>Tablet · WMS — F of Esc: wegleggen</span><button title="Wegleggen">✕</button></div>`;
   const app = createAppFrame();
   el.appendChild(app.el);
+  document.body.appendChild(el);
 
-  const renderer = new CSS3DRenderer();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.domElement.style.cssText += ';position:fixed;inset:0;z-index:5;pointer-events:none';
-  document.body.appendChild(renderer.domElement);
-  window.addEventListener('resize', () => renderer.setSize(window.innerWidth, window.innerHeight));
-
-  // Eigen mini-scène: de matrix van het object volgt elke frame het beeldvlak van de tablet.
-  const scene = new THREE.Scene();
-  scene.matrixWorldAutoUpdate = false;
-  const object = new CSS3DObject(el);
-  object.matrixAutoUpdate = false;
-  scene.add(object);
-  el.style.pointerEvents = 'none';
-  const scale = new THREE.Vector3().setScalar(TABLET_SCREEN.w / W);
-
-  let focused = false;
-  function close() {
+  const blur = () => {
     if (document.activeElement instanceof HTMLElement && el.contains(document.activeElement)) document.activeElement.blur();
+  };
+  let focused = false;
+  let shown = false;
+  let lastTransform = '';
+  function close() {
+    blur();
     onClose();
   }
   el.querySelector('button')!.addEventListener('click', close);
@@ -66,26 +58,40 @@ export function createTabletApp({ camera, display, onClose }: Options) {
     if (focused && e.code === 'Escape') close();
   });
 
+  const corner = new THREE.Vector3();
+
   return {
     /** Na het renderen van de scène aanroepen. @param focus tablet dichtbij (F): app is dan te bedienen. */
     update(tabletVisible: boolean, focus: boolean) {
-      // Zonder adres blijft het ingebouwde overzicht staan; dichtbij kun je het adres invullen.
-      const show = tabletVisible && (focus || getAppUrl() !== '');
       if (focus !== focused) {
         focused = focus;
         el.classList.toggle('focus', focus);
-        el.style.pointerEvents = focus ? 'auto' : 'none';
         if (focus) document.exitPointerLock?.(); // muis vrij voor de app
-        else if (document.activeElement instanceof HTMLElement && el.contains(document.activeElement)) document.activeElement.blur();
+        else blur(); // toetsen weer naar de game
       }
-      if (!show && !object.visible) return;
-      object.visible = show;
-      if (show) {
-        app.show();
-        display.updateWorldMatrix(true, false);
-        object.matrixWorld.copy(display.matrixWorld).scale(scale);
+      if (tabletVisible !== shown) {
+        shown = tabletVisible;
+        el.style.display = shown ? 'flex' : 'none';
+        if (shown) app.show();
       }
-      renderer.render(scene, camera);
+      if (!shown) return;
+
+      // Hoeken van het beeldvlak naar schermpixels; de omhullende rechthoek bepaalt plaats en schaal.
+      display.updateWorldMatrix(true, false);
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const sx of [-0.5, 0.5]) for (const sy of [-0.5, 0.5]) {
+        corner.set(sx * TABLET_SCREEN.w, sy * TABLET_SCREEN.h, 0).applyMatrix4(display.matrixWorld).project(camera);
+        const x = (corner.x * 0.5 + 0.5) * window.innerWidth;
+        const y = (-corner.y * 0.5 + 0.5) * window.innerHeight;
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      }
+      // Op hele pixels en kleine schaalstappen afronden: geen trillend beeld tijdens het lopen
+      const t = `translate(${Math.round(minX)}px,${Math.round(minY)}px) scale(${((maxX - minX) / W).toFixed(3)},${((maxY - minY) / H).toFixed(3)})`;
+      if (t !== lastTransform) {
+        lastTransform = t;
+        el.style.transform = t;
+      }
     },
   };
 }

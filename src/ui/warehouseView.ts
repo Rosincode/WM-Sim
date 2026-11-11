@@ -275,5 +275,5 @@ export function createWarehouseView(
     }
   }
 
-  return { update, setPcScreen: pc.setScreen };
+  return { update };
 }

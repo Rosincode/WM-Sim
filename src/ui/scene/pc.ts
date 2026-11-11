@@ -1,12 +1,10 @@
 import * as THREE from 'three';
 
 // Werkplek met pc (bureau, monitor, toetsenbord, muis, kast). Het beeldscherm is een canvas-textuur
-// zodat de aanmeldstatus in de 3D-wereld te lezen is. De voorkant (waar je staat) is de -Z-kant.
+// met een vaste uitnodiging. De voorkant (waar je staat) is de -Z-kant.
 
 const SCREEN_W = 512;
 const SCREEN_H = 320;
-
-export type PcScreenState = { loggedIn: boolean; subtitle: string; lines: string[] };
 
 export function createPcMesh() {
   const group = new THREE.Group();
@@ -55,42 +53,18 @@ export function createPcMesh() {
   add(0.42, 0.02, 0.14, -0.05, 0.985, -0.14, plastic);
   add(0.06, 0.025, 0.1, 0.3, 0.9875, -0.14, plastic);
 
-  let current = '';
-  function setScreen(s: PcScreenState) {
-    const key = JSON.stringify(s);
-    if (key === current) return;
-    current = key;
+  // Beeld in de 3D-wereld: alleen een uitnodiging; de echte WMS-app opent met E (src/ui/pcScreen.ts).
+  ctx.fillStyle = '#10243a';
+  ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 64px system-ui, sans-serif';
+  ctx.fillText('WMS', SCREEN_W / 2, SCREEN_H / 2 - 30);
+  ctx.fillStyle = '#80deea';
+  ctx.font = 'bold 26px system-ui, sans-serif';
+  ctx.fillText('Druk op E om de pc te gebruiken', SCREEN_W / 2, SCREEN_H / 2 + 50, SCREEN_W - 36);
+  texture.needsUpdate = true;
 
-    ctx.fillStyle = '#10243a';
-    ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-    ctx.fillStyle = '#1b3a5c';
-    ctx.fillRect(0, 0, SCREEN_W, 54);
-    ctx.fillStyle = '#fff';
-    ctx.textBaseline = 'middle';
-    ctx.textAlign = 'left';
-    ctx.font = 'bold 28px system-ui, sans-serif';
-    ctx.fillText('WMS-werkstation', 18, 28);
-
-    ctx.fillStyle = s.loggedIn ? '#4caf50' : '#f2b134';
-    ctx.beginPath();
-    ctx.arc(34, 100, 12, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 30px system-ui, sans-serif';
-    ctx.fillText(s.loggedIn ? 'Aangemeld' : 'Niet aangemeld', 58, 101, SCREEN_W - 76);
-    ctx.fillStyle = '#9fb3c8';
-    ctx.font = '22px system-ui, sans-serif';
-    ctx.fillText(s.subtitle, 18, 144, SCREEN_W - 36);
-
-    ctx.fillStyle = '#e3edf7';
-    ctx.font = '24px system-ui, sans-serif';
-    s.lines.slice(0, 3).forEach((line, i) => ctx.fillText(line, 18, 196 + i * 34, SCREEN_W - 36));
-
-    ctx.fillStyle = '#80deea';
-    ctx.font = 'bold 22px system-ui, sans-serif';
-    ctx.fillText('Druk op E om de pc te gebruiken', 18, SCREEN_H - 24, SCREEN_W - 36);
-    texture.needsUpdate = true;
-  }
-
-  return { group, setScreen };
+  return { group };
 }
