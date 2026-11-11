@@ -1,7 +1,7 @@
 import type * as THREE from 'three';
 import { wms } from '../integrations/wms';
 import { POINTS, dist } from '../sim/layout';
-import { createWarehouse } from '../sim/warehouse';
+import { createWarehouse, type SharedState } from '../sim/warehouse';
 import { createPcScreen } from './pcScreen';
 import { createProcessHud } from './processHud';
 import { createWarehouseView } from './warehouseView';
@@ -56,18 +56,21 @@ export function mountWarehouse({
   });
 
   // WMS is leidend: voorraad en open orders overnemen bij start en na in- of uitloggen (alleen lezen).
-  async function syncFromWms() {
+  // Multiplayer: wie bij een lopend spel aanschuift neemt die wereld over en laadt bij de start niet opnieuw.
+  let adopted = false;
+  async function syncFromWms(initial = false) {
     const client = wms.client;
     try {
       const [stock, orders] = await Promise.all([client.getStock(), client.getOpenOrders()]);
+      if (initial && adopted) return;
       if (client === wms.client) sim.loadSnapshot(stock, orders, client.mode === 'live' ? 'de WMS' : 'de mock-WMS');
     } catch (err) {
       hud.addError(`Voorraad laden mislukt: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  wms.onChange(syncFromWms);
+  wms.onChange(() => void syncFromWms());
   wms.onError((msg) => hud.addError(msg));
-  void syncFromWms();
+  void syncFromWms(true);
 
   function pcHost() {
     try {
@@ -81,6 +84,17 @@ export function mountWarehouse({
     stockList: () => sim.stockList(),
     /** Draagt de speler iets (pallet of orderbak)? Voor de houding van de figuur. */
     carrying: () => !!sim.carry,
+    /** Wat de speler draagt, voor andere spelers: '' (niets), 'order' of het artikel van de pallet. */
+    carryLabel: () => (sim.carry?.kind === 'pallet' ? sim.carry.pallet.sku : sim.carry ? 'order' : ''),
+    /** Multiplayer: de gedeelde wereld lezen, overnemen en bepalen wie hem laat draaien. */
+    shared: {
+      state: () => sim.sharedState(),
+      apply(s: SharedState) {
+        adopted = true;
+        sim.applyShared(s);
+      },
+      setAuthority: sim.setAuthority,
+    },
     /** Voor de heftruck: hele pallets van en naar stellinglocaties. */
     forkliftTake: sim.forkliftTake,
     forkliftPlace: sim.forkliftPlace,

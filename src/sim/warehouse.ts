@@ -506,14 +506,55 @@ export function createWarehouse() {
 
   function update(dt: number) {
     clock += dt;
+    driveTruck('in', dt);
+    driveTruck('out', dt);
+    if (!authority) return; // in multiplayer laat alleen de host nieuwe vrachtwagens en orders ontstaan
     if (!trucks.in && (inTimer -= dt) <= 0) trucks.in = spawnTruck('in');
     const outboundWork = orders.some((o) => ['picking', 'picked', 'staged'].includes(o.status));
     if (!trucks.out && outboundWork && (outTimer -= dt) <= 0) trucks.out = spawnTruck('out');
-    driveTruck('in', dt);
-    driveTruck('out', dt);
     if ((orderTimer -= dt) <= 0) {
       orderTimer = ORDER_INTERVAL;
       if (orders.filter((o) => o.status === 'open').length < MAX_OPEN_ORDERS) createOrder();
+    }
+  }
+
+  // ========== Multiplayer: de wereld die alle spelers delen ==========
+
+  let authority = true;
+
+  /** Alles wat spelers delen. Wat je zelf draagt (carry) en je berichten blijven lokaal. */
+  function sharedState() {
+    return structuredClone({
+      stock: [...stock],
+      orders,
+      laneIn,
+      laneOut,
+      trucks,
+      outDock,
+      seq: { truckIn: seq.truckIn, truckOut: seq.truckOut },
+    });
+  }
+
+  /** Neemt de gedeelde wereld van een andere speler over. Publiceert geen events: dat deed die speler al. */
+  function applyShared(s: ReturnType<typeof sharedState>) {
+    stock.clear();
+    for (const [k, qty] of s.stock) stock.set(k, qty);
+    orders.splice(0, orders.length, ...s.orders);
+    laneIn.splice(0, laneIn.length, ...s.laneIn);
+    laneOut.splice(0, laneOut.length, ...s.laneOut);
+    for (const slot of ['in', 'out'] as const) {
+      const cur = trucks[slot];
+      const next = s.trucks[slot];
+      if (cur && next && cur.id === next.id && cur.status === next.status) next.t = cur.t; // rijdt hier al: niet verspringen
+      trucks[slot] = next;
+    }
+    outDock = s.outDock;
+    seq.truckIn = Math.max(seq.truckIn, s.seq.truckIn);
+    seq.truckOut = Math.max(seq.truckOut, s.seq.truckOut);
+    // Draag je een order die een ander inmiddels heeft afgehandeld of teruggezet, dan ben je hem kwijt.
+    if (carry?.kind === 'order') {
+      const o = order(carry.orderId);
+      if (!o || (o.status !== 'picking' && o.status !== 'picked')) carry = null;
     }
   }
 
@@ -561,7 +602,14 @@ export function createWarehouse() {
     forkliftTake,
     forkliftPlace,
     order,
+    sharedState,
+    applyShared,
+    /** false: een andere speler is host en laat vrachtwagens en orders ontstaan. */
+    setAuthority(on: boolean) {
+      authority = on;
+    },
   };
 }
 
 export type Warehouse = ReturnType<typeof createWarehouse>;
+export type SharedState = ReturnType<Warehouse['sharedState']>;

@@ -217,7 +217,10 @@ renderer.setAnimationLoop((now) => {
   last = now;
 
   forklift.update(dt, now / 1000);
+  const shot = params.get('shot')?.split(',').map(Number); // TMP-SHOT
+  if (shot) player.position.x += shot[1] * dt; // TMP-SHOT
   view.update(dt);
+  if (shot) { const a = THREE.MathUtils.degToRad(shot[0]); const d = shot[2] ?? 2.6; camera.position.set(player.position.x + Math.cos(a) * d, 1.25, player.position.z + Math.sin(a) * d); camera.lookAt(player.position.x, 0.95, player.position.z); } // TMP-SHOT
   // heupen net boven de zitting; forklift.seat is de plek van het hoofd
   if (player.visible) character.update(dt, { seated: driving, seatHipY: forklift.seat.y - 0.56, carrying: warehouse.carrying() });
 
