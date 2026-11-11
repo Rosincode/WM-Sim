@@ -1,0 +1,19 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "GitHub sync",
+      "type": "process",
+      "command": "bash",
+      "args": ["${workspaceFolder}/sync.sh"],
+      "windows": {
+        "command": "C:\Program Files\Git\bin\bash.exe"
+      },
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "dedicated", "close": false },
+      "runOptions": { "runOn": "folderOpen", "instanceLimit": 1 }
+    }
+  ]
+}
