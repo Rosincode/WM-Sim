@@ -1,101 +1,83 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { startWmsBridge } from './integrations/wms';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { startWmsBridge, wms } from './integrations/wms';
 import { mountWmsPanel } from './ui/wmsPanel';
-import { createPlayerView } from './ui/playerView';
+import { createPlayerView, type ViewMode } from './ui/playerView';
+import { createHandheld } from './ui/handheld';
+import { createWarehouse, HALL } from './ui/scene/warehouse';
+import { createForklift } from './ui/scene/forklift';
 import { mountWarehouse } from './ui/warehouse';
 
 startWmsBridge();
 mountWmsPanel();
 
-// Tijdelijke placeholder-scène: wordt vervangen door src/ui zodra die er is.
+const params = new URLSearchParams(location.search);
 
 // --- Renderer, scène, camera ---
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.95;
 document.querySelector<HTMLDivElement>('#app')!.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color('#1e1e1e');
-scene.fog = new THREE.Fog('#1e1e1e', 60, 120);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.45;
+const HAZE = new THREE.FogExp2('#b4babd', 0.0045);
+const OUTSIDE = new THREE.Color('#16181b');
+const INSIDE = new THREE.Color('#c3c8cb');
 
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 200);
+const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.05, 200);
+scene.add(camera); // nodig omdat scanner/tablet aan de camera hangen
 
-scene.add(new THREE.HemisphereLight('#ffffff', '#444444', 1.2));
-const sun = new THREE.DirectionalLight('#ffffff', 2);
-sun.position.set(15, 30, 10);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-Object.assign(sun.shadow.camera, { left: -30, right: 30, top: 30, bottom: -30 });
-scene.add(sun);
-
-// --- Hulpfunctie ---
-function box(w: number, h: number, d: number, color: string, x = 0, y = 0, z = 0) {
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshStandardMaterial({ color }));
-  mesh.position.set(x, y, z);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  return mesh;
-}
-
-// --- Vloer (40 x 30) ---
-const FLOOR_W = 40;
-const FLOOR_D = 30;
-const floor = new THREE.Mesh(
-  new THREE.PlaneGeometry(FLOOR_W, FLOOR_D),
-  new THREE.MeshStandardMaterial({ color: '#3a3d41' }),
-);
-floor.rotation.x = -Math.PI / 2;
-floor.receiveShadow = true;
-scene.add(floor);
-const grid = new THREE.GridHelper(FLOOR_W, FLOOR_W, '#4a4d51', '#4a4d51');
-grid.scale.z = FLOOR_D / FLOOR_W;
-grid.position.y = 0.01;
-scene.add(grid);
-
-// --- Dock (links) ---
-scene.add(box(0.4, 5, 10, '#555a60', -FLOOR_W / 2, 2.5, 0)); // muur
-for (const z of [-3, 3]) {
-  scene.add(box(0.2, 3.5, 3, '#c58a2b', -FLOOR_W / 2 + 0.3, 1.75, z)); // dockdeur
-  scene.add(box(4, 0.02, 3, '#e0b84a', -FLOOR_W / 2 + 2.3, 0.01, z)); // laadvak
-}
-
-// --- Stellingen: 4 rijen x 5 secties ---
-function rack(x: number, z: number) {
-  const g = new THREE.Group();
-  for (const dx of [-1.75, 1.75]) for (const dz of [-0.55, 0.55]) g.add(box(0.1, 4, 0.1, '#d9822b', dx, 2, dz));
-  for (const y of [0.15, 1.5, 2.85]) {
-    g.add(box(3.6, 0.08, 1.2, '#3b6ea5', 0, y, 0)); // pallets met voorraad tekent src/ui/warehouseView
-  }
-  g.position.set(x, 0, z);
-  return g;
-}
-for (const z of [-9, -4, 1, 6]) for (const x of [-4, 0, 4, 8, 12]) scene.add(rack(x, z));
+// --- Magazijn ---
+const hall = createWarehouse(scene);
 
 // --- Heftruck die door de gangpaden rijdt ---
-const forklift = new THREE.Group();
-forklift.add(box(1.2, 1, 1.8, '#f2b134', 0, 0.6, 0));
-forklift.add(box(1.1, 0.1, 1, '#222222', 0, 1.65, -0.3)); // dak
-forklift.add(box(0.1, 2.2, 0.1, '#333333', -0.4, 1.1, 0.95)); // mast
-forklift.add(box(0.1, 2.2, 0.1, '#333333', 0.4, 1.1, 0.95));
-forklift.add(box(0.15, 0.06, 1, '#333333', -0.3, 0.1, 1.5)); // vorken
-forklift.add(box(0.15, 0.06, 1, '#333333', 0.3, 0.1, 1.5));
-scene.add(forklift);
+const forklift = createForklift();
+scene.add(forklift.group);
+const FORKLIFT_SPEED = 3;
 const route = [[-10, -1.5], [16, -1.5], [16, 3.5], [-10, 3.5]].map(([x, z]) => new THREE.Vector3(x, 0, z));
 let routeSeg = 0;
 let routeT = 0;
 
-// --- Speler ---
+// --- Speler (zichtbaar in third person en overzicht) ---
 const player = new THREE.Group();
-const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.35, 0.9), new THREE.MeshStandardMaterial({ color: '#4caf50' }));
+const body = new THREE.Mesh(
+  new THREE.CapsuleGeometry(0.3, 1.0, 8, 16),
+  new THREE.MeshStandardMaterial({ color: '#ee5a12', roughness: 0.85 }),
+);
 body.position.y = 0.8;
 body.castShadow = true;
-player.add(body, box(0.5, 0.15, 0.2, '#ffffff', 0, 1.35, 0.3)); // vizier = kijkrichting
+const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 20, 14), new THREE.MeshStandardMaterial({ color: '#f2c200', roughness: 0.4 }));
+head.position.y = 1.62;
+head.castShadow = true;
+player.add(body, head);
 player.position.set(-12, 0, 10);
 player.rotation.y = Math.PI / 2;
 scene.add(player);
+
+// --- Nabewerking: omgevingsschaduw (GTAO), gloed rond lampen, tonemapping ---
+const composer = new EffectComposer(
+  renderer,
+  new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { type: THREE.HalfFloatType, samples: 4 }),
+);
+composer.addPass(new RenderPass(scene, camera));
+const gtao = new GTAOPass(scene, camera, window.innerWidth, window.innerHeight);
+gtao.updateGtaoMaterial({ radius: 0.5, distanceExponent: 1.4, thickness: 1.2, scale: 1.15, samples: 12 });
+composer.addPass(gtao);
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.14, 0.6, 1.8));
+composer.addPass(new OutputPass());
+let postFx = !params.has('nofx');
 
 // --- Camera-modi (overzicht / first person / third person) ---
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -107,22 +89,68 @@ hud.style.cssText =
   'position:fixed;left:16px;top:16px;padding:10px 14px;border-radius:8px;background:rgba(0,0,0,.6);color:#fff;font:14px system-ui,sans-serif;line-height:1.5;pointer-events:none';
 document.body.appendChild(hud);
 
+const handheld = createHandheld({ camera, canvas: renderer.domElement, world: scene, scanTargets: hall.scanTargets });
+
+function applyMode(mode: ViewMode) {
+  const overview = mode === 'overview';
+  hall.roof.visible = !overview; // dak weg zodat je van boven naar binnen kijkt
+  scene.fog = overview ? null : HAZE;
+  scene.background = overview ? OUTSIDE : INSIDE;
+  handheld.setActive(mode === 'first');
+}
+
 const view = createPlayerView({
   camera,
   canvas: renderer.domElement,
   controls,
   player,
   hud,
-  bounds: { minX: -FLOOR_W / 2 + 1, maxX: FLOOR_W / 2 - 0.5, minZ: -FLOOR_D / 2 + 0.5, maxZ: FLOOR_D / 2 - 0.5 },
+  bounds: { minX: -HALL.w / 2 + 0.6, maxX: HALL.w / 2 - 0.6, minZ: -HALL.d / 2 + 0.6, maxZ: HALL.d / 2 - 0.6 },
+  colliders: hall.colliders,
+  initialMode: params.get('view') === 'overview' ? 'overview' : 'first',
+  onModeChange: applyMode,
 });
 
-const warehouse = mountWarehouse({ scene, player });
+// Handig bij testen: ?at=x,z,draaiing(graden) en ?tool=2
+const at = params.get('at')?.split(',').map(Number);
+if (at && at.length >= 2 && at.every(Number.isFinite)) {
+  player.position.set(at[0], 0, at[1]);
+  player.rotation.y = THREE.MathUtils.degToRad(at[2] ?? 0);
+}
+if (params.get('tool') === '2') handheld.setTool('tablet');
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyP' && !e.repeat && !(e.target instanceof HTMLInputElement)) postFx = !postFx;
+});
+
+// Processim (vrachtwagens, banen, taken). De voorraad in de stellingen tekent de hal zelf.
+const warehouse = mountWarehouse({ scene, player, rackStock: false });
+setInterval(() => hall.setStock(warehouse.stockList().filter((s) => !s.locationId.startsWith('DOCK'))), 500);
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
 });
+
+// --- WMS-gegevens ophalen voor de weergave op scanner en tablet ---
+let lastSnapshot = '';
+async function refreshWms() {
+  const client = wms.client;
+  try {
+    const [locations, stock, orders] = await Promise.all([client.getLocations(), client.getStock(), client.getOpenOrders()]);
+    const snapshot = JSON.stringify([client.mode, locations.length, stock, orders]);
+    if (snapshot === lastSnapshot) return;
+    lastSnapshot = snapshot;
+    handheld.setData({ mode: client.mode, locations, stock, orders });
+  } catch {
+    // de fout staat al in het WMS-paneel; de weergave houdt de laatste stand
+  }
+}
+void refreshWms();
+setInterval(refreshWms, 3000);
+wms.onChange(() => void refreshWms());
 
 // --- Loop ---
 let last = performance.now();
@@ -134,16 +162,19 @@ renderer.setAnimationLoop((now) => {
   // Heftruck
   const a = route[routeSeg];
   const b = route[(routeSeg + 1) % route.length];
-  routeT += (dt * 3) / a.distanceTo(b);
+  routeT += (dt * FORKLIFT_SPEED) / a.distanceTo(b);
   if (routeT >= 1) {
     routeT = 0;
     routeSeg = (routeSeg + 1) % route.length;
   }
-  forklift.position.lerpVectors(a, b, Math.min(routeT, 1));
-  forklift.rotation.y = Math.atan2(b.x - a.x, b.z - a.z);
+  forklift.group.position.lerpVectors(a, b, Math.min(routeT, 1));
+  forklift.group.rotation.y = Math.atan2(b.x - a.x, b.z - a.z);
+  forklift.update(dt, FORKLIFT_SPEED, now / 1000);
 
   view.update(dt);
   warehouse.update(dt);
+  handheld.update(dt, view.moving);
 
-  renderer.render(scene, camera);
+  if (postFx) composer.render(dt);
+  else renderer.render(scene, camera);
 });

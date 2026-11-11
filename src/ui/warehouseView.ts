@@ -114,7 +114,12 @@ function truckMesh(direction: Truck['direction']) {
   return g;
 }
 
-export function createWarehouseView(scene: THREE.Scene, player: THREE.Object3D, sim: Warehouse) {
+export function createWarehouseView(
+  scene: THREE.Scene,
+  player: THREE.Object3D,
+  sim: Warehouse,
+  opts: { rackStock?: boolean } = {},
+) {
   const root = new THREE.Group();
   scene.add(root);
 
@@ -238,7 +243,7 @@ export function createWarehouseView(scene: THREE.Scene, player: THREE.Object3D, 
     }
     for (const [id, mesh] of stockMeshes) {
       const s = top.get(id);
-      mesh.visible = !!s;
+      mesh.visible = !!s && opts.rackStock !== false;
       if (s) setPalletColor(mesh, skuColor(s.sku));
     }
 

@@ -12,6 +12,10 @@ interface Options {
   hud: HTMLElement;
   /** Loopbaar gebied (x/z-grenzen). */
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+  /** Obstakels (stellingen e.d.) waar de speler niet doorheen loopt. */
+  colliders?: { minX: number; maxX: number; minZ: number; maxZ: number }[];
+  initialMode?: ViewMode;
+  onModeChange?: (mode: ViewMode) => void;
 }
 
 const EYE_HEIGHT = 1.6;
@@ -19,13 +23,15 @@ const GRAVITY = 22;
 const JUMP_SPEED = 7.5;
 const MOUSE_SENS = 0.0022;
 const MAX_PITCH = Math.PI / 2 - 0.05;
+const PLAYER_RADIUS = 0.42;
 
-export function createPlayerView({ camera, canvas, controls, player, hud, bounds }: Options) {
+export function createPlayerView({ camera, canvas, controls, player, hud, bounds, colliders = [], initialMode = 'overview', onModeChange }: Options) {
   let mode: ViewMode = 'overview';
   let closeMode: Exclude<ViewMode, 'overview'> = 'first'; // laatst gebruikte dichtbij-modus
   let pitch = 0;
   let velY = 0;
   let grounded = true;
+  let moving = 0; // 0..1, voor de loopbeweging van wat je vasthoudt
 
   const keys = new Set<string>();
   const forward = new THREE.Vector3();
@@ -37,7 +43,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     overview:
       '<b>WM-Sim — Overzicht</b><br>Slepen: draaien · Scroll: zoom · Rechts slepen: schuiven<br><b>C</b>: dichtbij (first person)',
     first:
-      '<b>WM-Sim — First person</b><br>Klik: muis vastzetten · Muis: rondkijken · Esc: muis los<br>W/S: lopen · A/D: zijwaarts · ←/→: draaien · Shift: rennen · Spatie: springen<br><b>V</b>: third person · <b>C</b>: overzicht',
+      '<b>WM-Sim — First person</b><br>Klik: muis vastzetten · Muis: rondkijken · Esc: muis los<br>W/S: lopen · A/D: zijwaarts · ←/→: draaien · Shift: rennen · Spatie: springen<br><b>1</b>: scanner (klik = scannen) · <b>2</b>: tablet (Q: tabblad · F: dichterbij)<br><b>V</b>: third person · <b>C</b>: overzicht',
     third:
       '<b>WM-Sim — Third person</b><br>W/S: lopen · A/D: draaien · Shift: rennen · Spatie: springen<br><b>V</b>: first person · <b>C</b>: overzicht',
   };
@@ -55,8 +61,9 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
       pitch = 0;
     }
     hud.innerHTML = hudText[m] + processKeys;
+    onModeChange?.(m);
   }
-  setMode('overview');
+  setMode(initialMode);
 
   function isTyping(e: KeyboardEvent) {
     const t = e.target;
@@ -94,8 +101,11 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   function update(dt: number) {
     if (mode === 'overview') {
       controls.update();
+      moving = 0;
       return;
     }
+    const startX = player.position.x;
+    const startZ = player.position.z;
 
     const speed = down('ShiftLeft', 'ShiftRight') ? 9 : 5;
     const turn = mode === 'first' ? down('ArrowLeft') : down('KeyA', 'ArrowLeft');
@@ -112,6 +122,18 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     player.position.addScaledVector(right, (strafe / len) * speed * dt);
     player.position.x = THREE.MathUtils.clamp(player.position.x, bounds.minX, bounds.maxX);
     player.position.z = THREE.MathUtils.clamp(player.position.z, bounds.minZ, bounds.maxZ);
+
+    // Niet door obstakels lopen: langs de kortste kant terugduwen
+    for (const c of colliders) {
+      const p = player.position;
+      const overlapX = Math.min(p.x - (c.minX - PLAYER_RADIUS), c.maxX + PLAYER_RADIUS - p.x);
+      const overlapZ = Math.min(p.z - (c.minZ - PLAYER_RADIUS), c.maxZ + PLAYER_RADIUS - p.z);
+      if (overlapX <= 0 || overlapZ <= 0) continue;
+      if (overlapX < overlapZ) p.x = p.x < (c.minX + c.maxX) / 2 ? c.minX - PLAYER_RADIUS : c.maxX + PLAYER_RADIUS;
+      else p.z = p.z < (c.minZ + c.maxZ) / 2 ? c.minZ - PLAYER_RADIUS : c.maxZ + PLAYER_RADIUS;
+    }
+    const walked = Math.hypot(player.position.x - startX, player.position.z - startZ) / Math.max(dt, 1e-4);
+    moving += (Math.min(1, walked / 5) - moving) * (1 - Math.exp(-dt * 10));
 
     // Springen: zwaartekracht tot de vloer
     if (!grounded) {
@@ -135,5 +157,5 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     }
   }
 
-  return { update, setMode, get mode() { return mode; } };
+  return { update, setMode, get mode() { return mode; }, get moving() { return moving; } };
 }

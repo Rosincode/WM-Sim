@@ -7,9 +7,18 @@ import { createWarehouseView } from './warehouseView';
 // Koppelt de magazijn-sim aan de 3D-scène, de HUD en het toetsenbord.
 // Toetsen: E = scannen / actie, L = API-log, I = voorraad & orders.
 
-export function mountWarehouse({ scene, player }: { scene: THREE.Scene; player: THREE.Object3D }) {
+export function mountWarehouse({
+  scene,
+  player,
+  rackStock = true,
+}: {
+  scene: THREE.Scene;
+  player: THREE.Object3D;
+  /** false: de hal tekent de stellingvoorraad zelf (src/ui/scene/warehouse). */
+  rackStock?: boolean;
+}) {
   const sim = createWarehouse();
-  const view = createWarehouseView(scene, player, sim);
+  const view = createWarehouseView(scene, player, sim, { rackStock });
   const hud = createProcessHud(sim);
 
   const pos = () => ({ x: player.position.x, z: player.position.z });
@@ -37,6 +46,7 @@ export function mountWarehouse({ scene, player }: { scene: THREE.Scene; player: 
   void syncFromWms();
 
   return {
+    stockList: () => sim.stockList(),
     update(dt: number) {
       sim.update(dt);
       view.update(dt);

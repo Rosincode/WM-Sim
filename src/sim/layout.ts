@@ -30,8 +30,8 @@ export const LOCATIONS: SimLocation[] = (() => {
 export const location = (id: string) => LOCATIONS.find((l) => l.id === id);
 export const shelfLocations = () => LOCATIONS.filter((l) => l.type !== 'dock');
 
-/** Hoogte (y) van de bovenkant van de legger per niveau; zie rack() in main.ts. */
-export const LEVEL_Y = [0, 0.15, 1.5, 2.85];
+/** Hoogte (y) waarop een pallet staat per niveau; zie de stellingen in src/ui/scene/warehouse.ts. */
+export const LEVEL_Y = [0, 0, 2, 4];
 
 /** Interactiepunten op de vloer. */
 export const POINTS = {
