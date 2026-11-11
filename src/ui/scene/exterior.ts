@@ -42,7 +42,8 @@ export function createExterior(scene: THREE.Scene) {
 
   const YARD: Rect = { minX: X0 - 46, maxX: X0, minZ: -D / 2 - 8, maxZ: D / 2 + 8 };
   const ROAD_Z = D / 2 + 38; // hart van de openbare weg
-  const ROAD: Rect = { minX: -230, maxX: 230, minZ: ROAD_Z - 4, maxZ: ROAD_Z + 4 };
+  const ROAD_HALF = 1500; // net als het grasvlak: de weg loopt door tot voorbij de mist
+  const ROAD: Rect = { minX: -ROAD_HALF, maxX: ROAD_HALF, minZ: ROAD_Z - 4, maxZ: ROAD_Z + 4 };
   const YARD_DRIVE: Rect = { minX: X0 - 44, maxX: X0 - 34, minZ: YARD.maxZ, maxZ: ROAD.minZ };
   const PARKING: Rect = { minX: -14, maxX: 28, minZ: D / 2 + 8, maxZ: D / 2 + 24 };
   const PARK_DRIVE: Rect = { minX: 4, maxX: 12, minZ: PARKING.maxZ, maxZ: ROAD.minZ };
@@ -50,7 +51,9 @@ export function createExterior(scene: THREE.Scene) {
   const APRON: Rect = { minX: X0 - 6, maxX: X0, minZ: -D / 2 + 1, maxZ: D / 2 - 1 };
   const paved = [YARD, ROAD, YARD_DRIVE, PARKING, PARK_DRIVE, PLAZA];
 
-  ground({ minX: -450, maxX: 450, minZ: -450, maxZ: 450 }, -0.2, grassMat, 34);
+  // Ruim groter dan het zicht (mist dicht op 520 m, camera tot 260 m uit het midden),
+  // zodat de rand van het vlak altijd in de mist verdwijnt.
+  ground({ minX: -1500, maxX: 1500, minZ: -1500, maxZ: 1500 }, -0.2, grassMat, 34);
   for (const r of [YARD, ROAD, YARD_DRIVE, PARKING, PARK_DRIVE]) ground(r, -0.02, asphaltMat, 9);
   ground(PLAZA, -0.012, concreteMat, 1);
   ground(APRON, -0.012, concreteMat, 1);
@@ -58,9 +61,9 @@ export function createExterior(scene: THREE.Scene) {
   // ---------- Belijning ----------
   const lines = new Batch();
   const line = (x: number, z: number, sx: number, sz: number) => lines.add(x, -0.006, z, sx, 0.004, sz);
-  line(0, ROAD.minZ + 0.35, 460, 0.15);
-  line(0, ROAD.maxZ - 0.35, 460, 0.15);
-  for (let x = -226; x <= 226; x += 8) line(x, ROAD_Z, 3, 0.15);
+  line(0, ROAD.minZ + 0.35, ROAD_HALF * 2, 0.15);
+  line(0, ROAD.maxZ - 0.35, ROAD_HALF * 2, 0.15);
+  for (let x = -ROAD_HALF + 2; x <= ROAD_HALF - 2; x += 8) line(x, ROAD_Z, 3, 0.15);
   // Dockvakken op het terrein
   for (let i = 0; i <= DOCKS.length; i++) line(X0 - 10.5, DOCKS[0].z - 2.5 + i * 5, 19, 0.14);
   // Parkeervakken: twee rijen met een rijbaan ertussen

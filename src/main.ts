@@ -34,10 +34,12 @@ const scene = new THREE.Scene();
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 scene.environmentIntensity = 0.45;
-const HAZE = new THREE.FogExp2('#b4babd', 0.0045);
-const OUTSIDE = new THREE.Color('#b9d4ee'); // lucht boven het buitenterrein
-const DISTANCE_HAZE = new THREE.Fog('#b9d4ee', 170, 520);
+// Mist en achtergrond hebben per modus exact dezelfde kleur: anders tekent de plek waar
+// het terrein in de mist oplost (of op camera.far wordt afgekapt) zich af als een rand.
 const INSIDE = new THREE.Color('#c3c8cb');
+const HAZE = new THREE.FogExp2(INSIDE, 0.0045);
+const OUTSIDE = new THREE.Color('#b9d4ee'); // lucht boven het buitenterrein
+const DISTANCE_HAZE = new THREE.Fog(OUTSIDE, 170, 520);
 
 const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.05, 600);
 scene.add(camera); // nodig omdat scanner/tablet aan de camera hangen

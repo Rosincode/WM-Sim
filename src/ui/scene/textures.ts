@@ -491,8 +491,7 @@ export function asphalt() {
       const r = rng(91);
       g.fillStyle = '#3b3d40';
       g.fillRect(0, 0, w, h);
-      blotches(g, w, h, r, 26, 'rgba(20,20,22,A)', 0.3);
-      blotches(g, w, h, r, 20, 'rgba(110,110,110,A)', 0.18);
+      // Geen grote vlekken (zie grass): alleen fijne korrel, zodat de tegels naadloos aansluiten.
       speckle(g, w, h, r, 26000, 0.07, 2);
     },
     { repeat: true },
