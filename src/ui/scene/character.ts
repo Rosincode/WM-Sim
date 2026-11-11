@@ -43,6 +43,23 @@ export interface HandTarget {
   hideHand?: boolean;
 }
 
+/** Ovale overgang voor de foto op het hoofd: in het midden dekkend, naar de rand toe doorzichtig. Gedeeld door alle figuren. */
+let fade: THREE.CanvasTexture | null = null;
+function faceFade() {
+  if (fade) return fade;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 64;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, 64, 64);
+  const g = ctx.createRadialGradient(32, 32, 32 * 0.68, 32, 32, 32 * 0.97);
+  g.addColorStop(0, '#fff');
+  g.addColorStop(1, '#000');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  return (fade = new THREE.CanvasTexture(canvas));
+}
+
 export function createCharacter(group: THREE.Group = new THREE.Group(), colors: { /** Kleur van het hesje (andere spelers krijgen een eigen kleur). */ vest?: string } = {}) {
   const mat = (color: string, roughness = 0.85, metalness = 0) => new THREE.MeshStandardMaterial({ color, roughness, metalness });
   const vest = mat(colors.vest ?? '#f0590f', 0.8);
@@ -125,11 +142,32 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   // Hoofd met gezicht, haar en helm
   const head = pivot(torso, 0, 0.62, 0);
   ball(0.1, skin, head, 0, 0.092, 0).scale.set(0.88, 1.22, 0.98);
-  ball(0.013, skin, head, 0, 0.083, 0.098).scale.set(0.8, 1.3, 1); // neus
+  const features = [ball(0.013, skin, head, 0, 0.083, 0.098)]; // neus
+  features[0].scale.set(0.8, 1.3, 1);
   for (const side of [1, -1]) {
     ball(0.022, skin, head, side * 0.09, 0.088, -0.004).scale.set(0.5, 1.2, 0.9); // oor
-    ball(0.0105, dark, head, side * 0.036, 0.108, 0.088); // oog
+    features.push(ball(0.0105, dark, head, side * 0.036, 0.108, 0.088)); // oog
   }
+  // Eigen foto als gezicht: een schil over de voorkant van het hoofd waar de foto recht van voren op staat.
+  // De bovenrand (haar, voorhoofd) valt onder de helm; de randen lopen zacht over in de huid.
+  const faceGeo = new THREE.SphereGeometry(0.1015, 20, 14, Math.PI / 2 - 1.25, 2.5, 0.2 * Math.PI, 0.74 * Math.PI);
+  {
+    const pos = faceGeo.attributes.position;
+    const uv = faceGeo.attributes.uv;
+    const xMax = 0.1015 * Math.sin(1.25);
+    const yTop = 0.1015 * Math.cos(0.2 * Math.PI);
+    const yBottom = 0.1015 * Math.cos(0.94 * Math.PI);
+    for (let i = 0; i < pos.count; i++) uv.setXY(i, (pos.getX(i) / xMax + 1) / 2, (pos.getY(i) - yBottom) / (yTop - yBottom));
+  }
+  const faceMat = new THREE.MeshStandardMaterial({
+    roughness: 0.7, transparent: true, depthWrite: false, alphaMap: faceFade(), polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+  });
+  const face = new THREE.Mesh(faceGeo, faceMat);
+  face.position.set(0, 0.092, 0);
+  face.scale.set(0.88, 1.22, 0.98);
+  face.visible = false;
+  head.add(face);
+  const skinColor = skin.color.clone();
   const hairCap = mesh(new THREE.SphereGeometry(0.104, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.6), hair, head, 0, 0.102, -0.01);
   hairCap.scale.set(0.93, 1.1, 1);
   hairCap.rotation.x = -0.55;
@@ -383,11 +421,46 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
     });
   }
 
+  /** Foto van de speler op het hoofd zetten (null = het gewone gezicht). De huid kleurt mee met de foto. */
+  function setFace(image: HTMLImageElement | HTMLCanvasElement | null) {
+    faceMat.map?.dispose();
+    faceMat.map = null;
+    face.visible = !!image;
+    for (const f of features) f.visible = !image;
+    skin.color.copy(skinColor);
+    if (!image) return;
+    const texture = new THREE.Texture(image);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+    faceMat.map = texture;
+    faceMat.needsUpdate = true;
+    // Huidskleur: gemiddelde van wangen, neus en mond op de foto
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 16;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+      ctx.drawImage(image, 0, 0, 16, 16);
+      const px = ctx.getImageData(4, 7, 8, 5).data;
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      for (let i = 0; i < px.length; i += 4) {
+        r += px[i];
+        g += px[i + 1];
+        b += px[i + 2];
+      }
+      const n = (px.length / 4) * 255;
+      skin.color.setRGB(r / n, g / n, b / n, THREE.SRGBColorSpace);
+    } catch {
+      // kleur niet te bepalen: de gewone huidskleur blijft
+    }
+  }
+
   /** First person in de heftruck: het hoofd niet tekenen, de camera zit op die plek. */
   function setFirstPerson(on: boolean) {
     head.visible = neck.visible = !on;
   }
 
   update(0);
-  return { group, update, setFirstPerson };
+  return { group, update, setFirstPerson, setFace };
 }

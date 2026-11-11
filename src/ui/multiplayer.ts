@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { createRoom, type Peer } from '../sim/multiplayer/room';
 import type { SharedState } from '../sim/warehouse';
 import { CHAT_MAX, createChat } from './chat';
+import { createFacePicker, decodeFace, faceVersion, loadFace, saveFace, validFace } from './facePhoto';
 import { menu } from './menu';
 import { createCharacter, type HandTarget } from './scene/character';
 import type { ForkliftState } from './scene/forklift';
@@ -39,12 +40,15 @@ type Pose = {
   /** Los van de grond (springen, vallen) */ j: 0 | 1;
   /** Toetert (als deze speler rijdt) */ k: 0 | 1;
   /** Stand van de pompwagen, alleen als deze speler hem vasthoudt */ pj?: JackState;
+  /** Versie van de foto op het hoofd ('' = geen foto); de foto zelf gaat apart over de lijn */ fv: string;
 };
 type StateMsg = { rev: number; w: string; sim: SharedState; fork: ForkliftState; jack?: JackState };
 
 interface Options {
   scene: THREE.Scene;
   player: THREE.Object3D;
+  /** Foto op het hoofd van het eigen figuur zetten (null = geen foto). */
+  setFace(image: HTMLImageElement | null): void;
   /** Naam van de kamer; iedereen met dezelfde naam speelt samen. */
   room: string;
   shared: { state(): SharedState; apply(s: SharedState): void; setAuthority(on: boolean): void };
@@ -231,6 +235,24 @@ export function mountMultiplayer(o: Options) {
   }
   let name = stored || `Speler ${room.id.slice(0, 3).toUpperCase()}`;
 
+  // ---------- Foto op het hoofd ----------
+  // Elke speler meldt in zijn positiebericht welke versie van zijn foto hij heeft; wie die versie nog
+  // niet kent vraagt erom ('fq'), waarna de eigenaar de foto zelf rondstuurt ('f').
+  let face = loadFace();
+  let faceVer = faceVersion(face);
+  let faceSentAt = -1e9;
+  function showOwnFace() {
+    const shown = face;
+    if (!shown) return o.setFace(null);
+    decodeFace(shown).then((img) => shown === face && o.setFace(img), () => o.setFace(null));
+  }
+  showOwnFace();
+  function sendFace() {
+    if (!face || room.status !== 'online') return;
+    faceSentAt = performance.now();
+    room.send('f', { v: faceVer, img: face });
+  }
+
   // ---------- Andere spelers ----------
   type Avatar = {
     character: ReturnType<typeof createCharacter>;
@@ -251,6 +273,9 @@ export function mountMultiplayer(o: Options) {
     jackHands: HandTarget[];
     /** Gladgestreken plek op de heftruck, als deze speler erop staat. */
     ride: { x: number; z: number } | null;
+    /** Versie van de foto die nu op het hoofd staat, en wanneer we er voor het laatst om vroegen. */
+    faceVer: string;
+    faceAskedAt: number;
   };
   const avatars = new Map<string, Avatar>();
 
@@ -269,13 +294,15 @@ export function mountMultiplayer(o: Options) {
     const avatar: Avatar = {
       character, tag, bubble, load, color,
       target: new THREE.Vector3(),
-      pose: { n: '', x: 0, y: 0, z: 0, r: 0, d: 0, c: '', p: 0, ly: 0, t: 0, sc: 0, w: 0, j: 0, k: 0 },
+      pose: { n: '', x: 0, y: 0, z: 0, r: 0, d: 0, c: '', p: 0, ly: 0, t: 0, sc: 0, w: 0, j: 0, k: 0, fv: '' },
       placed: false,
       look: { yaw: 0, pitch: 0 },
       scanT: 0,
       wheelHand: { point: new THREE.Vector3(), normal: new THREE.Vector3() },
       jackHands: [{ point: new THREE.Vector3() }, { point: new THREE.Vector3() }],
       ride: null,
+      faceVer: '',
+      faceAskedAt: -1e9,
     };
     avatars.set(peer.id, avatar);
     return avatar;
@@ -284,6 +311,7 @@ export function mountMultiplayer(o: Options) {
   room.onLeave((peer) => {
     const a = avatars.get(peer.id);
     if (!a) return;
+    a.character.setFace(null); // textuur van de foto vrijgeven
     a.character.group.removeFromParent();
     avatars.delete(peer.id);
     refreshChip();
@@ -355,6 +383,7 @@ export function mountMultiplayer(o: Options) {
       w: o.isDriving() ? round(o.forklift.steer, 10) : 0,
       j: o.airborne() ? 1 : 0,
       k: o.forklift.honking || honked ? 1 : 0,
+      fv: faceVer,
     };
     if (pose.d) pose.f = o.forklift.getState();
     if (o.jack.held()) pose.pj = o.jack.getState();
@@ -413,7 +442,17 @@ export function mountMultiplayer(o: Options) {
         w: THREE.MathUtils.clamp(num(data.w), -1, 1),
         j: data.j === 1 ? 1 : 0,
         k: data.k === 1 && data.d === 1 ? 1 : 0,
+        fv: String(data.fv ?? '').slice(0, 12),
       };
+      if (a.pose.fv !== a.faceVer) {
+        if (!a.pose.fv) {
+          a.faceVer = '';
+          a.character.setFace(null); // foto verwijderd
+        } else if (performance.now() - a.faceAskedAt > 3000) {
+          a.faceAskedAt = performance.now();
+          room.send('fq', { to: from.id });
+        }
+      }
       if (isObj(data.v) && data.d !== 1) {
         const { x, z, y } = data.v;
         a.pose.v = { x: THREE.MathUtils.clamp(num(x), -4, 4), z: THREE.MathUtils.clamp(num(z), -4, 4) };
@@ -440,6 +479,16 @@ export function mountMultiplayer(o: Options) {
         }
       }
       if (wasNew) refreshChip();
+    } else if (kind === 'fq' && isObj(data)) {
+      // Iemand mist onze foto; meerdere vragen tegelijk beantwoorden we met één bericht.
+      if (data.to === room.id && performance.now() - faceSentAt > 2000) sendFace();
+    } else if (kind === 'f' && isObj(data)) {
+      const a = avatars.get(from.id);
+      const v = String(data.v ?? '').slice(0, 12);
+      const img = data.img;
+      if (!a || !v || v === a.faceVer || !validFace(img)) return;
+      a.faceVer = v;
+      decodeFace(img).then((image) => a.faceVer === v && a.character.setFace(image), () => {});
     } else if (kind === 'c' && isObj(data)) {
       const text = cleanChat(data.m);
       const now = performance.now();
@@ -477,7 +526,7 @@ export function mountMultiplayer(o: Options) {
   const chipRoom = document.createElement('div');
   chipRoom.style.cssText = 'color:#9aa0a6;font-size:12px';
   const rename = document.createElement('button');
-  rename.textContent = 'Naam wijzigen';
+  rename.textContent = 'Naam en foto wijzigen';
   rename.style.cssText = 'margin-top:8px;padding:6px 10px;border:0;border-radius:4px;background:#3b6ea5;color:#fff;font:inherit;cursor:pointer';
   rename.addEventListener('click', () => askName(false));
   chip.append(chipTitle, chipNames, chipRoom, rename);
@@ -495,12 +544,12 @@ export function mountMultiplayer(o: Options) {
       'position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);font:14px system-ui,sans-serif';
     const form = document.createElement('form');
     form.style.cssText =
-      'width:min(340px,calc(100vw - 32px));padding:20px;border-radius:12px;background:#1f2429;color:#fff;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:12px';
+      'width:min(380px,calc(100vw - 32px));padding:20px;border-radius:12px;background:#1f2429;color:#fff;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:12px';
     const title = document.createElement('div');
-    title.textContent = first ? 'Welkom! Hoe heet je?' : 'Je naam wijzigen';
+    title.textContent = first ? 'Welkom! Hoe heet je?' : 'Je naam en foto wijzigen';
     title.style.cssText = 'font-size:18px;font-weight:600';
     const info = document.createElement('div');
-    info.textContent = 'Je naam is zichtbaar voor andere spelers en wordt op deze pc onthouden.';
+    info.textContent = 'Je naam en foto zijn zichtbaar voor andere spelers en worden op deze pc onthouden.';
     info.style.cssText = 'color:#b9c0c7;line-height:1.45';
     const input = document.createElement('input');
     input.type = 'text';
@@ -522,11 +571,13 @@ export function mountMultiplayer(o: Options) {
     const cancel = button(first ? 'Overslaan' : 'Annuleren', false);
     const save = button('Opslaan', true);
     buttons.append(cancel, save);
-    form.append(title, info, input, buttons);
+    const picker = createFacePicker(face);
+    form.append(title, info, input, picker.el, buttons);
     overlay.appendChild(form);
     document.body.appendChild(overlay);
 
     const close = () => {
+      picker.stop();
       overlay.remove();
       nameDialog = null;
     };
@@ -546,6 +597,13 @@ export function mountMultiplayer(o: Options) {
         localStorage.setItem(NAME_KEY, name);
       } catch {
         // geen opslag beschikbaar: de naam geldt dan alleen voor deze sessie
+      }
+      if (picker.value !== face) {
+        face = picker.value;
+        faceVer = faceVersion(face);
+        saveFace(face);
+        showOwnFace();
+        sendFace();
       }
       sendPose(true);
       refreshChip();
@@ -576,7 +634,7 @@ export function mountMultiplayer(o: Options) {
     chipTitle.textContent = title;
     chipTitle.style.color = online ? '#a5d6a7' : '#ffcc80';
     chipNames.textContent = names;
-    chipRoom.textContent = `Kamer "${room.room}" · verbindingen ${room.links} · je naam is zichtbaar voor andere spelers`;
+    chipRoom.textContent = `Kamer "${room.room}" · verbindingen ${room.links} · je naam en foto zijn zichtbaar voor andere spelers`;
   }
   refreshChip();
 

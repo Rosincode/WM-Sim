@@ -278,6 +278,7 @@ const multiplayer = params.has('solo')
   : mountMultiplayer({
       scene,
       player,
+      setFace: character.setFace,
       room: params.get('room') ?? 'main',
       shared: warehouse.shared,
       carryLabel: warehouse.carryLabel,
