@@ -42,13 +42,6 @@ scene.add(camera); // nodig omdat scanner/tablet aan de camera hangen
 // --- Magazijn ---
 const hall = createWarehouse(scene);
 
-// --- Heftruck die door de gangpaden rijdt ---
-const forklift = createForklift();
-scene.add(forklift.group);
-const FORKLIFT_SPEED = 3;
-const route = [[-10, -1.5], [16, -1.5], [16, 3.5], [-10, 3.5]].map(([x, z]) => new THREE.Vector3(x, 0, z));
-let routeSeg = 0;
-let routeT = 0;
 
 // --- Speler (zichtbaar in third person en overzicht) ---
 const player = new THREE.Group();
@@ -106,21 +99,24 @@ document.body.appendChild(hud);
 
 const handheld = createHandheld({ camera, canvas: renderer.domElement, world: scene, scanTargets: hall.scanTargets });
 
+let driving = false;
+
 function applyMode(mode: ViewMode) {
   const overview = mode === 'overview';
   hall.roof.visible = !overview; // dak weg zodat je van boven naar binnen kijkt
   scene.fog = overview ? null : HAZE;
   scene.background = overview ? OUTSIDE : INSIDE;
-  handheld.setActive(mode === 'first');
+  handheld.setActive(mode === 'first' && !driving); // in de heftruck heb je je handen aan het stuur
 }
 
+const BOUNDS = { minX: -HALL.w / 2 + 0.6, maxX: HALL.w / 2 - 0.6, minZ: -HALL.d / 2 + 0.6, maxZ: HALL.d / 2 - 0.6 };
 const view = createPlayerView({
   camera,
   canvas: renderer.domElement,
   controls,
   player,
   hud,
-  bounds: { minX: -HALL.w / 2 + 0.6, maxX: HALL.w / 2 - 0.6, minZ: -HALL.d / 2 + 0.6, maxZ: HALL.d / 2 - 0.6 },
+  bounds: BOUNDS,
   colliders: hall.colliders,
   initialMode: params.get('view') === 'overview' ? 'overview' : 'first',
   onModeChange: applyMode,
@@ -135,12 +131,59 @@ if (at && at.length >= 2 && at.every(Number.isFinite)) {
 if (params.get('tool') === '2') handheld.setTool('tablet');
 
 window.addEventListener('keydown', (e) => {
+  const t = e.target;
+  if (e.code === 'KeyR' && !e.repeat && !(t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement)) {
+    if (driving) setDriving(false);
+    else if (nearForklift()) setDriving(true);
+  }
   if (e.code === 'KeyP' && !e.repeat && !(e.target instanceof HTMLInputElement)) postFx = !postFx;
 });
 
 // Processim (vrachtwagens, banen, taken). De voorraad in de stellingen tekent de hal zelf.
 const warehouse = mountWarehouse({ scene, player, rackStock: false });
-setInterval(() => hall.setStock(warehouse.stockList().filter((s) => !s.locationId.startsWith('DOCK'))), 500);
+const refreshHall = () => hall.setStock(warehouse.stockList().filter((s) => !s.locationId.startsWith('DOCK')));
+setInterval(refreshHall, 500);
+
+// --- Heftruck: instappen met R, rijden met W/A/S/D, vorken met pijl omhoog/omlaag ---
+const forklift = createForklift({
+  hall,
+  colliders: hall.colliders,
+  bounds: BOUNDS,
+  take: warehouse.forkliftTake,
+  place: warehouse.forkliftPlace,
+  onStockChange: refreshHall,
+});
+forklift.group.position.set(-10, 0, 3.5);
+forklift.group.rotation.y = Math.PI / 2;
+scene.add(forklift.group, forklift.marker);
+if (import.meta.env.DEV) Object.assign(window, { wmDebug: { forklift, setDriving: (on: boolean) => setDriving(on) } });
+
+const driveHint = document.createElement('div');
+driveHint.style.cssText =
+  'position:fixed;left:50%;top:16px;transform:translateX(-50%);max-width:560px;padding:8px 14px;border-radius:8px;background:rgba(0,0,0,.65);color:#fff;font:14px system-ui,sans-serif;line-height:1.4;text-align:center;pointer-events:none;display:none';
+document.body.appendChild(driveHint);
+
+const nearForklift = () => player.position.distanceTo(forklift.group.position) < 2.8;
+
+function setDriving(on: boolean) {
+  if (on === driving) return;
+  driving = on;
+  forklift.setDriving(on);
+  if (!on) {
+    // uitstappen: links naast de truck, of rechts als daar iets in de weg staat
+    const f = forklift.group;
+    const side = (dir: number) => new THREE.Vector3(f.position.x + Math.cos(f.rotation.y) * 1.5 * dir, 0, f.position.z - Math.sin(f.rotation.y) * 1.5 * dir);
+    const free = (p: THREE.Vector3) =>
+      p.x > BOUNDS.minX && p.x < BOUNDS.maxX && p.z > BOUNDS.minZ && p.z < BOUNDS.maxZ &&
+      !hall.colliders.some((c) => p.x > c.minX - 0.45 && p.x < c.maxX + 0.45 && p.z > c.minZ - 0.45 && p.z < c.maxZ + 0.45);
+    const spot = [side(1), side(-1)].find(free) ?? side(1);
+    view.setVehicle(null);
+    player.position.copy(spot);
+    player.rotation.y = f.rotation.y;
+  } else {
+    view.setVehicle({ object: forklift.group, seat: forklift.seat });
+  }
+}
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -174,19 +217,12 @@ renderer.setAnimationLoop((now) => {
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
 
-  // Heftruck
-  const a = route[routeSeg];
-  const b = route[(routeSeg + 1) % route.length];
-  routeT += (dt * FORKLIFT_SPEED) / a.distanceTo(b);
-  if (routeT >= 1) {
-    routeT = 0;
-    routeSeg = (routeSeg + 1) % route.length;
-  }
-  forklift.group.position.lerpVectors(a, b, Math.min(routeT, 1));
-  forklift.group.rotation.y = Math.atan2(b.x - a.x, b.z - a.z);
-  forklift.update(dt, FORKLIFT_SPEED, now / 1000);
-
+  forklift.update(dt, now / 1000);
   view.update(dt);
+
+  const hintText = driving ? forklift.hint : view.mode !== 'overview' && nearForklift() ? '<b>R</b>: in de heftruck stappen' : '';
+  if (driveHint.innerHTML !== hintText) driveHint.innerHTML = hintText;
+  driveHint.style.display = hintText ? 'block' : 'none';
   warehouse.update(dt);
   handheld.update(dt, view.moving);
 
