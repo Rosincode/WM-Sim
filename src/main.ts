@@ -162,15 +162,19 @@ const tabletApp = createTabletApp({ camera, display: handheld.tabletDisplay, onC
 
 let driving = false;
 
+/** Loopt de speler met de pompwagen? */
+let pushing = false;
+
 function applyMode(mode: ViewMode) {
   const overview = mode === 'overview';
   hall.roof.visible = !overview; // dak weg zodat je van boven naar binnen kijkt
   scene.fog = overview ? DISTANCE_HAZE : HAZE;
   scene.background = overview ? OUTSIDE : INSIDE;
   // In de heftruck: linkerhand op het stuur, scanner/tablet in de rechterhand, eigen lichaam (zonder hoofd) in beeld
-  handheld.setActive(mode === 'first');
+  // Met de pompwagen: beide handen op de handgreep, dus geen scanner of tablet in beeld
+  handheld.setActive(mode === 'first' && !pushing);
   handheld.setSeated(driving);
-  character.setFirstPerson(mode === 'first' && driving);
+  character.setFirstPerson(mode === 'first' && (driving || pushing));
 }
 
 const BOUNDS = { minX: -HALL.w / 2 + 0.6, maxX: HALL.w / 2 - 0.6, minZ: -HALL.d / 2 + 0.6, maxZ: HALL.d / 2 - 0.6 };
@@ -199,9 +203,9 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR' && !e.repeat && !(t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement)) {
     // R: uitstappen of loslaten; anders pakken wat het dichtst bij is (heftruck of pompwagen)
     if (driving) setDriving(false);
-    else if (jack.held) jack.setHeld(false);
+    else if (jack.held) holdJack(false);
     else if (nearJack() && !(nearForklift() && forkliftDistance() < jackDistance())) {
-      if (!multiplayer?.jackHolder()) jack.setHeld(true);
+      if (!multiplayer?.jackHolder()) holdJack(true);
     } else if (nearForklift() && !multiplayer?.forkliftDriver()) setDriving(true);
   }
   if (e.code === 'KeyP' && !e.repeat && !(e.target instanceof HTMLInputElement)) postFx = !postFx;
@@ -254,6 +258,12 @@ const jack = createPalletJack({
 jack.group.position.set(-13.4, 0, 5.4); // naast het looppad, bij de rolcontainers
 jack.group.rotation.y = Math.PI / 2;
 scene.add(jack.group);
+/** Pompwagen pakken of loslaten; in first person zie je dan je eigen handen op de handgreep. */
+function holdJack(on: boolean) {
+  jack.setHeld(on);
+  pushing = on;
+  view.setBody(on); // roept ook applyMode aan
+}
 const jackDistance = () => Math.hypot(player.position.x - jack.group.position.x, player.position.z - jack.group.position.z);
 const nearJack = () => jackDistance() < 2.2 && player.position.y < 1;
 if (import.meta.env.DEV) Object.assign((window as unknown as { wmDebug: object }).wmDebug, { jack });
@@ -268,7 +278,7 @@ const multiplayer = params.has('solo')
       shared: warehouse.shared,
       carryLabel: warehouse.carryLabel,
       forklift,
-      jack: { getState: jack.getState, applyState: jack.applyState, grip: jack.grip, held: () => jack.held, release: () => jack.setHeld(false) },
+      jack: { getState: jack.getState, applyState: jack.applyState, grip: jack.grip, held: () => jack.held, release: () => holdJack(false) },
       radio,
       airborne: () => view.airborne,
       rider: () => {

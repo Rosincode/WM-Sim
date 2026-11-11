@@ -44,6 +44,8 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   /** Voertuig waarin de speler zit (heftruck); de speler en camera volgen het dan. */
   let vehicle: Vehicle | null = null;
   let lookYaw = 0; // rondkijken vanaf de stoel
+  /** Eigen lichaam ook lopend in first person tekenen (met de pompwagen: je ziet je handen op de greep). */
+  let body = false;
   const seatWorld = new THREE.Vector3();
   /** Waar de speler op staat als dat kan bewegen (heftruck): plek in het assenstelsel daarvan. */
   let ride: { pose: NonNullable<Solid['pose']>; x: number; z: number; r: number; lift: boolean } | null = null;
@@ -88,7 +90,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     mode = m;
     if (m !== 'overview') closeMode = m;
     controls.enabled = m === 'overview';
-    player.visible = m !== 'first' || !!vehicle; // lopend geen eigen lichaam in beeld; in de heftruck zie je het onder je
+    player.visible = m !== 'first' || !!vehicle || body; // lopend geen eigen lichaam in beeld; in de heftruck zie je het onder je
     if (m !== 'first' && document.pointerLockElement === canvas) document.exitPointerLock();
     if (m === 'overview') {
       camera.position.set(-48, 58, 82); // schuin van voren: dockgevel en voorgevel in beeld
@@ -272,6 +274,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
 
     if (mode === 'first') {
       camera.position.set(player.position.x, player.position.y + EYE_HEIGHT, player.position.z);
+      if (body) camera.position.addScaledVector(forward, 0.1).y += 0.06; // net voor en boven de romp, zodat je er niet in kijkt
       camera.rotation.set(pitch, player.rotation.y + Math.PI, 0, 'YXZ'); // camera kijkt langs -Z
     } else {
       // Achter en boven de speler, soepel volgend
@@ -286,7 +289,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     vehicle = v;
     lookYaw = 0;
     pitch = v ? SEAT_PITCH : 0;
-    player.visible = mode !== 'first' || !!v;
+    player.visible = mode !== 'first' || !!v || body;
     player.position.y = 0;
     velY = 0;
     grounded = true;
@@ -299,6 +302,12 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     update,
     setMode,
     setVehicle,
+    /** Eigen lichaam (zonder hoofd) ook lopend in first person tonen, of niet. */
+    setBody(on: boolean) {
+      body = on;
+      player.visible = mode !== 'first' || !!vehicle || body;
+      onModeChange?.(mode);
+    },
     get mode() { return mode; },
     get moving() { return moving; },
     /** Eigen loopsnelheid (m/s, negatief = achteruit): staat de speler stil op rijdende of stijgende vorken, dan is dit nul. */
