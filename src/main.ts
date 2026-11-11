@@ -13,6 +13,7 @@ import { createWarehouse, HALL } from './ui/scene/warehouse';
 import { createForklift } from './ui/scene/forklift';
 import { createExterior } from './ui/scene/exterior';
 import { createCharacter, type HandTarget } from './ui/scene/character';
+import { wms } from './integrations/wms';
 import { mountWarehouse } from './ui/warehouse';
 import { mountMultiplayer } from './ui/multiplayer';
 
@@ -216,7 +217,7 @@ const forklift = createForklift({
 forklift.group.position.set(-14, 0, 2.5); // voor de stellingen, in het middelste gangpad
 forklift.group.rotation.y = Math.PI / 2;
 scene.add(forklift.group, forklift.marker);
-if (import.meta.env.DEV) Object.assign(window, { wmDebug: { forklift, hall, warehouse, setDriving: (on: boolean) => setDriving(on) } });
+if (import.meta.env.DEV) Object.assign(window, { wmDebug: { forklift, hall, warehouse, wms, setDriving: (on: boolean) => setDriving(on) } });
 
 const driveHint = document.createElement('div');
 driveHint.style.cssText =
