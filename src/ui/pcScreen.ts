@@ -100,6 +100,18 @@ export function createPcScreen({ camera, display, world }: Options) {
   let blocked = false;
   let sightTimer = 0;
 
+  /** Telt dit object als obstakel? Niet: onzichtbaar (eigen lichaam in first person), labels, doorzichtige
+   *  markeringen, wat de speler vasthoudt en de pc zelf. */
+  function solid(object: THREE.Object3D) {
+    if ((object as THREE.Sprite).isSprite) return false;
+    const mat = (object as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+    if (mat && !Array.isArray(mat) && mat.transparent && mat.opacity < 0.6) return false;
+    for (let o: THREE.Object3D | null = object; o; o = o.parent) {
+      if (!o.visible || o === camera || o === display.parent) return false;
+    }
+    return true;
+  }
+
   /** Staat er iets tussen de camera en het scherm? (midden en beide zijkanten) */
   function sightBlocked() {
     for (const sx of [0, -0.4, 0.4]) {
@@ -108,9 +120,7 @@ export function createPcScreen({ camera, display, world }: Options) {
       raycaster.set(camPos, dir.divideScalar(far));
       raycaster.far = far - 0.05;
       for (const hit of raycaster.intersectObject(world, true)) {
-        let o: THREE.Object3D | null = hit.object;
-        while (o && o !== camera && o !== display.parent) o = o.parent;
-        if (!o) return true; // niet van de speler zelf (handen/apparaat) en niet van de pc
+        if (solid(hit.object)) return true;
       }
     }
     return false;
