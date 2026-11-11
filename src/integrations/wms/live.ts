@@ -12,14 +12,12 @@ type StockRow = { sku: string; location_id: string; qty: number };
 type OrderRow = { order_id: string; status: Order['status'] };
 type OrderLineRow = { order_id: string; sku: string; qty: number };
 
-function basicAuth(user: string, pass: string) {
-  const bytes = new TextEncoder().encode(`${user}:${pass}`);
-  return 'Basic ' + btoa(String.fromCharCode(...bytes));
-}
+// Aanmelden: de API-sleutel van een API-client in de WMS gaat mee als Bearer-token.
+// De WMS accepteert geen Basic auth.
 
 export function createLiveClient(c: WmsCredentials): WmsClient {
   const base = c.baseUrl.trim().replace(/\/+$/, '');
-  const auth = basicAuth(c.username, c.password);
+  const auth = `Bearer ${(c.apiKey ?? '').trim()}`;
 
   async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     let res: Response;
@@ -36,7 +34,12 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
       throw new WmsError('WMS niet bereikbaar. Controleer de URL, HTTPS en de CORS-instelling van de WMS.');
     }
     if (res.status === 401 || res.status === 403) {
-      throw new WmsError('Inloggen geweigerd: controleer gebruikersnaam en wachtwoord.', res.status);
+      throw new WmsError(
+        res.status === 401
+          ? 'Inloggen geweigerd: controleer de API-sleutel.'
+          : 'Geen rechten: de API-sleutel mag dit niet (controleer de scopes van de API-client).',
+        res.status,
+      );
     }
     if (!res.ok) throw new WmsError(`WMS-fout ${res.status}: ${(await res.text()).slice(0, 300)}`, res.status);
     const text = await res.text();

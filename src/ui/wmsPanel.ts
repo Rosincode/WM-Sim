@@ -104,8 +104,7 @@ export function mountWmsPanel(parent?: HTMLElement) {
         showForm
           ? `<form>
               <input name="baseUrl" type="url" placeholder="https://wms.example.com/api" required autocomplete="url">
-              <input name="username" placeholder="Gebruikersnaam" required autocomplete="username">
-              <input name="password" type="password" placeholder="Wachtwoord" required autocomplete="current-password">
+              <input name="apiKey" type="password" placeholder="API-sleutel" required autocomplete="off">
               <label class="check"><input name="remember" type="checkbox"> Onthouden op deze pc</label>
               <button type="submit">Verbinden</button>
               <button type="button" class="secondary" data-act="cancel">Annuleren</button>
@@ -182,8 +181,7 @@ export function mountWmsPanel(parent?: HTMLElement) {
       form.querySelectorAll('button, input').forEach((el) => ((el as HTMLInputElement).disabled = true));
       const credentials = {
         baseUrl: String(data.get('baseUrl')),
-        username: String(data.get('username')),
-        password: String(data.get('password')),
+        apiKey: String(data.get('apiKey')).trim(),
       };
       try {
         const count = await wms.connect(credentials);

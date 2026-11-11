@@ -1,6 +1,7 @@
 import type { Item, Location, Order } from '../../shared/contract';
 
-export type WmsCredentials = { baseUrl: string; username: string; password: string };
+/** Aanmelden bij de WMS-API: het basisadres en de API-sleutel van een API-client (rol game). */
+export type WmsCredentials = { baseUrl: string; apiKey: string };
 
 export type OrderLine = { sku: string; qty: number };
 

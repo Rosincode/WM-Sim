@@ -41,7 +41,8 @@ export async function loadRemembered(): Promise<WmsCredentials | null> {
     const sealed = await tx<Sealed | undefined>('readonly', (s) => s.get(DATA_ID));
     if (!key || !sealed) return null;
     const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: sealed.iv }, key, sealed.data);
-    return JSON.parse(new TextDecoder().decode(plain)) as WmsCredentials;
+    const c = JSON.parse(new TextDecoder().decode(plain)) as Partial<WmsCredentials>;
+    return c.baseUrl && c.apiKey ? { baseUrl: c.baseUrl, apiKey: c.apiKey } : null; // oude vorm (wachtwoord): opnieuw inloggen
   } catch {
     return null;
   }
