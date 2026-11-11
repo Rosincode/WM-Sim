@@ -253,6 +253,7 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
       speed = 0;
     },
     update(dt: number, time: number) {
+      if (dt <= 0) return;
       // Rijden
       const throttle = driving ? down('KeyW') - down('KeyS') : 0;
       const target = throttle > 0 ? MAX_SPEED : throttle < 0 ? -MAX_REVERSE : 0;

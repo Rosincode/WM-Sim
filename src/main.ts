@@ -204,7 +204,7 @@ wms.onChange(() => void refreshWms());
 let last = performance.now();
 
 renderer.setAnimationLoop((now) => {
-  const dt = Math.min((now - last) / 1000, 0.1);
+  const dt = THREE.MathUtils.clamp((now - last) / 1000, 0, 0.1); // eerste frame kan een tijdstip vóór het laden hebben
   last = now;
 
   forklift.update(dt, now / 1000);
