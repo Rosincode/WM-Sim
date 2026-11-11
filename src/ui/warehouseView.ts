@@ -275,5 +275,5 @@ export function createWarehouseView(
     }
   }
 
-  return { update };
+  return { update, pcDisplay: pc.screen };
 }

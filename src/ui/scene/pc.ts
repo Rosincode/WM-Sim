@@ -66,5 +66,5 @@ export function createPcMesh() {
   ctx.fillText('Druk op E om de pc te gebruiken', SCREEN_W / 2, SCREEN_H / 2 + 50, SCREEN_W - 36);
   texture.needsUpdate = true;
 
-  return { group };
+  return { group, screen };
 }

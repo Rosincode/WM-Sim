@@ -141,7 +141,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 // Processim (vrachtwagens, banen, taken). De voorraad in de stellingen tekent de hal zelf.
-const warehouse = mountWarehouse({ scene, player, rackStock: false });
+const warehouse = mountWarehouse({ scene, camera, player, rackStock: false });
 const refreshHall = () => hall.setStock(warehouse.stockList().filter((s) => !s.locationId.startsWith('DOCK')));
 setInterval(refreshHall, 500);
 

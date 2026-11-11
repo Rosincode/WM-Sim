@@ -14,10 +14,12 @@ const PC_RADIUS = 2;
 
 export function mountWarehouse({
   scene,
+  camera,
   player,
   rackStock = true,
 }: {
   scene: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
   player: THREE.Object3D;
   /** false: de hal tekent de stellingvoorraad zelf (src/ui/scene/warehouse). */
   rackStock?: boolean;
@@ -29,8 +31,8 @@ export function mountWarehouse({
   const pos = () => ({ x: player.position.x, z: player.position.z });
   const nearPc = () => dist(pos(), POINTS.terminal) <= PC_RADIUS;
 
-  // De pc toont alleen de echte WMS-app.
-  const pc = createPcScreen();
+  // De pc toont alleen de echte WMS-app: al zichtbaar op de monitor als je langsloopt, met E te bedienen.
+  const pc = createPcScreen({ camera, display: view.pcDisplay, world: scene });
 
   window.addEventListener('keydown', (e) => {
     const t = e.target;
@@ -85,6 +87,7 @@ export function mountWarehouse({
 
       const near = nearPc();
       if (pc.isOpen && !near) pc.close();
+      pc.update(dt);
       hud.update(dt, pos(), near ? (pc.isOpen ? 'Pc verlaten' : 'Pc gebruiken: WMS openen') : undefined);
     },
   };
