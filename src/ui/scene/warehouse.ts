@@ -15,6 +15,9 @@ const PALLET_H = 0.144;
 
 export type Collider = { minX: number; maxX: number; minZ: number; maxZ: number };
 export type ScanTarget = { code: string; position: THREE.Vector3 };
+/** Een pallet zoals hij nu in de stelling staat. `last` = de buitenste van zijn locatie (die pak je als eerste). */
+export type RackPallet = { locId: string; index: number; last: boolean; x: number; y: number; z: number; qty: number; sku: string };
+export type Slot = { locId: string; x: number; y: number; z: number };
 
 const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
 const UNIT_CYL = new THREE.CylinderGeometry(1, 1, 1, 20);
@@ -487,66 +490,130 @@ export function createWarehouse(scene: THREE.Scene) {
     [0.3, 0.24, 0.5],
     [0.4, 0.4, 0.33],
   ];
+  const PER_PALLET = 20; // stuks per volle pallet
+  const SLOTS_PER_LOCATION = 3;
   const m4 = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const euler = new THREE.Euler();
   const pos = new THREE.Vector3();
   const scl = new THREE.Vector3();
   const tint = new THREE.Color();
-  let stockSignature = '';
 
-  /** Tekent de voorraad uit de WMS: per locatie 1-3 pallets, hoogte naar aantal. */
+  type Carton = { x: number; y: number; z: number; sx: number; sy: number; sz: number; ry: number; r: number; g: number; b: number };
+
+  /** Opbouw van één pallet (in palletcoördinaten). Doosmaat en kleur horen bij het artikel. */
+  function loadLayout(sku: string, qty: number, jitterKey: string) {
+    const r = tex.rng(tex.hashString(sku));
+    const j = tex.rng(tex.hashString(jitterKey));
+    const [cw, ch, cd] = CARTON_SIZES[Math.floor(r() * CARTON_SIZES.length)];
+    const shade = 0.78 + r() * 0.22;
+    const warm = r() * 0.08;
+    const wrapped = r() < 0.55;
+    const nx = Math.round(1.2 / cw);
+    const nz = Math.round(1.0 / cd);
+    const maxLayers = Math.floor(1.45 / ch);
+    const layers = Math.max(1, Math.round((Math.min(qty, PER_PALLET) / PER_PALLET) * maxLayers));
+    const cartons: Carton[] = [];
+    for (let l = 0; l < layers; l++)
+      for (let ix = 0; ix < nx; ix++)
+        for (let iz = 0; iz < nz; iz++) {
+          if (l === layers - 1 && layers < maxLayers && l > 0 && j() < 0.3) continue; // aangebroken laag
+          const v = shade * (0.94 + j() * 0.06);
+          cartons.push({
+            x: (ix - (nx - 1) / 2) * cw + (j() - 0.5) * 0.012,
+            y: PALLET_H + (l + 0.5) * ch,
+            z: (iz - (nz - 1) / 2) * cd + (j() - 0.5) * 0.012,
+            sx: cw - 0.008,
+            sy: ch - 0.003,
+            sz: cd - 0.008,
+            ry: (j() - 0.5) * 0.03,
+            r: v + warm,
+            g: v,
+            b: v - warm,
+          });
+        }
+    const wrap = wrapped ? { y: PALLET_H + (layers * ch) / 2, sx: nx * cw + 0.02, sy: layers * ch + 0.006, sz: nz * cd + 0.02 } : null;
+    return { cartons, wrap };
+  }
+
+  /** Losse pallet met lading (voor op de vorken of los op de vloer); zelfde uiterlijk als in de stelling. */
+  function buildLoad(sku: string, qty: number, jitterKey: string) {
+    const g = new THREE.Group();
+    const { cartons: list, wrap } = loadLayout(sku, qty, jitterKey);
+    const base = new THREE.Mesh(palletGeo, woodMat);
+    const boxes = new THREE.InstancedMesh(UNIT_BOX, cartonMats, list.length);
+    list.forEach((c, i) => {
+      q.setFromEuler(euler.set(0, c.ry, 0));
+      boxes.setMatrixAt(i, m4.compose(pos.set(c.x, c.y, c.z), q, scl.set(c.sx, c.sy, c.sz)));
+      boxes.setColorAt(i, tint.setRGB(c.r, c.g, c.b));
+    });
+    boxes.frustumCulled = false;
+    for (const m of [base, boxes]) {
+      m.castShadow = true;
+      m.receiveShadow = true;
+    }
+    g.add(base, boxes);
+    if (wrap) {
+      const w = new THREE.Mesh(UNIT_BOX, wrapMat);
+      w.position.y = wrap.y;
+      w.scale.set(wrap.sx, wrap.sy, wrap.sz);
+      g.add(w);
+    }
+    return g;
+  }
+
+  let stockSignature = '';
+  let rackPallets: RackPallet[] = [];
+  const palletCount = new Map<string, number>();
+
+  /** Tekent de voorraad: per locatie 1-3 pallets, de laatste pallet bevat de rest. */
   function setStock(items: Item[]) {
-    const perLoc = new Map<string, number>();
-    for (const it of items) perLoc.set(it.locationId, (perLoc.get(it.locationId) ?? 0) + it.qty);
-    const signature = [...perLoc].sort().join('|');
+    const perLoc = new Map<string, { qty: number; sku: string; top: number }>();
+    for (const it of items) {
+      if (it.qty <= 0) continue;
+      const cur = perLoc.get(it.locationId) ?? { qty: 0, sku: it.sku, top: 0 };
+      cur.qty += it.qty;
+      if (it.qty > cur.top) {
+        cur.top = it.qty;
+        cur.sku = it.sku;
+      }
+      perLoc.set(it.locationId, cur);
+    }
+    const signature = [...perLoc].map(([id, v]) => `${id}:${v.qty}:${v.sku}`).sort().join('|');
     if (signature === stockSignature) return;
     stockSignature = signature;
 
     let np = 0;
     let nc = 0;
     let nw = 0;
-    for (const [id, qty] of perLoc) {
+    rackPallets = [];
+    palletCount.clear();
+    for (const [id, { qty, sku }] of perLoc) {
       const slots = slotsFor(id);
-      if (!slots || qty <= 0) continue;
-      const r = tex.rng(tex.hashString(id));
-      const count = Math.min(slots.length, Math.ceil(qty / 20));
-      let rest = qty;
+      if (!slots) continue;
+      const count = Math.min(slots.length, Math.ceil(qty / PER_PALLET));
+      palletCount.set(id, count);
       for (let i = 0; i < count && np < MAX_PALLETS; i++) {
         const [sx, sy, sz] = slots[i];
-        const onPallet = Math.min(20, rest);
-        rest -= onPallet;
+        const onPallet = Math.min(PER_PALLET, qty - i * PER_PALLET);
+        const key = `${id}:${i}`;
+        const r = tex.rng(tex.hashString(key));
         const px = sx + (r() - 0.5) * 0.06;
         const pz = sz + (r() - 0.5) * 0.05;
         q.setFromEuler(euler.set(0, (r() - 0.5) * 0.05, 0));
         pallets.setMatrixAt(np++, m4.compose(pos.set(px, sy, pz), q, scl.set(1, 1, 1)));
+        rackPallets.push({ locId: id, index: i, last: i === count - 1, x: px, y: sy, z: pz, qty: onPallet, sku });
 
-        const [cw, ch, cd] = CARTON_SIZES[Math.floor(r() * CARTON_SIZES.length)];
-        const nx = Math.round(1.2 / cw);
-        const nz = Math.round(1.0 / cd);
-        const maxLayers = Math.floor(1.45 / ch);
-        const layers = Math.max(1, Math.round((onPallet / 20) * maxLayers));
-        const shade = 0.78 + r() * 0.22;
-        const warm = r() * 0.08;
-        for (let l = 0; l < layers; l++)
-          for (let ix = 0; ix < nx; ix++)
-            for (let iz = 0; iz < nz; iz++) {
-              if (l === layers - 1 && layers < maxLayers && l > 0 && r() < 0.3) continue; // aangebroken laag
-              if (nc >= MAX_CARTONS) break;
-              q.setFromEuler(euler.set(0, (r() - 0.5) * 0.03, 0));
-              pos.set(
-                px + (ix - (nx - 1) / 2) * cw + (r() - 0.5) * 0.012,
-                sy + PALLET_H + (l + 0.5) * ch,
-                pz + (iz - (nz - 1) / 2) * cd + (r() - 0.5) * 0.012,
-              );
-              cartons.setMatrixAt(nc, m4.compose(pos, q, scl.set(cw - 0.008, ch - 0.003, cd - 0.008)));
-              const v = shade * (0.94 + r() * 0.06);
-              cartons.setColorAt(nc++, tint.setRGB(v + warm, v, v - warm));
-            }
-        if (r() < 0.55) {
+        const { cartons: list, wrap } = loadLayout(sku, onPallet, key);
+        for (const c of list) {
+          if (nc >= MAX_CARTONS) break;
+          q.setFromEuler(euler.set(0, c.ry, 0));
+          cartons.setMatrixAt(nc, m4.compose(pos.set(px + c.x, sy + c.y, pz + c.z), q, scl.set(c.sx, c.sy, c.sz)));
+          cartons.setColorAt(nc++, tint.setRGB(c.r, c.g, c.b));
+        }
+        if (wrap) {
           q.identity();
-          pos.set(px, sy + PALLET_H + (layers * ch) / 2, pz);
-          wraps.setMatrixAt(nw++, m4.compose(pos, q, scl.set(nx * cw + 0.02, layers * ch + 0.006, nz * cd + 0.02)));
+          wraps.setMatrixAt(nw++, m4.compose(pos.set(px, sy + wrap.y, pz), q, scl.set(wrap.sx, wrap.sy, wrap.sz)));
         }
       }
     }
@@ -557,5 +624,44 @@ export function createWarehouse(scene: THREE.Scene) {
     if (cartons.instanceColor) cartons.instanceColor.needsUpdate = true;
   }
 
-  return { roof, colliders, scanTargets, setStock };
+  /** Dichtstbijzijnde vrije palletplek in de stellingen bij punt (x, hoogte, z), of null. */
+  function nearestFreeSlot(x: number, height: number, z: number, maxDist = 1.6): Slot | null {
+    let best: Slot | null = null;
+    let bestD = maxDist;
+    ROW_Z.forEach((_, r) =>
+      BAY_X.forEach((_, s) =>
+        LEVEL_Y.forEach((_, l) => {
+          const locId = `R${r + 1}-${String(s + 1).padStart(2, '0')}-${l + 1}`;
+          const n = palletCount.get(locId) ?? 0;
+          if (n >= SLOTS_PER_LOCATION) return;
+          const [sx, sy, sz] = slotsFor(locId)![n];
+          if (Math.abs(height - sy) > 1.3) return;
+          const d = Math.hypot(x - sx, z - sz);
+          if (d < bestD) {
+            bestD = d;
+            best = { locId, x: sx, y: sy, z: sz };
+          }
+        }),
+      ),
+    );
+    return best;
+  }
+
+  /** Staat dit punt binnen een stellingrij (dan kun je daar niet los op de vloer neerzetten)? */
+  const inRack = (x: number, z: number) => x > -6.2 && x < 14.2 && ROW_Z.some((z0) => Math.abs(z - z0) < 0.75);
+
+  return {
+    roof,
+    colliders,
+    scanTargets,
+    setStock,
+    /** De pallets die nu in de stellingen staan. */
+    rackPallets: () => rackPallets,
+    nearestFreeSlot,
+    inRack,
+    buildLoad,
+    perPallet: PER_PALLET,
+  };
 }
+
+export type Hall = ReturnType<typeof createWarehouse>;

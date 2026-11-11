@@ -47,6 +47,9 @@ export function mountWarehouse({
 
   return {
     stockList: () => sim.stockList(),
+    /** Voor de heftruck: hele pallets van en naar stellinglocaties. */
+    forkliftTake: sim.forkliftTake,
+    forkliftPlace: sim.forkliftPlace,
     update(dt: number) {
       sim.update(dt);
       view.update(dt);

@@ -272,6 +272,30 @@ export function createWarehouse() {
     say(`${o.id} ingeladen in ${t.id}.`, 'ok');
   }
 
+  // ========== Heftruck: hele pallets tussen stellinglocaties verplaatsen ==========
+
+  /** Haalt (maximaal maxQty van) het grootste artikel van een locatie; de pallet staat daarna op de vorken. */
+  function forkliftTake(locId: string, maxQty: number): Pallet | null {
+    const top = stockAt(locId).sort((a, b) => b.qty - a.qty)[0];
+    if (!top) return null;
+    const qty = Math.min(maxQty, top.qty);
+    add(locId, top.sku, -qty);
+    say(`Heftruck: ${qty}× ${top.sku} van ${locId} gepakt.`);
+    return { id: `PAL-${stamp}-${pad(seq.pallet++, 4)}`, sku: top.sku, qty };
+  }
+
+  /** Zet een pallet van de vorken op een stellinglocatie; verplaatsen geldt als wegzetten (confirm_putaway). */
+  function forkliftPlace(locId: string, pallet: Pallet, fromLocationId: string) {
+    add(locId, pallet.sku, pallet.qty);
+    if (fromLocationId === locId) {
+      say(`${pallet.id} teruggezet op ${locId}.`);
+      return;
+    }
+    publish({ type: 'Scanned', kind: 'location', barcode: locId, ok: true, locationId: locId });
+    publish({ type: 'PutawayDone', sku: pallet.sku, qty: pallet.qty, fromLocationId, locationId: locId, palletId: pallet.id });
+    say(`${pallet.id} verplaatst van ${fromLocationId} naar ${locId}.`, 'ok');
+  }
+
   // ========== Interacties rond de speler ==========
 
   function truckInteraction(t: Truck | null, point: Point): Interaction | null {
@@ -498,6 +522,8 @@ export function createWarehouse() {
     get clock() { return clock; },
     stockList,
     stockAt,
+    forkliftTake,
+    forkliftPlace,
     order,
   };
 }
