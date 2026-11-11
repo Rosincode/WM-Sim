@@ -277,6 +277,29 @@ window.addEventListener('resize', () => {
   composer.setSize(window.innerWidth, window.innerHeight);
 });
 
+// --- Schaduwkaart alleen opnieuw tekenen als er iets is verplaatst ---
+// Het licht staat stil en bijna alles in de hal ook; elke frame de hele hal opnieuw in de schaduwkaart
+// tekenen is dan verspilling. Per frame wordt een som gemaakt van de stand van alles wat schaduw werpt
+// (plus de voorraad in de stellingen); verandert die, dan wordt de schaduwkaart ververst.
+renderer.shadowMap.autoUpdate = false;
+let shadowState = NaN;
+function refreshShadows() {
+  let state = 0;
+  let n = 0;
+  scene.traverseVisible((o) => {
+    const m = o as THREE.InstancedMesh;
+    if (!m.isMesh || !m.castShadow) return;
+    const e = m.matrixWorld.elements;
+    n++;
+    state += (e[12] * 1.31 + e[13] * 2.17 + e[14] * 3.59 + e[0] * 5.3 + e[5] * 7.1 + e[10] * 11.9 + e[2] * 13.7) * (1 + (n % 17));
+    if (m.isInstancedMesh) state += m.count * 0.77 + m.instanceMatrix.version * 1.93;
+  });
+  state += n * 1000;
+  if (state === shadowState) return;
+  shadowState = state;
+  renderer.shadowMap.needsUpdate = true;
+}
+
 // --- Loop ---
 let last = performance.now();
 const wheelHand: HandTarget = { point: new THREE.Vector3(), normal: new THREE.Vector3() };
@@ -315,6 +338,7 @@ renderer.setAnimationLoop((now) => {
   driveHint.style.display = hintText ? 'block' : 'none';
   warehouse.update(dt);
 
+  refreshShadows();
   if (postFx) composer.render(dt);
   else renderer.render(scene, camera);
   tabletApp.update(handheld.tabletVisible, handheld.focus);
