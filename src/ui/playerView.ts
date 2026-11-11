@@ -164,6 +164,9 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
       return;
     }
     const p = player.position;
+    // Eerst de blokken ophalen: dat werkt ook de stand van de heftruck bij, nodig voor het meebewegen hieronder.
+    const all = solids.map((source) => source());
+    const rode = ride;
     // Sta je op iets dat beweegt (de vorken van de heftruck), dan ga je mee
     if (ride) {
       const { pose } = ride;
@@ -192,8 +195,6 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     player.position.x = THREE.MathUtils.clamp(player.position.x, bounds.minX, bounds.maxX);
     player.position.z = THREE.MathUtils.clamp(player.position.z, bounds.minZ, bounds.maxZ);
 
-    const all = solids.map((source) => source());
-
     // Hoogte: zwaartekracht, je hoofd stoten, en de ondergrond (vloer, pallet, vorken, stellingniveau)
     const prevFeet = p.y;
     let feet = prevFeet;
@@ -210,7 +211,9 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
           feet = s.minY - PLAYER_HEIGHT;
           velY = 0;
         }
-        if (s.maxY > ground && s.maxY <= prevFeet + STEP && inside(s, FOOT)) {
+        // Stond je al op de vorken, dan blijf je erop, hoe snel ze ook stijgen (ook bij een haperend beeld).
+        const lifted = !!rode?.lift && !!s.lift && s.pose === rode.pose;
+        if (s.maxY > ground && (s.maxY <= prevFeet + STEP || lifted) && inside(s, FOOT)) {
           ground = s.maxY;
           on = s;
         }
