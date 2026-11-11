@@ -198,6 +198,10 @@ export function mountWarehouse({
 
   return {
     stockList: () => sim.stockList(),
+    /** Orders zoals de sim ze kent (alleen lezen), voor de printer. */
+    orders: () => sim.orders,
+    /** Id van de order die deze speler onderhanden heeft, anders null. */
+    carriedOrder: () => (sim.carry?.kind === 'order' ? sim.carry.orderId : null),
     /** Draagt de speler iets (pallet of orderbak)? Voor de houding van de figuur. */
     carrying: () => !!sim.carry,
     /** Wat de toets E op deze plek doet (enabled: false = kan nu niet), of null als hier niets te doen is. */

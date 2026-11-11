@@ -13,6 +13,7 @@ import { createWarehouse, HALL } from './ui/scene/warehouse';
 import { createForklift } from './ui/scene/forklift';
 import { createPalletJack } from './ui/scene/palletJack';
 import { createRadio } from './ui/radio';
+import { createPrinter } from './ui/printer';
 import { POINTS } from './sim/layout';
 import { createExterior } from './ui/scene/exterior';
 import { createCharacter, type HandTarget } from './ui/scene/character';
@@ -247,6 +248,11 @@ scene.add(radio.group);
 
 if (import.meta.env.DEV) Object.assign((window as unknown as { wmDebug: object }).wmDebug, { radio });
 
+// --- Printer op het bureau rechts van de monitor: B drukt de picklijst af ---
+const printer = createPrinter({ orders: warehouse.orders, carriedOrder: warehouse.carriedOrder, stockList: warehouse.stockList });
+printer.group.position.set(POINTS.terminal.x + 0.56, 0.975, POINTS.terminal.z + 0.12);
+scene.add(printer.group);
+
 const forkliftDistance = () => player.position.distanceTo(forklift.group.position);
 const nearForklift = () => forkliftDistance() < 2.8;
 
@@ -385,6 +391,7 @@ renderer.setAnimationLoop((now) => {
   multiplayer?.update(dt);
 
   radio.update(player.position);
+  printer.update(dt, player.position);
   warehouse.update(dt);
 
   // Toetsprompts: wat kun je hier doen, en met welke toets
@@ -408,6 +415,7 @@ renderer.setAnimationLoop((now) => {
     }
   }
   if (radio.hint) list.push(hintPrompt(radio.hint));
+  if (printer.hint) list.push(hintPrompt(printer.hint));
   prompts.set(list);
 
   refreshShadows();
