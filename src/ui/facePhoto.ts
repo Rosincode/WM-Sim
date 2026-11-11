@@ -1,12 +1,14 @@
-// Foto van je eigen hoofd voor op je figuur. De foto wordt met de webcam gemaakt in een ovale hoofdvorm,
+import { EYES, HEAD, headOutline, photoUV } from './scene/headShape';
+
+// Foto van je eigen hoofd voor op je figuur. De foto wordt met de webcam gemaakt in een hoofdvorm (het silhouet van het hoofd van de figuur),
 // sterk verkleind en alleen in deze browser bewaard (localStorage). Net als je naam gaat hij via de
 // publieke broker naar de andere spelers in de kamer: iedereen in de kamer kan hem dus zien.
 
 const FACE_KEY = 'wm-sim.face';
-const W = 96;
-const H = 128;
+const W = 120;
+const H = 160;
 const PREFIX = 'data:image/jpeg;base64,';
-/** Ruim boven wat een foto van 96×128 oplevert; alles wat groter is weigeren we (ook van andere spelers). */
+/** Ruim boven wat een foto van 120×160 oplevert; alles wat groter is weigeren we (ook van andere spelers). */
 const MAX_LENGTH = 24_000;
 
 /** Is dit een foto zoals wij die maken? De broker is publiek: controleer wat binnenkomt. */
@@ -49,7 +51,7 @@ export function decodeFace(face: string): Promise<HTMLImageElement> {
   });
 }
 
-/** Onderdeel voor in een venster: ovale hoofdvorm met de camera erin, en knoppen om een foto te maken of te wissen. */
+/** Onderdeel voor in een venster: de camera met een hoofdvorm eroverheen, en knoppen om een foto te maken of te wissen. */
 export function createFacePicker(initial: string | null) {
   let face = initial;
   let stream: MediaStream | null = null;
@@ -57,10 +59,12 @@ export function createFacePicker(initial: string | null) {
   const el = document.createElement('div');
   el.style.cssText = 'display:flex;gap:14px;align-items:center';
 
-  // De hoofdvorm: een staand ovaal waarin je je gezicht past
-  const oval = document.createElement('div');
-  oval.style.cssText =
-    'position:relative;flex:none;width:120px;height:160px;border-radius:50%;overflow:hidden;background:#12161a;border:2px dashed #47505a;display:flex;align-items:center;justify-content:center';
+  // De hoofdvorm: het beeld van de camera met daaroverheen het silhouet van het hoofd van de figuur.
+  // Wat binnen de vorm valt komt op het hoofd; de rondjes en de kin bepalen dat het gezicht goed past.
+  const VW = 300;
+  const VH = 400;
+  const frame = document.createElement('div');
+  frame.style.cssText = 'position:relative;flex:none;width:150px;height:200px;border-radius:12px;overflow:hidden;background:#12161a';
   const video = document.createElement('video');
   video.muted = true;
   video.playsInline = true;
@@ -70,8 +74,27 @@ export function createFacePicker(initial: string | null) {
   photo.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover';
   const empty = document.createElement('div');
   empty.textContent = '🙂';
-  empty.style.cssText = 'font-size:56px;opacity:.35';
-  oval.append(empty, photo, video);
+  empty.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:64px;opacity:.35';
+  const outline = `${headOutline().map(([u, v], i) => `${i ? 'L' : 'M'}${(u * VW).toFixed(1)} ${(v * VH).toFixed(1)}`).join('')}Z`;
+  const eyes = [-1, 1]
+    .map((d) => `<ellipse cx="${(0.5 + d * EYES.du) * VW}" cy="${EYES.v * VH}" rx="13" ry="8"/>`)
+    .join('');
+  const brimV = photoUV(0, 0.13).v; // onderrand van de helm
+  const chinY = photoUV(0, HEAD.y - HEAD.r * HEAD.sy + 0.012).v * VH; // net boven de onderkant van het hoofd
+  const guide = document.createElement('div');
+  guide.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+  guide.innerHTML = `<svg viewBox="0 0 ${VW} ${VH}" width="100%" height="100%" style="display:block">
+    <path d="M0 0H${VW}V${VH}H0Z${outline}" fill="rgba(18,22,26,.78)" fill-rule="evenodd"/>
+    <path class="line" d="${outline}" fill="none" stroke="#fff" stroke-width="3"/>
+    <g class="marks" fill="none" stroke="#ffd54f" stroke-width="2.5">
+      ${eyes}
+      <path d="M${VW * 0.2} ${brimV * VH}H${VW * 0.8}" stroke-dasharray="7 6" opacity=".8"/>
+      <path d="M${VW * 0.5 - 22} ${chinY}Q${VW * 0.5} ${chinY + 9} ${VW * 0.5 + 22} ${chinY}"/>
+    </g>
+  </svg>`;
+  const line = guide.querySelector<SVGPathElement>('.line')!;
+  const marks = guide.querySelector<SVGGElement>('.marks')!;
+  frame.append(empty, photo, video, guide);
 
   const side = document.createElement('div');
   side.style.cssText = 'display:flex;flex-direction:column;gap:8px;align-items:flex-start;min-width:0';
@@ -87,7 +110,7 @@ export function createFacePicker(initial: string | null) {
   const shoot = button('');
   const remove = button('Foto verwijderen');
   side.append(status, shoot, remove);
-  el.append(oval, side);
+  el.append(frame, side);
 
   function stop() {
     stream?.getTracks().forEach((t) => t.stop());
@@ -100,13 +123,14 @@ export function createFacePicker(initial: string | null) {
     video.style.display = live ? '' : 'none';
     photo.style.display = !live && face ? '' : 'none';
     if (face) photo.src = face;
-    oval.style.borderStyle = live || face ? 'solid' : 'dashed';
-    oval.style.borderColor = live ? '#1e88e5' : '#47505a';
+    empty.style.display = live || face ? 'none' : '';
+    marks.style.display = live ? '' : 'none';
+    line.setAttribute('stroke', live ? '#fff' : '#47505a');
     shoot.textContent = live ? '📸 Foto maken' : face ? 'Nieuwe foto maken' : 'Foto maken met camera';
     shoot.style.background = live ? '#1e88e5' : '#3a424a';
     remove.style.display = face && !live ? '' : 'none';
     status.textContent =
-      message ?? (live ? 'Houd je hoofd in het ovaal en maak de foto.' : face ? 'Deze foto staat op het hoofd van je figuur.' : 'Optioneel: zet je eigen gezicht op je figuur.');
+      message ?? (live ? 'Vul de vorm met je gezicht: ogen op de gele rondjes, kin op het boogje. Boven de stippellijn komt je helm.' : face ? 'Deze foto staat op het hoofd van je figuur.' : 'Optioneel: zet je eigen gezicht op je figuur.');
   }
 
   async function start() {
@@ -132,7 +156,7 @@ export function createFacePicker(initial: string | null) {
     const vw = video.videoWidth;
     const vh = video.videoHeight;
     if (!vw || !vh) return;
-    // Hetzelfde stuk van het beeld als in het ovaal te zien is (object-fit: cover), niet gespiegeld:
+    // Hetzelfde stuk van het beeld als in het venster te zien is (object-fit: cover), niet gespiegeld:
     // zo zien anderen je zoals je bent.
     const crop = Math.min(vw / W, vh / H);
     const cw = W * crop;

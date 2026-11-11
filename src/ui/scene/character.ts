@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { CENTER_V, HEAD, NOSE_V, headOutline, headY, photoUV, taper } from './headShape';
 
 // Magazijnmedewerker: lichte, gelede figuur (hesje, helm) met procedurele loopanimatie.
 // Voorkant wijst naar +Z, voeten op y = 0. Geen modelbestanden of skinning: enkele tientallen eenvoudige meshes.
@@ -43,21 +44,50 @@ export interface HandTarget {
   hideHand?: boolean;
 }
 
-/** Ovale overgang voor de foto op het hoofd: in het midden dekkend, naar de rand toe doorzichtig. Gedeeld door alle figuren. */
+/**
+ * Overgang voor de foto op het hoofd: dekkend op het gezicht, naar de omtrek van het hoofd toe doorzichtig,
+ * zodat de foto aan de zijkanten zacht overloopt in de huid. Gedeeld door alle figuren.
+ */
 let fade: THREE.CanvasTexture | null = null;
 function faceFade() {
   if (fade) return fade;
+  const W = 96;
+  const H = 128;
   const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 64;
+  canvas.width = W;
+  canvas.height = H;
   const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, 64, 64);
-  const g = ctx.createRadialGradient(32, 32, 32 * 0.68, 32, 32, 32 * 0.97);
-  g.addColorStop(0, '#fff');
-  g.addColorStop(1, '#000');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 64, 64);
+  ctx.fillRect(0, 0, W, H);
+  const outline = headOutline();
+  const STEPS = 14;
+  for (let i = 0; i <= STEPS; i++) {
+    const k = i / STEPS;
+    const sx = 0.95 - 0.25 * k; // opzij eerder doorzichtig (daar rekt de foto uit) dan bij de kin
+    const sy = 0.99 - 0.12 * k;
+    const grey = Math.round(255 * k);
+    ctx.fillStyle = `rgb(${grey},${grey},${grey})`;
+    ctx.beginPath();
+    for (const [u, v] of outline) ctx.lineTo((0.5 + (u - 0.5) * sx) * W, (CENTER_V + (v - CENTER_V) * sy) * H);
+    ctx.fill();
+  }
   return (fade = new THREE.CanvasTexture(canvas));
+}
+
+/** Bol omvormen tot hoofd: smaller naar de kin. Met `nose`: ook een lichte welving op de plek van de neus. */
+function shapeHead(geo: THREE.BufferGeometry, r: number, nose = false) {
+  const pos = geo.attributes.position;
+  const noseY = headY(NOSE_V);
+  for (let i = 0; i < pos.count; i++) {
+    const f = taper(pos.getY(i) / r);
+    const x = pos.getX(i) * f;
+    let z = pos.getZ(i) * f;
+    if (nose && z > 0) z += 0.013 * Math.exp(-((x * HEAD.sx / 0.018) ** 2) - ((HEAD.y + pos.getY(i) * HEAD.sy - noseY) / 0.03) ** 2);
+    pos.setX(i, x);
+    pos.setZ(i, z);
+  }
+  geo.computeVertexNormals();
+  return geo;
 }
 
 export function createCharacter(group: THREE.Group = new THREE.Group(), colors: { /** Kleur van het hesje (andere spelers krijgen een eigen kleur). */ vest?: string } = {}) {
@@ -141,30 +171,32 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
 
   // Hoofd met gezicht, haar en helm
   const head = pivot(torso, 0, 0.62, 0);
-  ball(0.1, skin, head, 0, 0.092, 0).scale.set(0.88, 1.22, 0.98);
+  mesh(shapeHead(new THREE.SphereGeometry(HEAD.r, 24, 18), HEAD.r), skin, head, 0, HEAD.y, 0).scale.set(HEAD.sx, HEAD.sy, HEAD.sz);
   const features = [ball(0.013, skin, head, 0, 0.083, 0.098)]; // neus
   features[0].scale.set(0.8, 1.3, 1);
   for (const side of [1, -1]) {
     ball(0.022, skin, head, side * 0.09, 0.088, -0.004).scale.set(0.5, 1.2, 0.9); // oor
     features.push(ball(0.0105, dark, head, side * 0.036, 0.108, 0.088)); // oog
   }
-  // Eigen foto als gezicht: een schil over de voorkant van het hoofd waar de foto recht van voren op staat.
-  // De bovenrand (haar, voorhoofd) valt onder de helm; de randen lopen zacht over in de huid.
-  const faceGeo = new THREE.SphereGeometry(0.1015, 20, 14, Math.PI / 2 - 1.25, 2.5, 0.2 * Math.PI, 0.74 * Math.PI);
+  // Eigen foto als gezicht: een schil over de voorkant van het hoofd, in dezelfde vorm als het hoofd. De foto
+  // staat er recht van voren op, zó dat de hoofdvorm uit het fotovenster precies op de omtrek van het hoofd valt:
+  // ogen, neus en kin komen op hun plek. De bovenkant (haar, voorhoofd) valt onder de helm.
+  const FACE_R = HEAD.r + 0.0015;
+  const faceGeo = shapeHead(new THREE.SphereGeometry(FACE_R, 32, 28, Math.PI / 2 - 1.45, 2.9, 0.12 * Math.PI, 0.88 * Math.PI), FACE_R, true);
   {
     const pos = faceGeo.attributes.position;
     const uv = faceGeo.attributes.uv;
-    const xMax = 0.1015 * Math.sin(1.25);
-    const yTop = 0.1015 * Math.cos(0.2 * Math.PI);
-    const yBottom = 0.1015 * Math.cos(0.94 * Math.PI);
-    for (let i = 0; i < pos.count; i++) uv.setXY(i, (pos.getX(i) / xMax + 1) / 2, (pos.getY(i) - yBottom) / (yTop - yBottom));
+    for (let i = 0; i < pos.count; i++) {
+      const { u, v } = photoUV(pos.getX(i) * HEAD.sx, HEAD.y + pos.getY(i) * HEAD.sy);
+      uv.setXY(i, u, 1 - v);
+    }
   }
   const faceMat = new THREE.MeshStandardMaterial({
     roughness: 0.7, transparent: true, depthWrite: false, alphaMap: faceFade(), polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
   });
   const face = new THREE.Mesh(faceGeo, faceMat);
-  face.position.set(0, 0.092, 0);
-  face.scale.set(0.88, 1.22, 0.98);
+  face.position.set(0, HEAD.y, 0);
+  face.scale.set(HEAD.sx, HEAD.sy, HEAD.sz);
   face.visible = false;
   head.add(face);
   const skinColor = skin.color.clone();
@@ -440,7 +472,7 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
       canvas.width = canvas.height = 16;
       const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
       ctx.drawImage(image, 0, 0, 16, 16);
-      const px = ctx.getImageData(4, 7, 8, 5).data;
+      const px = ctx.getImageData(5, 8, 6, 4).data;
       let r = 0;
       let g = 0;
       let b = 0;
