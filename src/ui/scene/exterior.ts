@@ -50,7 +50,7 @@ export function createExterior(scene: THREE.Scene) {
   const APRON: Rect = { minX: X0 - 6, maxX: X0, minZ: -D / 2 + 1, maxZ: D / 2 - 1 };
   const paved = [YARD, ROAD, YARD_DRIVE, PARKING, PARK_DRIVE, PLAZA];
 
-  ground({ minX: -450, maxX: 450, minZ: -450, maxZ: 450 }, -0.2, grassMat, 7);
+  ground({ minX: -450, maxX: 450, minZ: -450, maxZ: 450 }, -0.2, grassMat, 34);
   for (const r of [YARD, ROAD, YARD_DRIVE, PARKING, PARK_DRIVE]) ground(r, -0.02, asphaltMat, 9);
   ground(PLAZA, -0.012, concreteMat, 1);
   ground(APRON, -0.012, concreteMat, 1);
@@ -79,7 +79,7 @@ export function createExterior(scene: THREE.Scene) {
   );
 
   // Docknummers op het asfalt (leesbaar vanuit het overzicht)
-  const numberGeo = new THREE.PlaneGeometry(6, 1.5);
+  const numberGeo = new THREE.PlaneGeometry(11, 2.75);
   DOCKS.forEach((d, i) => {
     const m = new THREE.Mesh(
       numberGeo,

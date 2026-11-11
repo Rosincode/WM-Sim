@@ -175,7 +175,7 @@ export function createWarehouse(scene: THREE.Scene) {
       marking(p.x - len / 2, p.z, 0.1, 1.6, color);
       marking(p.x + len / 2, p.z, 0.1, 1.6, color);
       // leesbaar als je vanaf de stellingen naar het dock loopt
-      marking(p.x + len / 2 + 0.55, p.z, 1.9, 0.5, color, tex.floorText(code.replace('DOCK-', ''))).rotation.z = Math.PI / 2;
+      marking(p.x + len / 2 + 0.4, p.z, 1.8, 0.45, color, tex.floorText(code.replace('DOCK-', ''))).rotation.z = Math.PI / 2;
     }
   }
 
