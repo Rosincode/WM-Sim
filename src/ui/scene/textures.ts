@@ -394,8 +394,11 @@ function barcode(g: CanvasRenderingContext2D, x: number, y: number, w: number, h
 }
 
 /** Locatielabel voor op de stellingligger. */
-export function locationLabel(id: string, arrow: 'up' | 'down') {
-  return canvasTexture(512, 192, (g, w, h) => {
+export function locationLabel(id: string, arrow: 'up' | 'down', scale = 1) {
+  return canvasTexture(512 * scale, 192 * scale, (g) => {
+    const w = 512;
+    const h = 192;
+    g.scale(scale, scale); // kleinere textuur, zelfde tekening (er hangen honderden labels)
     g.fillStyle = '#f7f7f2';
     g.fillRect(0, 0, w, h);
     g.fillStyle = arrow === 'up' ? '#f2c200' : '#2e8bd8';
@@ -422,7 +425,7 @@ export function locationLabel(id: string, arrow: 'up' | 'down') {
     g.fill();
     g.font = 'bold 74px Arial';
     g.textBaseline = 'top';
-    g.fillText(id, 110, 14);
+    g.fillText(id, 110, 14, 390);
     barcode(g, 110, 104, 380, 70, hashString(id));
   });
 }
@@ -445,6 +448,55 @@ export function sign(text: string, bg: string, fg: string, sub?: string) {
       g.fillText(sub, w / 2, 198, w - 50);
     }
   });
+}
+
+/** Tekst voor op de vloer of het asfalt (wit op transparant; de kleur komt van het materiaal). */
+export function floorText(text: string) {
+  return canvasTexture(512, 128, (g, w, h) => {
+    g.clearRect(0, 0, w, h);
+    g.fillStyle = '#ffffff';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.font = 'bold 104px Arial';
+    g.fillText(text, w / 2, h / 2 + 6, w - 20);
+  });
+}
+
+/** Gras voor het terrein rond het gebouw. */
+export function grass() {
+  return canvasTexture(
+    512,
+    512,
+    (g, w, h) => {
+      const r = rng(81);
+      g.fillStyle = '#5f8f4a';
+      g.fillRect(0, 0, w, h);
+      blotches(g, w, h, r, 30, 'rgba(40,80,30,A)', 0.35);
+      blotches(g, w, h, r, 24, 'rgba(150,170,90,A)', 0.25);
+      for (let i = 0; i < 9000; i++) {
+        g.fillStyle = `rgba(${r() < 0.5 ? '30,70,25' : '140,175,95'},${0.1 + r() * 0.2})`;
+        g.fillRect(r() * w, r() * h, 1 + r() * 2, 2 + r() * 4);
+      }
+    },
+    { repeat: true },
+  );
+}
+
+/** Asfalt voor wegen en het vrachtwagenterrein. */
+export function asphalt() {
+  return canvasTexture(
+    512,
+    512,
+    (g, w, h) => {
+      const r = rng(91);
+      g.fillStyle = '#3b3d40';
+      g.fillRect(0, 0, w, h);
+      blotches(g, w, h, r, 26, 'rgba(20,20,22,A)', 0.3);
+      blotches(g, w, h, r, 20, 'rgba(110,110,110,A)', 0.18);
+      speckle(g, w, h, r, 26000, 0.07, 2);
+    },
+    { repeat: true },
+  );
 }
 
 /** Voetgangerssymbool voor het looppad. */

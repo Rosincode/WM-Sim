@@ -18,8 +18,23 @@ interface Options {
   onStockChange: () => void;
 }
 
-type Carried = { load: Load; from: string; mesh: THREE.Group };
-type Loose = Carried & { x: number; z: number };
+/** key: bepaalt hoe de dozen op de pallet gestapeld zijn, zodat hij er bij elke speler hetzelfde uitziet. */
+type Carried = { load: Load; from: string; key: string; mesh: THREE.Group };
+type Loose = Carried & { x: number; z: number; r: number };
+
+/** Stand van de heftruck zoals spelers die onderling delen (multiplayer). */
+export type ForkliftState = {
+  x: number;
+  z: number;
+  r: number;
+  /** Hoogte van de vorken. */
+  h: number;
+  load: (Load & { from: string; key: string }) | null;
+  /** Pallets die los op de vloer zijn gezet. */
+  loose: (Load & { from: string; key: string; x: number; z: number; r: number })[];
+};
+
+const round = (n: number, f = 100) => Math.round(n * f) / f;
 type Target = { x: number; y: number; z: number; rack?: RackPallet; loose?: Loose };
 
 const RADIUS = 1.05; // botscirkel rond het chassis
@@ -164,7 +179,8 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
       if (!p.last) continue;
       const load = take(p.locId, p.qty);
       if (!load) continue;
-      attach({ load, from: p.locId, mesh: hall.buildLoad(load.sku, load.qty, `${p.locId}:${p.index}`) });
+      const key = `${p.locId}:${p.index}`;
+      attach({ load, from: p.locId, key, mesh: hall.buildLoad(load.sku, load.qty, key) });
       onStockChange();
       return;
     }
@@ -191,8 +207,66 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
       c.mesh.position.set(f.x, 0, f.z);
       c.mesh.rotation.set(0, g.rotation.y, 0);
       g.parent?.add(c.mesh);
-      loose.push({ ...c, x: f.x, z: f.z });
+      loose.push({ ...c, x: f.x, z: f.z, r: g.rotation.y });
     }
+  }
+
+  // ---------- Multiplayer: stand delen met en overnemen van andere spelers ----------
+  /** Doelstand als een andere speler rijdt (of de truck heeft geparkeerd); de truck beweegt er soepel naartoe. */
+  let remote: { x: number; z: number; r: number; h: number } | null = null;
+  let remoteDriven = false;
+
+  function getState(): ForkliftState {
+    const t = remote ?? { x: g.position.x, z: g.position.z, r: g.rotation.y, h: forkH };
+    return {
+      x: round(t.x),
+      z: round(t.z),
+      r: round(t.r, 1000),
+      h: round(t.h),
+      load: carried ? { ...carried.load, from: carried.from, key: carried.key } : null,
+      loose: loose.map((l) => ({ ...l.load, from: l.from, key: l.key, x: round(l.x), z: round(l.z), r: round(l.r, 1000) })),
+    };
+  }
+
+  function applyState(s: ForkliftState) {
+    remote = { x: s.x, z: s.z, r: s.r, h: s.h };
+    if ((carried?.load.id ?? '') !== (s.load?.id ?? '')) {
+      if (carried) carriage.remove(carried.mesh);
+      carried = null;
+      if (s.load) {
+        const { from, key, ...load } = s.load;
+        attach({ load, from, key, mesh: hall.buildLoad(load.sku, load.qty, key) });
+      }
+    }
+    const sig = (list: { id: string; x: number; z: number }[]) => list.map((l) => `${l.id}@${round(l.x)},${round(l.z)}`).join();
+    if (sig(loose.map((l) => ({ id: l.load.id, x: l.x, z: l.z }))) !== sig(s.loose)) {
+      for (const l of loose) l.mesh.removeFromParent();
+      loose.length = 0;
+      for (const { from, key, x, z, r, ...load } of s.loose) {
+        const mesh = hall.buildLoad(load.sku, load.qty, key);
+        mesh.position.set(x, 0, z);
+        mesh.rotation.set(0, r, 0);
+        g.parent?.add(mesh);
+        loose.push({ load, from, key, mesh, x, z, r });
+      }
+    }
+  }
+
+  /** Volgt de stand van een andere speler; zelf rijden, oppakken en neerzetten staat dan uit. */
+  function followRemote(dt: number, time: number, t: NonNullable<typeof remote>) {
+    const k = 1 - Math.exp(-dt * 12);
+    const far = Math.hypot(t.x - g.position.x, t.z - g.position.z) > 8; // net binnengekomen: niet door de hal schuiven
+    g.position.x += (t.x - g.position.x) * (far ? 1 : k);
+    g.position.z += (t.z - g.position.z) * (far ? 1 : k);
+    g.rotation.y += Math.atan2(Math.sin(t.r - g.rotation.y), Math.cos(t.r - g.rotation.y)) * (far ? 1 : k);
+    forkH += (t.h - forkH) * k;
+    speed = 0;
+    steer = 0;
+    carriage.position.y = forkH - 0.11;
+    innerMast.position.y = Math.max(0, forkH - 1.7);
+    marker.visible = false;
+    const blink = remoteDriven ? 0.6 + 0.4 * Math.sin(time * 9) : 0.15;
+    beacon.color.setRGB(3.5 * blink, 1.4 * blink, 0.1);
   }
 
   function updateHint(slot: Slot | null) {
@@ -244,6 +318,13 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
     },
     setDriving(on: boolean) {
       driving = on;
+      if (on) remote = null;
+    },
+    getState,
+    applyState,
+    /** Rijdt een andere speler op dit moment met de truck? (zwaailamp) */
+    setRemoteDriven(on: boolean) {
+      remoteDriven = on;
     },
     /** Handig bij testen: zet de truck ergens neer. */
     teleport(x: number, z: number, rotY: number, height = forkH) {
@@ -251,9 +332,12 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
       g.rotation.y = rotY;
       forkH = height;
       speed = 0;
+      remote = null;
     },
     update(dt: number, time: number) {
       if (dt <= 0) return;
+      if (remote && !driving) return followRemote(dt, time, remote);
+
       // Rijden
       const throttle = driving ? down('KeyW') - down('KeyS') : 0;
       const target = throttle > 0 ? MAX_SPEED : throttle < 0 ? -MAX_REVERSE : 0;

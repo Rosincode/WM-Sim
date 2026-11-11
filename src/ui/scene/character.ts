@@ -25,7 +25,7 @@ export function createCharacter(group: THREE.Group = new THREE.Group()) {
   const shirt = mat('#243349');
   const trousers = mat('#2c313b', 0.9);
   const dark = mat('#17181a', 0.6);
-  const sole = mat('#3a3329', 0.9);
+  const sole = mat('#0e0e0f', 0.9);
   const glove = mat('#4a4d52', 0.9);
   const skin = mat('#d6a07c', 0.65);
   const hair = mat('#3b2a1f', 0.9);
@@ -57,15 +57,13 @@ export function createCharacter(group: THREE.Group = new THREE.Group()) {
   // Heupen: alles hangt hieraan, zodat het lichaam als geheel kan deinen en leunen.
   const rig = pivot(group, 0, HIP_HEIGHT, 0);
   const pelvis = lathe([[0.001, -0.17], [0.09, -0.16], [0.148, -0.1], [0.162, -0.02], [0.158, 0.05]], trousers, rig);
-  pelvis.scale.set(1.05, 1, 0.68);
-  const belt = mesh(new THREE.CylinderGeometry(0.163, 0.163, 0.035, 24), dark, rig, 0, 0.03, 0);
-  belt.scale.set(1.05, 1, 0.68);
+  pelvis.scale.set(1.05, 1, 0.6);
 
-  // Romp: draaiprofiel van taille naar schouders, afgeplat tot een borstkas. Het hesje is de romp zelf.
-  const SX = 1.08;
+  // Romp: draaiprofiel van heup naar schouders, afgeplat tot een borstkas. Het hesje is de romp zelf en valt over de heupen.
+  const SX = 1.15;
   const SZ = 0.64;
   const PROFILE: [number, number][] = [
-    [0.001, -0.02], [0.15, -0.01], [0.156, 0.06], [0.156, 0.14], [0.172, 0.3], [0.19, 0.43], [0.186, 0.5], [0.15, 0.556], [0.075, 0.59], [0.001, 0.6],
+    [0.001, -0.09], [0.163, -0.1], [0.162, -0.02], [0.156, 0.08], [0.158, 0.16], [0.172, 0.3], [0.19, 0.43], [0.186, 0.5], [0.15, 0.556], [0.075, 0.59], [0.001, 0.6],
   ];
   const radiusAt = (y: number) => {
     for (let i = 1; i < PROFILE.length; i++) {
@@ -80,14 +78,14 @@ export function createCharacter(group: THREE.Group = new THREE.Group()) {
   shell.scale.set(SX, 1, SZ);
   lathe(PROFILE, vest, shell);
   // Reflecterende banden: één rond de taille, twee over de schouders
-  lathe([[radiusAt(0.1) + 0.004, 0.1], [radiusAt(0.145) + 0.004, 0.145]], stripe, shell);
+  lathe([[radiusAt(0) + 0.004, 0], [radiusAt(0.045) + 0.004, 0.045]], stripe, shell);
   for (const side of [1, -1]) {
     const x = side * 0.088;
     const onSurface = (y: number, dir: number) => {
       const r = radiusAt(y) + 0.004;
       return new THREE.Vector3(x, y, dir * SZ * r * Math.sqrt(Math.max(0, 1 - (x / (SX * r)) ** 2)));
     };
-    const ys = [0.145, 0.25, 0.36, 0.45, 0.52, 0.55];
+    const ys = [0.045, 0.15, 0.27, 0.38, 0.46, 0.52, 0.55];
     const path = new THREE.CatmullRomCurve3([
       ...ys.map((y) => onSurface(y, 1)),
       new THREE.Vector3(x, 0.574, 0),
@@ -102,8 +100,8 @@ export function createCharacter(group: THREE.Group = new THREE.Group()) {
   // Hoofd met gezicht, haar en helm
   const head = pivot(torso, 0, 0.62, 0);
   ball(0.1, skin, head, 0, 0.1, 0).scale.set(0.9, 1.12, 1);
-  ball(0.074, skin, head, 0, 0.043, 0.022).scale.set(0.95, 0.9, 1); // kaak en kin
-  ball(0.017, skin, head, 0, 0.083, 0.1).scale.set(0.8, 1.3, 1); // neus
+  ball(0.07, skin, head, 0, 0.05, 0.014).scale.set(0.92, 0.95, 1); // kaak en kin
+  ball(0.013, skin, head, 0, 0.083, 0.098).scale.set(0.8, 1.3, 1); // neus
   for (const side of [1, -1]) {
     ball(0.022, skin, head, side * 0.09, 0.088, -0.004).scale.set(0.5, 1.2, 0.9); // oor
     ball(0.0105, dark, head, side * 0.036, 0.108, 0.088); // oog
@@ -115,13 +113,11 @@ export function createCharacter(group: THREE.Group = new THREE.Group()) {
   dome.scale.set(1, 0.95, 1.1);
   const brim = mesh(new THREE.CylinderGeometry(0.12, 0.124, 0.012, 20), helmet, head, 0, 0.13, 0.03);
   brim.scale.z = 1.22;
-  mesh(new THREE.BoxGeometry(0.03, 0.012, 0.2), helmet, head, 0, 0.236, 0); // kam bovenop
 
   function arm(side: number) {
-    const shoulder = pivot(torso, side * 0.225, 0.5, 0);
-    shoulder.rotation.z = side * 0.07;
-    ball(0.066, shirt, shoulder); // schouderkop
-    limb(0.056, 0.046, UPPER_ARM, shirt, shoulder); // mouw tot de elleboog
+    const shoulder = pivot(torso, side * 0.218, 0.495, 0);
+    shoulder.rotation.z = side * 0.04;
+    limb(0.056, 0.047, UPPER_ARM, shirt, shoulder); // mouw tot de elleboog
     const elbow = pivot(shoulder, 0, -UPPER_ARM, 0);
     limb(0.044, 0.033, FOREARM, skin, elbow);
     const hand = ball(0.04, glove, elbow, 0, -FOREARM - 0.04, 0.004);
@@ -131,16 +127,16 @@ export function createCharacter(group: THREE.Group = new THREE.Group()) {
   }
 
   function leg(side: number) {
-    const hip = pivot(rig, side * 0.09, -0.02, 0);
-    limb(0.084, 0.064, THIGH, trousers, hip);
+    const hip = pivot(rig, side * 0.094, -0.02, 0);
+    limb(0.094, 0.073, THIGH, trousers, hip);
     const knee = pivot(hip, 0, -THIGH, 0);
-    limb(0.064, 0.052, SHIN, trousers, knee);
+    limb(0.073, 0.058, SHIN, trousers, knee);
     const foot = pivot(knee, 0, -SHIN, 0);
     // Veiligheidsschoen: ronde neus, zool eronder
-    const upper = mesh(new THREE.CapsuleGeometry(0.05, 0.13, 4, 10), dark, foot, 0, -0.012, 0.05);
+    const upper = mesh(new THREE.CapsuleGeometry(0.055, 0.125, 4, 10), dark, foot, 0, -0.008, 0.05);
     upper.rotation.x = Math.PI / 2;
     upper.scale.z = 0.8; // lokale z staat na het kantelen verticaal
-    mesh(new THREE.BoxGeometry(0.104, 0.022, 0.25), sole, foot, 0, -0.049, 0.05);
+    mesh(new THREE.BoxGeometry(0.1, 0.02, 0.225), sole, foot, 0, -0.05, 0.05);
     return { hip, knee, foot };
   }
 
