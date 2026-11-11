@@ -1,0 +1,138 @@
+import * as THREE from 'three';
+import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/** Camera-modi: overzicht (orbit), first person (dichtbij, standaard) en third person. */
+export type ViewMode = 'overview' | 'first' | 'third';
+
+interface Options {
+  camera: THREE.PerspectiveCamera;
+  canvas: HTMLCanvasElement;
+  controls: OrbitControls;
+  player: THREE.Object3D;
+  hud: HTMLElement;
+  /** Loopbaar gebied (x/z-grenzen). */
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+}
+
+const EYE_HEIGHT = 1.6;
+const GRAVITY = 22;
+const JUMP_SPEED = 7.5;
+const MOUSE_SENS = 0.0022;
+const MAX_PITCH = Math.PI / 2 - 0.05;
+
+export function createPlayerView({ camera, canvas, controls, player, hud, bounds }: Options) {
+  let mode: ViewMode = 'overview';
+  let closeMode: Exclude<ViewMode, 'overview'> = 'first'; // laatst gebruikte dichtbij-modus
+  let pitch = 0;
+  let velY = 0;
+  let grounded = true;
+
+  const keys = new Set<string>();
+  const forward = new THREE.Vector3();
+  const right = new THREE.Vector3();
+  const camTarget = new THREE.Vector3();
+
+  const hudText: Record<ViewMode, string> = {
+    overview:
+      '<b>WM-Sim — Overzicht</b><br>Slepen: draaien · Scroll: zoom · Rechts slepen: schuiven<br><b>C</b>: dichtbij (first person)',
+    first:
+      '<b>WM-Sim — First person</b><br>Klik: muis vastzetten · Muis: rondkijken · Esc: muis los<br>W/S: lopen · A/D: zijwaarts · ←/→: draaien · Shift: rennen · Spatie: springen<br><b>V</b>: third person · <b>C</b>: overzicht',
+    third:
+      '<b>WM-Sim — Third person</b><br>W/S: lopen · A/D: draaien · Shift: rennen · Spatie: springen<br><b>V</b>: first person · <b>C</b>: overzicht',
+  };
+
+  function setMode(m: ViewMode) {
+    mode = m;
+    if (m !== 'overview') closeMode = m;
+    controls.enabled = m === 'overview';
+    player.visible = m !== 'first'; // eigen lichaam niet in beeld
+    if (m !== 'first' && document.pointerLockElement === canvas) document.exitPointerLock();
+    if (m === 'overview') {
+      camera.position.set(0, 32, 28);
+      controls.target.set(0, 0, 0);
+    } else if (m === 'first') {
+      pitch = 0;
+    }
+    hud.innerHTML = hudText[m];
+  }
+  setMode('overview');
+
+  function isTyping(e: KeyboardEvent) {
+    const t = e.target;
+    return t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement;
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (isTyping(e)) return; // typen in formulier ≠ besturing
+    if (e.code === 'Space') e.preventDefault(); // niet scrollen / knoppen activeren
+    if (!e.repeat) {
+      if (e.code === 'KeyC') setMode(mode === 'overview' ? closeMode : 'overview');
+      if (e.code === 'KeyV' && mode !== 'overview') setMode(mode === 'first' ? 'third' : 'first');
+      if (e.code === 'Space' && mode !== 'overview' && grounded) {
+        velY = JUMP_SPEED;
+        grounded = false;
+      }
+    }
+    keys.add(e.code);
+  });
+  window.addEventListener('keyup', (e) => keys.delete(e.code));
+  window.addEventListener('blur', () => keys.clear());
+
+  // Muis vastzetten in first person; Esc laat los (browserstandaard).
+  canvas.addEventListener('click', () => {
+    if (mode === 'first' && document.pointerLockElement !== canvas) canvas.requestPointerLock();
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (mode !== 'first' || document.pointerLockElement !== canvas) return;
+    player.rotation.y -= e.movementX * MOUSE_SENS;
+    pitch = THREE.MathUtils.clamp(pitch - e.movementY * MOUSE_SENS, -MAX_PITCH, MAX_PITCH);
+  });
+
+  const down = (...codes: string[]) => codes.some((c) => keys.has(c));
+
+  function update(dt: number) {
+    if (mode === 'overview') {
+      controls.update();
+      return;
+    }
+
+    const speed = down('ShiftLeft', 'ShiftRight') ? 9 : 5;
+    const turn = mode === 'first' ? down('ArrowLeft') : down('KeyA', 'ArrowLeft');
+    const turnR = mode === 'first' ? down('ArrowRight') : down('KeyD', 'ArrowRight');
+    if (turn) player.rotation.y += 2.5 * dt;
+    if (turnR) player.rotation.y -= 2.5 * dt;
+
+    forward.set(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y));
+    right.set(-forward.z, 0, forward.x);
+    const move = (down('KeyW', 'ArrowUp') ? 1 : 0) - (down('KeyS', 'ArrowDown') ? 1 : 0);
+    const strafe = mode === 'first' ? (down('KeyD') ? 1 : 0) - (down('KeyA') ? 1 : 0) : 0;
+    const len = Math.hypot(move, strafe) || 1; // diagonaal niet sneller
+    player.position.addScaledVector(forward, (move / len) * speed * dt);
+    player.position.addScaledVector(right, (strafe / len) * speed * dt);
+    player.position.x = THREE.MathUtils.clamp(player.position.x, bounds.minX, bounds.maxX);
+    player.position.z = THREE.MathUtils.clamp(player.position.z, bounds.minZ, bounds.maxZ);
+
+    // Springen: zwaartekracht tot de vloer
+    if (!grounded) {
+      velY -= GRAVITY * dt;
+      player.position.y += velY * dt;
+      if (player.position.y <= 0) {
+        player.position.y = 0;
+        velY = 0;
+        grounded = true;
+      }
+    }
+
+    if (mode === 'first') {
+      camera.position.set(player.position.x, player.position.y + EYE_HEIGHT, player.position.z);
+      camera.rotation.set(pitch, player.rotation.y + Math.PI, 0, 'YXZ'); // camera kijkt langs -Z
+    } else {
+      // Achter en boven de speler, soepel volgend
+      camTarget.copy(player.position).addScaledVector(forward, -6).setY(3.5 + player.position.y);
+      camera.position.lerp(camTarget, 1 - Math.exp(-dt * 6));
+      camera.lookAt(player.position.x, player.position.y + 1.5, player.position.z);
+    }
+  }
+
+  return { update, setMode, get mode() { return mode; } };
+}

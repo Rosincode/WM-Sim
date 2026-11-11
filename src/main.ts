@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { startWmsBridge } from './integrations/wms';
 import { mountWmsPanel } from './ui/wmsPanel';
+import { createPlayerView } from './ui/playerView';
 
 startWmsBridge();
 mountWmsPanel();
@@ -88,7 +89,7 @@ const route = [[-10, -1.5], [16, -1.5], [16, 3.5], [-10, 3.5]].map(([x, z]) => n
 let routeSeg = 0;
 let routeT = 0;
 
-// --- Speler (third person) ---
+// --- Speler ---
 const player = new THREE.Group();
 const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.35, 0.9), new THREE.MeshStandardMaterial({ color: '#4caf50' }));
 body.position.y = 0.8;
@@ -98,9 +99,7 @@ player.position.set(-12, 0, 10);
 player.rotation.y = Math.PI / 2;
 scene.add(player);
 
-// --- Camera-modi ---
-type Mode = 'overview' | 'third';
-let mode: Mode = 'overview';
+// --- Camera-modi (overzicht / first person / third person) ---
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.maxPolarAngle = Math.PI / 2.2;
 controls.enableDamping = true;
@@ -110,27 +109,14 @@ hud.style.cssText =
   'position:fixed;left:16px;top:16px;padding:10px 14px;border-radius:8px;background:rgba(0,0,0,.6);color:#fff;font:14px system-ui,sans-serif;line-height:1.5;pointer-events:none';
 document.body.appendChild(hud);
 
-function setMode(m: Mode) {
-  mode = m;
-  controls.enabled = m === 'overview';
-  if (m === 'overview') {
-    camera.position.set(0, 32, 28);
-    controls.target.set(0, 0, 0);
-    hud.innerHTML = '<b>WM-Sim — Overzicht</b><br>Slepen: draaien · Scroll: zoom · Rechts slepen: schuiven<br><b>C</b>: third person';
-  } else {
-    hud.innerHTML = '<b>WM-Sim — Third person</b><br>W/S: lopen · A/D: draaien · Shift: rennen<br><b>C</b>: overzicht';
-  }
-}
-setMode('overview');
-
-const keys = new Set<string>();
-window.addEventListener('keydown', (e) => {
-  if (e.target instanceof HTMLInputElement) return; // typen in formulier ≠ besturing
-  if (e.code === 'KeyC' && !e.repeat) setMode(mode === 'overview' ? 'third' : 'overview');
-  keys.add(e.code);
+const view = createPlayerView({
+  camera,
+  canvas: renderer.domElement,
+  controls,
+  player,
+  hud,
+  bounds: { minX: -FLOOR_W / 2 + 1, maxX: FLOOR_W / 2 - 0.5, minZ: -FLOOR_D / 2 + 0.5, maxZ: FLOOR_D / 2 - 0.5 },
 });
-window.addEventListener('keyup', (e) => keys.delete(e.code));
-window.addEventListener('blur', () => keys.clear());
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -139,8 +125,6 @@ window.addEventListener('resize', () => {
 });
 
 // --- Loop ---
-const forward = new THREE.Vector3();
-const camTarget = new THREE.Vector3();
 let last = performance.now();
 
 renderer.setAnimationLoop((now) => {
@@ -158,23 +142,7 @@ renderer.setAnimationLoop((now) => {
   forklift.position.lerpVectors(a, b, Math.min(routeT, 1));
   forklift.rotation.y = Math.atan2(b.x - a.x, b.z - a.z);
 
-  if (mode === 'third') {
-    const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 9 : 5;
-    if (keys.has('KeyA') || keys.has('ArrowLeft')) player.rotation.y += 2.5 * dt;
-    if (keys.has('KeyD') || keys.has('ArrowRight')) player.rotation.y -= 2.5 * dt;
-    forward.set(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y));
-    const move = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
-    player.position.addScaledVector(forward, move * speed * dt);
-    player.position.x = THREE.MathUtils.clamp(player.position.x, -FLOOR_W / 2 + 1, FLOOR_W / 2 - 0.5);
-    player.position.z = THREE.MathUtils.clamp(player.position.z, -FLOOR_D / 2 + 0.5, FLOOR_D / 2 - 0.5);
-
-    // Camera achter en boven de speler, soepel volgend
-    camTarget.copy(player.position).addScaledVector(forward, -6).setY(3.5);
-    camera.position.lerp(camTarget, 1 - Math.exp(-dt * 6));
-    camera.lookAt(player.position.x, 1.5, player.position.z);
-  } else {
-    controls.update();
-  }
+  view.update(dt);
 
   renderer.render(scene, camera);
 });
