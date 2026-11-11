@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { startWmsBridge } from './integrations/wms';
 import { mountWmsPanel } from './ui/wmsPanel';
 import { createPlayerView } from './ui/playerView';
+import { mountWarehouse } from './ui/warehouse';
 
 startWmsBridge();
 mountWmsPanel();
@@ -66,10 +67,7 @@ function rack(x: number, z: number) {
   const g = new THREE.Group();
   for (const dx of [-1.75, 1.75]) for (const dz of [-0.55, 0.55]) g.add(box(0.1, 4, 0.1, '#d9822b', dx, 2, dz));
   for (const y of [0.15, 1.5, 2.85]) {
-    g.add(box(3.6, 0.08, 1.2, '#3b6ea5', 0, y, 0));
-    for (const px of [-1.1, 0, 1.1]) {
-      if (Math.random() < 0.7) g.add(box(0.9, 0.8, 0.9, '#a5784a', px, y + 0.45, 0)); // pallet met goederen
-    }
+    g.add(box(3.6, 0.08, 1.2, '#3b6ea5', 0, y, 0)); // pallets met voorraad tekent src/ui/warehouseView
   }
   g.position.set(x, 0, z);
   return g;
@@ -118,6 +116,8 @@ const view = createPlayerView({
   bounds: { minX: -FLOOR_W / 2 + 1, maxX: FLOOR_W / 2 - 0.5, minZ: -FLOOR_D / 2 + 0.5, maxZ: FLOOR_D / 2 - 0.5 },
 });
 
+const warehouse = mountWarehouse({ scene, player });
+
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -143,6 +143,7 @@ renderer.setAnimationLoop((now) => {
   forklift.rotation.y = Math.atan2(b.x - a.x, b.z - a.z);
 
   view.update(dt);
+  warehouse.update(dt);
 
   renderer.render(scene, camera);
 });

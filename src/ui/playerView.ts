@@ -32,6 +32,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   const right = new THREE.Vector3();
   const camTarget = new THREE.Vector3();
 
+  const processKeys = '<br><b>E</b>: scannen / actie · <b>L</b>: API-log · <b>I</b>: voorraad';
   const hudText: Record<ViewMode, string> = {
     overview:
       '<b>WM-Sim — Overzicht</b><br>Slepen: draaien · Scroll: zoom · Rechts slepen: schuiven<br><b>C</b>: dichtbij (first person)',
@@ -53,7 +54,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     } else if (m === 'first') {
       pitch = 0;
     }
-    hud.innerHTML = hudText[m];
+    hud.innerHTML = hudText[m] + processKeys;
   }
   setMode('overview');
 
