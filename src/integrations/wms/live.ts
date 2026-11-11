@@ -4,6 +4,7 @@ import { WmsError, type WmsClient, type WmsCredentials, type WmsItem, type WmsLo
 // URL-opbouw van de WMS-API (basis: https://<host>/t/wm_sim/api):
 //   GET  {base}/{entiteit}                      -> lijst als { data: [...] }
 //   GET  {base}/{entiteit}?veld=waarde          -> gefilterde lijst; één waarde per veld, geen OData
+//   GET  {base}/{entiteit}?limit=200&offset=200 -> volgende pagina; antwoord { data, limit, offset }
 //   POST {base}/{entiteit}                      -> record aanmaken of actie boeken, JSON-body
 //   POST {base}/{entiteit}/{id}/_flows/{flow}   -> statusovergang op één record
 // Verwijzingen (sku, dock_id, from/to_location_id, order_id op een regel) zijn de platform-id (uuid,
@@ -27,6 +28,8 @@ type Refs = { keyById: Map<string, string>; idByKey: Map<string, string> };
 
 const MAX_RETRIES = 3; // bij 429
 const MAX_WAIT_S = 30;
+const PAGE_SIZE = 200; // het maximum dat de WMS per call teruggeeft
+const MAX_PAGES = 50;
 
 // Aanmelden: de API-sleutel (amk_...) van een API-client in de WMS gaat mee als Bearer-token.
 // De WMS accepteert geen Basic auth.
@@ -72,9 +75,18 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
 
   /** Lijst, eventueel gefilterd met één waarde per veld. */
   async function list<R>(entity: string, filter?: Record<string, string>): Promise<R[]> {
-    const query = filter ? `?${new URLSearchParams(filter)}` : '';
-    const res = await request<R[] | { data?: R[] }>(entity + query);
-    return Array.isArray(res) ? res : (res?.data ?? []);
+    // De WMS geeft een lijst in pagina's: { data, limit, offset }, standaard 50 rijen en hooguit 200 per call.
+    // Zonder alle pagina's op te halen mist de game locaties en voorraad.
+    const rows: R[] = [];
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const query = new URLSearchParams({ ...filter, limit: String(PAGE_SIZE), offset: String(rows.length) });
+      const res = await request<R[] | { data?: R[]; limit?: number }>(`${entity}?${query}`);
+      if (Array.isArray(res)) return res; // geen pagina's: de hele lijst in één keer
+      const data = res?.data ?? [];
+      rows.push(...data);
+      if (data.length === 0 || data.length < (res?.limit ?? PAGE_SIZE)) break;
+    }
+    return rows;
   }
 
   const post = <T = unknown>(path: string, body: object = {}) =>
