@@ -6,12 +6,18 @@ import { WmsError, type WmsClient } from './types';
 const SKUS = ['SKU-001', 'SKU-002', 'SKU-003', 'SKU-004', 'SKU-005'];
 
 function seedLocations(): Location[] {
-  const locs: Location[] = [
-    { id: 'DOCK-01', type: 'dock', x: -18, y: -3 },
-    { id: 'DOCK-02', type: 'dock', x: -18, y: 3 },
-  ];
-  const xs = [-4, 0, 4, 8, 12];
-  const ys = [-9, -4, 1, 6];
+  // Zelfde plattegrond als src/sim/layout.ts en docs/wms/05-grotere-hal-locaties.md:
+  // 10 dockdeuren met elk een inslag- en uitslaglocatie, 11 stellingen van 7 secties.
+  const locs: Location[] = [];
+  for (let d = 0; d < 10; d++) {
+    const id = `DOCK-${String(d + 1).padStart(2, '0')}`;
+    const y = -22.5 + d * 5;
+    locs.push({ id, type: 'dock', x: -28, y }); // de deur zelf (aan- en afmelden, laden)
+    locs.push({ id: `${id}-IN`, type: 'dock', x: -20.3, y: y - 1.3 });
+    locs.push({ id: `${id}-UIT`, type: 'dock', x: -20.3, y: y + 1.3 });
+  }
+  const xs = [-8, -4, 0, 4, 8, 12, 16];
+  const ys = Array.from({ length: 11 }, (_, i) => -25 + i * 5);
   ys.forEach((y, r) =>
     xs.forEach((x, s) => {
       for (const level of [1, 2, 3]) {
@@ -44,7 +50,7 @@ export function createMockClient(): WmsClient {
   const order = (id: string) => orders.find((o) => o.id === id) ?? fail(`Order ${id} bestaat niet.`);
 
   const shelves = locations.filter((l) => l.type !== 'dock');
-  for (let i = 0; i < 25; i++) {
+  for (let i = 0; i < 70; i++) {
     const l = shelves[Math.floor(Math.random() * shelves.length)];
     add(SKUS[Math.floor(Math.random() * SKUS.length)], l.id, 5 + Math.floor(Math.random() * 46));
   }
