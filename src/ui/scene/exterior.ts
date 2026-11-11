@@ -120,9 +120,10 @@ export function createExterior(scene: THREE.Scene) {
     [0, D / 2 + 0.06, W + 0.4, 0.3],
     [0, -D / 2 - 0.06, W + 0.4, 0.3],
   ]) {
+    const thin = (v: number, f: number) => (v < 1 ? v * f : v - 0.1); // dikte iets smaller, lengte iets korter
     trimNavy.add(x, TOP - 0.3, z, sx, 0.6, sz);
-    trimBlue.add(x, TOP - 0.72, z, sx * 0.8, 0.16, sz - 0.1);
-    plinth.add(x, 0.25, z, sx * 0.7, 0.5, sz - 0.1);
+    trimBlue.add(x, TOP - 0.72, z, thin(sx, 0.8), 0.16, thin(sz, 0.8));
+    plinth.add(x, 0.25, z, thin(sx, 0.7), 0.5, thin(sz, 0.7));
   }
   root.add(
     trimNavy.build(UNIT_BOX, paint(NAVY, 0.5, 0.3)),
@@ -166,7 +167,7 @@ export function createExterior(scene: THREE.Scene) {
       new THREE.MeshStandardMaterial({ map: tex.sign(String(i + 1), NAVY, '#ffffff'), roughness: 0.5 }),
     );
     s.rotation.y = -Math.PI / 2;
-    s.position.set(X0 - 0.1, 4.6, d.z);
+    s.position.set(X0 - 0.1, 4.45, d.z);
     root.add(s);
   });
   root.add(doors.build(UNIT_BOX, paint('#c3c8cc', 0.5, 0.35)), seals.build(UNIT_BOX, paint('#17181a', 0.9, 0)));
@@ -244,8 +245,8 @@ export function createExterior(scene: THREE.Scene) {
   const heads = new Batch();
   const lampSpots: [number, number, number][] = []; // x, z, richting van de arm (rad)
   for (const z of [-27, -9, 9, 27]) lampSpots.push([YARD.minX + 1, z, 0]);
-  for (const x of [-11, 2, 15, 27]) lampSpots.push([x, PARKING.maxZ + 0.8, -Math.PI / 2]);
-  for (let x = -200; x <= 200; x += 40) lampSpots.push([x, ROAD.maxZ + 1.2, -Math.PI / 2]);
+  for (const x of [-11, 2, 15, 27]) lampSpots.push([x, PARKING.maxZ + 0.8, Math.PI / 2]);
+  for (let x = -200; x <= 200; x += 40) lampSpots.push([x, ROAD.maxZ + 1.2, Math.PI / 2]);
   for (const [x, z, a] of lampSpots) {
     poles.add(x, 4.5, z, 0.09, 9, 0.09);
     const dx = Math.cos(a) * 0.9;

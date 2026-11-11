@@ -63,8 +63,8 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     player.visible = m !== 'first'; // eigen lichaam niet in beeld
     if (m !== 'first' && document.pointerLockElement === canvas) document.exitPointerLock();
     if (m === 'overview') {
-      camera.position.set(0, 32, 28);
-      controls.target.set(0, 0, 0);
+      camera.position.set(-48, 58, 82); // schuin van voren: dockgevel en voorgevel in beeld
+      controls.target.set(-6, 0, 2);
     } else if (m === 'first') {
       pitch = 0;
     }

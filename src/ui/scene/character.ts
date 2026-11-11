@@ -3,8 +3,8 @@ import * as THREE from 'three';
 // Magazijnmedewerker: lichte, gelede figuur (hesje, helm) met procedurele loopanimatie.
 // Voorkant wijst naar +Z, voeten op y = 0. Geen modelbestanden of skinning: enkele tientallen eenvoudige meshes.
 
-const HIP_HEIGHT = 0.94;
-const THIGH = 0.45;
+const HIP_HEIGHT = 0.9;
+const THIGH = 0.43;
 const SHIN = 0.41;
 const UPPER_ARM = 0.29;
 const FOREARM = 0.26;
@@ -57,13 +57,13 @@ export function createCharacter(group: THREE.Group = new THREE.Group()) {
   // Heupen: alles hangt hieraan, zodat het lichaam als geheel kan deinen en leunen.
   const rig = pivot(group, 0, HIP_HEIGHT, 0);
   const pelvis = lathe([[0.001, -0.17], [0.09, -0.16], [0.148, -0.1], [0.162, -0.02], [0.158, 0.05]], trousers, rig);
-  pelvis.scale.set(1.05, 1, 0.6);
+  pelvis.scale.set(1.05, 1, 0.55);
 
   // Romp: draaiprofiel van heup naar schouders, afgeplat tot een borstkas. Het hesje is de romp zelf en valt over de heupen.
   const SX = 1.15;
   const SZ = 0.64;
   const PROFILE: [number, number][] = [
-    [0.001, -0.09], [0.163, -0.1], [0.162, -0.02], [0.156, 0.08], [0.158, 0.16], [0.172, 0.3], [0.19, 0.43], [0.186, 0.5], [0.15, 0.556], [0.075, 0.59], [0.001, 0.6],
+    [0.001, -0.09], [0.176, -0.1], [0.172, -0.02], [0.16, 0.08], [0.158, 0.16], [0.172, 0.3], [0.19, 0.43], [0.186, 0.5], [0.15, 0.556], [0.075, 0.59], [0.001, 0.6],
   ];
   const radiusAt = (y: number) => {
     for (let i = 1; i < PROFILE.length; i++) {
@@ -99,8 +99,7 @@ export function createCharacter(group: THREE.Group = new THREE.Group()) {
 
   // Hoofd met gezicht, haar en helm
   const head = pivot(torso, 0, 0.62, 0);
-  ball(0.1, skin, head, 0, 0.1, 0).scale.set(0.9, 1.12, 1);
-  ball(0.07, skin, head, 0, 0.05, 0.014).scale.set(0.92, 0.95, 1); // kaak en kin
+  ball(0.1, skin, head, 0, 0.092, 0).scale.set(0.88, 1.22, 0.98);
   ball(0.013, skin, head, 0, 0.083, 0.098).scale.set(0.8, 1.3, 1); // neus
   for (const side of [1, -1]) {
     ball(0.022, skin, head, side * 0.09, 0.088, -0.004).scale.set(0.5, 1.2, 0.9); // oor
@@ -128,7 +127,7 @@ export function createCharacter(group: THREE.Group = new THREE.Group()) {
 
   function leg(side: number) {
     const hip = pivot(rig, side * 0.094, -0.02, 0);
-    limb(0.094, 0.073, THIGH, trousers, hip);
+    limb(0.088, 0.073, THIGH, trousers, hip);
     const knee = pivot(hip, 0, -THIGH, 0);
     limb(0.073, 0.058, SHIN, trousers, knee);
     const foot = pivot(knee, 0, -SHIN, 0);

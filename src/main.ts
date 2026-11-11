@@ -12,6 +12,7 @@ import { createHandheld } from './ui/handheld';
 import { createTabletApp } from './ui/tabletApp';
 import { createWarehouse, HALL } from './ui/scene/warehouse';
 import { createForklift } from './ui/scene/forklift';
+import { createExterior } from './ui/scene/exterior';
 import { createCharacter } from './ui/scene/character';
 import { mountWarehouse } from './ui/warehouse';
 import { mountMultiplayer } from './ui/multiplayer';
@@ -34,20 +35,22 @@ const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 scene.environmentIntensity = 0.45;
 const HAZE = new THREE.FogExp2('#b4babd', 0.0045);
-const OUTSIDE = new THREE.Color('#16181b');
+const OUTSIDE = new THREE.Color('#b9d4ee'); // lucht boven het buitenterrein
+const DISTANCE_HAZE = new THREE.Fog('#b9d4ee', 170, 520);
 const INSIDE = new THREE.Color('#c3c8cb');
 
-const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.05, 200);
+const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.05, 600);
 scene.add(camera); // nodig omdat scanner/tablet aan de camera hangen
 
 // --- Magazijn ---
 const hall = createWarehouse(scene);
+createExterior(scene);
 
 
 // --- Speler (zichtbaar in third person en overzicht) ---
 const character = createCharacter();
 const player = character.group;
-player.position.set(-12, 0, 10);
+player.position.set(-14.8, 0, 2.5);
 player.rotation.y = Math.PI / 2;
 scene.add(player);
 
@@ -82,6 +85,7 @@ let postFx = !params.has('nofx');
 // --- Camera-modi (overzicht / first person / third person) ---
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.maxPolarAngle = Math.PI / 2.2;
+controls.maxDistance = 260;
 controls.enableDamping = true;
 
 const hud = document.createElement('div');
@@ -104,7 +108,7 @@ let driving = false;
 function applyMode(mode: ViewMode) {
   const overview = mode === 'overview';
   hall.roof.visible = !overview; // dak weg zodat je van boven naar binnen kijkt
-  scene.fog = overview ? null : HAZE;
+  scene.fog = overview ? DISTANCE_HAZE : HAZE;
   scene.background = overview ? OUTSIDE : INSIDE;
   handheld.setActive(mode === 'first' && !driving); // in de heftruck heb je je handen aan het stuur
 }
@@ -153,7 +157,11 @@ const forklift = createForklift({
   place: warehouse.forkliftPlace,
   onStockChange: refreshHall,
 });
+<<<<<<< HEAD
 forklift.group.position.set(-14, 0, 2.5); // voor de stellingen, in het middelste gangpad
+=======
+forklift.group.position.set(-12.6, 0, 2.5);
+>>>>>>> 3e53fb1 (wip TSF+krosink)
 forklift.group.rotation.y = Math.PI / 2;
 scene.add(forklift.group, forklift.marker);
 if (import.meta.env.DEV) Object.assign(window, { wmDebug: { forklift, hall, setDriving: (on: boolean) => setDriving(on) } });
