@@ -6,7 +6,7 @@ import { createMockClient } from './mock';
 import { clearCredentials, loadCredentials, saveCredentials } from './session';
 import type { WmsClient, WmsCredentials } from './types';
 
-export type { WmsClient, WmsCredentials } from './types';
+export type { WmsClient, WmsCredentials, WmsItem, WmsLocation } from './types';
 export { WmsError } from './types';
 
 // Zonder login (of met VITE_USE_MOCK en geen login) draait alles op de mock.

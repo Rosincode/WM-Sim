@@ -1,20 +1,28 @@
-import type { Item, Location, Order } from '../../shared/contract';
-import { WmsError, type WmsClient } from './types';
+import type { Item, Order } from '../../shared/contract';
+import { WmsError, type WmsClient, type WmsItem, type WmsLocation } from './types';
 
 // In-memory WMS met dezelfde regels en seed-data als docs/wms/01-basis-datamodel.md.
 
-const SKUS = ['SKU-001', 'SKU-002', 'SKU-003', 'SKU-004', 'SKU-005'];
+// Artikelen uit docs/wms/03-robotassortiment.md.
+const ITEMS: WmsItem[] = [
+  { sku: 'SKU-001', description: 'Stofzuigrobot Dusty', category: 'huishouden' },
+  { sku: 'SKU-002', description: 'Wasvouwrobot Foldy', category: 'huishouden' },
+  { sku: 'SKU-003', description: 'Robothond Bolt', category: 'huisdier' },
+  { sku: 'SKU-004', description: 'Robotkat Miso', category: 'huisdier' },
+  { sku: 'SKU-005', description: 'Dansrobot Groove', category: 'vermaak' },
+];
+const SKUS = ITEMS.map((i) => i.sku);
 
-function seedLocations(): Location[] {
+function seedLocations(): WmsLocation[] {
   // Zelfde plattegrond als src/sim/layout.ts en docs/wms/05-grotere-hal-locaties.md:
   // 10 dockdeuren met elk een inslag- en uitslaglocatie, 11 stellingen van 7 secties.
-  const locs: Location[] = [];
+  const locs: WmsLocation[] = [];
   for (let d = 0; d < 10; d++) {
     const id = `DOCK-${String(d + 1).padStart(2, '0')}`;
     const y = -22.5 + d * 5;
-    locs.push({ id, type: 'dock', x: -28, y }); // de deur zelf (aan- en afmelden, laden)
-    locs.push({ id: `${id}-IN`, type: 'dock', x: -20.3, y: y - 1.3 });
-    locs.push({ id: `${id}-UIT`, type: 'dock', x: -20.3, y: y + 1.3 });
+    locs.push({ id, type: 'dock', x: -28, y, level: 0, blocked: false }); // de deur zelf (aan- en afmelden, laden)
+    locs.push({ id: `${id}-IN`, type: 'dock', x: -20.3, y: y - 1.3, level: 0, blocked: false });
+    locs.push({ id: `${id}-UIT`, type: 'dock', x: -20.3, y: y + 1.3, level: 0, blocked: false });
   }
   const xs = [-8, -4, 0, 4, 8, 12, 16];
   const ys = Array.from({ length: 11 }, (_, i) => -25 + i * 5);
@@ -22,7 +30,7 @@ function seedLocations(): Location[] {
     xs.forEach((x, s) => {
       for (const level of [1, 2, 3]) {
         const id = `R${r + 1}-${String(s + 1).padStart(2, '0')}-${level}`;
-        locs.push({ id, type: level === 1 ? 'pick' : 'rack', x, y });
+        locs.push({ id, type: level === 1 ? 'pick' : 'rack', x, y, level, blocked: false });
       }
     }),
   );
@@ -64,7 +72,11 @@ export function createMockClient(): WmsClient {
 
     async createLocation(l) {
       if (locations.some((x) => x.id === l.id)) fail(`Locatie ${l.id} bestaat al.`);
-      locations.push({ id: l.id, type: l.type, x: l.x, y: l.y });
+      locations.push({ id: l.id, type: l.type, x: l.x, y: l.y, level: l.level, blocked: false });
+    },
+
+    async getItems() {
+      return structuredClone(ITEMS);
     },
 
     mirror(items, openOrders) {

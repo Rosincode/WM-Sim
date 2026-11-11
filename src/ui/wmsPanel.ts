@@ -1,6 +1,7 @@
 import { wms } from '../integrations/wms';
 import { addMissingLocations, hallLocations, locationsCsv, missingLocations, type HallLocation } from './wmsLocations';
 import { forget, loadRemembered, remember } from './wmsRemember';
+import { wmsSync } from './wmsSync';
 
 // Aanmelden bij de WMS-API: de koppeling waarmee de scanner en het magazijn hun handelingen aan de WMS
 // voorleggen. Los van de WMS-app op pc en tablet (die heeft zijn eigen login in het iframe).
@@ -25,6 +26,8 @@ const css = `
 .wms-panel .err { color: #ff8a80; }
 .wms-panel .ok { color: #a5d6a7; }
 .wms-panel .hint { color: #9aa0a6; font-size: 12px; }
+.wms-panel .sync { margin-top: 8px; padding-top: 6px; border-top: 1px solid #444; font-size: 13px; }
+.wms-panel .sync .warn { color: #ffcc80; }
 `;
 
 /** Zonder parent zweeft het paneel (ingeklapt) rechtsboven; met parent staat het uitgeklapt in dat element. */
@@ -82,6 +85,25 @@ export function mountWmsPanel(parent?: HTMLElement) {
       <button class="secondary" data-act="csv-locations">Lijst (CSV)</button>`;
   }
 
+  /** Wat de game uit de WMS heeft overgenomen, en waar de hal en de WMS niet op elkaar passen. */
+  function syncHtml() {
+    const r = wmsSync.report;
+    if (!r) return '';
+    const sample = (ids: string[]) => `${escapeHtml(ids.slice(0, 3).join(', '))}${ids.length > 3 ? ', …' : ''}`;
+    const source = !r.fromWms ? 'de gedeelde wereld van de spelers' : r.mode === 'live' ? 'de WMS' : 'de mock-WMS';
+    const time = r.at.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const warn: string[] = [];
+    if (r.locations.extra.length) warn.push(`${r.locations.extra.length} locaties staan in de WMS maar niet in de hal (${sample(r.locations.extra)}).`);
+    if (r.locations.different.length) warn.push(`${r.locations.different.length} locaties hebben in de WMS een ander type, niveau of positie (${sample(r.locations.different)}).`);
+    if (r.stock.hidden) warn.push(`${r.stock.hidden} voorraadregels liggen op een plek die de hal niet toont.`);
+    if (r.stock.unknownSkus.length) warn.push(`Voorraad van onbekende artikelen: ${sample(r.stock.unknownSkus)}.`);
+    return `<div class="sync"><b>Gelijk met ${source}</b>
+      <div>${r.items} artikelen · ${r.stock.lines} voorraadregels · ${r.orders} open orders</div>
+      <div>${r.locations.hall - r.locations.missing} van ${r.locations.hall} locaties${r.locations.blocked ? ` · ${r.locations.blocked} geblokkeerd` : ''}</div>
+      ${warn.map((w) => `<div class="warn">${w}</div>`).join('')}
+      <div class="hint">Laatste wijziging ${time}. Voorraad en orders elke 3 s, artikelen en locaties elke 30 s.</div></div>`;
+  }
+
   function render() {
     const live = wms.client.mode === 'live';
     if (!collapsed && checkedStamp !== wms.locationsStamp) void checkLocations();
@@ -115,6 +137,7 @@ export function mountWmsPanel(parent?: HTMLElement) {
             : `<button data-act="login">Inloggen bij WMS</button>`
       }
       ${locationsHtml()}
+      ${syncHtml()}
       ${parent ? '' : '<button class="secondary" data-act="collapse">Sluiten</button>'}
       ${message ? `<div class="msg ${messageClass}">${escapeHtml(message)}</div>` : ''}
       <div class="hint">De scanner en het magazijn leggen elke handeling via deze API voor aan de WMS. Zonder aanmelden draait alles op de mock-WMS.</div>
@@ -164,12 +187,13 @@ export function mountWmsPanel(parent?: HTMLElement) {
     panel.querySelector('[data-act="test"]')?.addEventListener('click', async (e) => {
       (e.currentTarget as HTMLButtonElement).disabled = true;
       try {
-        const [locs, stock, orders] = await Promise.all([
+        const [locs, items, stock, orders] = await Promise.all([
           wms.client.getLocations(),
+          wms.client.getItems(),
           wms.client.getStock(),
           wms.client.getOpenOrders(),
         ]);
-        setMessage(`OK: ${locs.length} locaties, ${stock.length} voorraadregels, ${orders.length} open orders.`, 'ok');
+        setMessage(`OK: ${locs.length} locaties, ${items.length} artikelen, ${stock.length} voorraadregels, ${orders.length} open orders.`, 'ok');
       } catch (err) {
         setMessage(err instanceof Error ? err.message : String(err), 'err');
       }
@@ -217,6 +241,10 @@ export function mountWmsPanel(parent?: HTMLElement) {
     render();
   });
   wms.onError((msg) => setMessage(msg, 'err'));
+  wmsSync.onChange(() => {
+    // Niet opnieuw tekenen terwijl iemand het inlogformulier invult.
+    if (!collapsed && !showForm) render();
+  });
   render();
 
   // Onthouden inloggegevens: bij het starten vanzelf weer verbinden.

@@ -1,5 +1,5 @@
 import type { Item, Location, Order } from '../../shared/contract';
-import { WmsError, type WmsClient, type WmsCredentials } from './types';
+import { WmsError, type WmsClient, type WmsCredentials, type WmsItem, type WmsLocation } from './types';
 
 // URL-opbouw van de WMS-API (basis: https://<host>/t/wm_sim/api):
 //   GET  {base}/{entiteit}                      -> lijst als { data: [...] }
@@ -12,8 +12,11 @@ import { WmsError, type WmsClient, type WmsCredentials } from './types';
 // Wijkt de WMS af, pas dan alleen deze file aan.
 
 type Row = { id: string };
-type ItemRow = Row & { sku: string };
-type LocationRow = Row & { location_id: string; location_type: Location['type']; pos_x: number; pos_y: number };
+type ItemRow = Row & { sku: string; description?: string | null; category?: string | null };
+type LocationRow = Row & {
+  location_id: string; location_type: Location['type']; pos_x: number; pos_y: number;
+  level?: number | null; blocked?: boolean | number | string | null;
+};
 type StockRow = Row & { sku: string; location_id: string; qty: number };
 type OrderRow = Row & { order_id: string; status: Order['status'] };
 type OrderLineRow = Row & { order_id: string; sku: string; qty: number };
@@ -142,7 +145,20 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
     async getLocations() {
       const rows = await list<LocationRow>('location');
       locations = Promise.resolve(toRefs(rows.map((r) => [r.id, r.location_id])));
-      return rows.map((r) => ({ id: r.location_id, type: r.location_type, x: Number(r.pos_x), y: Number(r.pos_y) }));
+      return rows.map((r): WmsLocation => ({
+        id: r.location_id,
+        type: r.location_type,
+        x: Number(r.pos_x),
+        y: Number(r.pos_y),
+        level: r.level == null ? undefined : Number(r.level),
+        blocked: r.blocked == null ? undefined : r.blocked === true || r.blocked === 1 || r.blocked === '1' || r.blocked === 'true',
+      }));
+    },
+
+    async getItems() {
+      const rows = await list<ItemRow>('item');
+      items = Promise.resolve(toRefs(rows.map((r) => [r.id, r.sku])));
+      return rows.map((r): WmsItem => ({ sku: r.sku, description: r.description ?? '', category: r.category ?? undefined }));
     },
 
     async createLocation(l) {

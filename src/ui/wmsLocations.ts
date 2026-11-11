@@ -1,5 +1,5 @@
 import type { Location } from '../shared/contract';
-import { wms } from '../integrations/wms';
+import { wms, type WmsLocation } from '../integrations/wms';
 import { DOCKS, HALL, LOCATIONS } from '../sim/layout';
 
 // Vergelijkt de locaties van de hal met die in de WMS. De hal is de fysieke wereld: elke locatie die
@@ -21,6 +21,25 @@ export function hallLocations(): HallLocation[] {
 export function missingLocations(inWms: Location[]): HallLocation[] {
   const known = new Set(inWms.map((l) => l.id));
   return hallLocations().filter((l) => !known.has(l.id));
+}
+
+/** Verschillen tussen de hal en de WMS: de hal ligt fysiek vast, dus afwijkingen moeten in de WMS worden rechtgezet. */
+export function compareLocations(inWms: WmsLocation[]) {
+  const hall = new Map(hallLocations().map((l) => [l.id, l]));
+  const near = (a: number, b: number) => Math.abs(a - b) < 0.01;
+  const extra: string[] = [];
+  const different: string[] = [];
+  const blocked: string[] = [];
+  for (const w of inWms) {
+    const h = hall.get(w.id);
+    if (!h) {
+      extra.push(w.id);
+      continue;
+    }
+    if (w.blocked) blocked.push(w.id);
+    if (w.type !== h.type || !near(w.x, h.x) || !near(w.y, h.y) || (w.level !== undefined && w.level !== h.level)) different.push(w.id);
+  }
+  return { hall: hall.size, missing: missingLocations(inWms), extra, different, blocked };
 }
 
 /** Voor import in de WMS: zelfde kolommen als de entiteit `location` (docs/wms/01). */

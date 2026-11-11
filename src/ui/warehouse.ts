@@ -1,14 +1,16 @@
 import type * as THREE from 'three';
-import type { Item, Location, Order } from '../shared/contract';
-import { wms, type WmsClient } from '../integrations/wms';
-import { POINTS, dist } from '../sim/layout';
+import type { Item, Order } from '../shared/contract';
+import { wms, type WmsClient, type WmsItem, type WmsLocation } from '../integrations/wms';
+import { articles, setArticles, setBlockedLocations } from '../sim/catalog';
+import { LOCATIONS, POINTS, dist } from '../sim/layout';
 import { createWarehouse, type SharedState, type Warehouse } from '../sim/warehouse';
 import { menu } from './menu';
 import { createPcScreen } from './pcScreen';
 import { createProcessHud } from './processHud';
 import { createWarehouseView } from './warehouseView';
 import { createWmsGateway } from './wmsGateway';
-import { missingLocations } from './wmsLocations';
+import { compareLocations } from './wmsLocations';
+import { wmsSync } from './wmsSync';
 import { mountWmsPanel } from './wmsPanel';
 
 // Koppelt de magazijn-sim aan de WMS (poort + stand ophalen), de 3D-scène, de HUD en het toetsenbord.
@@ -19,9 +21,11 @@ import { mountWmsPanel } from './wmsPanel';
 const PC_RADIUS = 2;
 /** Hoe vaak de stand uit de WMS wordt opgehaald (ms). */
 const POLL_MS = 3000;
+/** Hoe vaak artikelen en locaties (stamgegevens) opnieuw worden opgehaald (ms). */
+const MASTER_MS = 30000;
 
 /** De laatste stand uit de WMS, voor het scherm van de handscanner. */
-export type WmsData = { mode: 'live' | 'mock'; locations: Location[]; stock: Item[]; orders: Order[] };
+export type WmsData = { mode: 'live' | 'mock'; locations: WmsLocation[]; items: WmsItem[]; stock: Item[]; orders: Order[] };
 
 export function mountWarehouse({
   scene,
@@ -74,15 +78,62 @@ export function mountWarehouse({
   // ---------- WMS is leidend: de stand ophalen ----------
   const dataListeners: ((d: WmsData) => void)[] = [];
   let lastData = '';
-  let locations: Location[] = [];
-  let locationsOf: WmsClient | null = null;
+  let locations: WmsLocation[] = [];
+  let items: WmsItem[] = [];
+  let masterOf: WmsClient | null = null;
+  let masterAt = -Infinity;
   let locationsStamp = -1;
   /** De client waarvan de hele wereld is overgenomen; bij een andere client (in- of uitloggen) gebeurt dat opnieuw. */
   let loadedFrom: WmsClient | null = null;
   let polling = false;
   let lastPollAt = -Infinity;
   let lastError = '';
+  let lastWarning = '';
   let seenRevision = sim.revision;
+  let worldRefresh = 0;
+  const hallIds = new Set(LOCATIONS.map((l) => l.id)); // stellingen en in-/uitslaglocaties: wat de hal kan tonen
+
+  /** Geeft de stand door aan de scanner en het WMS-paneel, alleen als er iets is veranderd. */
+  function emit(data: WmsData, fromWms: boolean) {
+    const json = JSON.stringify([fromWms, data]);
+    if (json === lastData) return;
+    lastData = json;
+    dataListeners.forEach((l) => l(data));
+    const cmp = compareLocations(data.locations);
+    const known = new Set(data.items.map((i) => i.sku));
+    wmsSync.set({
+      mode: data.mode,
+      fromWms,
+      at: new Date(),
+      items: data.items.length,
+      locations: { hall: cmp.hall, missing: cmp.missing.length, extra: cmp.extra, different: cmp.different, blocked: cmp.blocked.length },
+      stock: {
+        lines: data.stock.length,
+        hidden: data.stock.filter((s) => !hallIds.has(s.locationId)).length,
+        unknownSkus: [...new Set(data.stock.map((s) => s.sku).filter((sku) => !known.has(sku)))],
+      },
+      orders: data.orders.length,
+    });
+  }
+
+  /**
+   * Speelt deze speler op de mock terwijl de wereld (mede) van anderen komt, dan zegt zijn eigen mock niets:
+   * de scanner toont dan de wereld die alle spelers delen, zodat iedereen dezelfde voorraad ziet.
+   */
+  function emitWorld() {
+    emit(
+      {
+        mode: 'mock',
+        locations,
+        items: articles().map((a) => ({ sku: a.sku, description: a.name, category: a.category })),
+        stock: sim.worldStock().sort((x, y) => (x.locationId + x.sku).localeCompare(y.locationId + y.sku)),
+        orders: sim.orders
+          .filter((o) => o.status === 'open' || o.status === 'picking')
+          .map((o) => ({ id: o.id, status: o.status as Order['status'], lines: o.lines.map((l) => ({ sku: l.sku, qty: l.qty })) })),
+      },
+      false,
+    );
+  }
 
   async function poll() {
     if (polling) return;
@@ -91,28 +142,37 @@ export function mountWarehouse({
     const client = wms.client;
     const revision = sim.revision;
     try {
-      if (locationsOf !== client || locationsStamp !== wms.locationsStamp) {
+      // Stamgegevens: artikelen en locaties. Bij een andere WMS, nieuwe locaties en verder af en toe.
+      if (masterOf !== client || locationsStamp !== wms.locationsStamp || lastPollAt - masterAt > MASTER_MS) {
         locationsStamp = wms.locationsStamp;
-        locations = await client.getLocations();
-        locationsOf = client;
+        const [locs, its] = await Promise.all([client.getLocations(), client.getItems()]);
+        if (client !== wms.client) return; // intussen in- of uitgelogd
+        locations = locs;
+        items = its;
+        masterOf = client;
+        masterAt = lastPollAt;
+        const cmp = compareLocations(locations);
+        setBlockedLocations(cmp.blocked);
         // De WMS weigert elke scan en boeking op een locatie die hij niet kent: meld dat meteen.
-        const missing = missingLocations(locations);
-        if (missing.length > 0) {
-          hud.addError(
-            `De WMS mist ${missing.length} locatie${missing.length === 1 ? '' : 's'} van de hal (bijvoorbeeld ${missing[0].id}). ` +
-              'Druk op K om ze toe te voegen.',
-          );
-        }
+        const warning =
+          cmp.missing.length > 0
+            ? `De WMS mist ${cmp.missing.length} locatie${cmp.missing.length === 1 ? '' : 's'} van de hal (bijvoorbeeld ${cmp.missing[0].id}). ` +
+              'Druk op K om ze toe te voegen.'
+            : items.length === 0
+              ? 'De WMS heeft geen artikelen: er komen geen vrachtwagens met goederen.'
+              : '';
+        if (warning && warning !== lastWarning) hud.addError(warning);
+        lastWarning = warning;
       }
       const [stock, orders] = await Promise.all([client.getStock(), client.getOpenOrders()]);
       if (client !== wms.client) return; // intussen in- of uitgelogd
       lastError = '';
 
-      const data: WmsData = { mode: client.mode, locations, stock, orders };
-      const json = JSON.stringify([data.mode, locations.length, stock, orders]);
-      if (json !== lastData) {
-        lastData = json;
-        dataListeners.forEach((l) => l(data));
+      if (mockOutOfStep()) emitWorld();
+      else {
+        // De WMS bepaalt welke artikelen er zijn en hoe ze heten.
+        setArticles(items.map((i) => ({ sku: i.sku, name: i.description, category: i.category })));
+        emit({ mode: client.mode, locations, items, stock, orders }, true);
       }
 
       if (loadedFrom !== client) {
@@ -153,7 +213,11 @@ export function mountWarehouse({
     /** Multiplayer: de gedeelde wereld lezen, overnemen en bepalen wie hem laat draaien. */
     shared: {
       state: () => sim.sharedState(),
-      apply: (s: SharedState) => sim.applyShared(s),
+      apply(s: SharedState) {
+        sim.applyShared(s);
+        // Zonder eigen WMS gelden de artikelen van de wereld die je deelt (die van de WMS van de host).
+        if (wms.client.mode === 'mock' && s.articles?.length) setArticles(s.articles);
+      },
       setAuthority: sim.setAuthority,
     },
     /** Voor de heftruck: hele pallets van en naar stellinglocaties. */
@@ -173,6 +237,10 @@ export function mountWarehouse({
         : it && { label: it.label, enabled: !!it.enabled };
 
       // Direct na een handeling de stand opnieuw ophalen, verder op een vast ritme.
+      if (mockOutOfStep() && (worldRefresh -= dt) <= 0) {
+        worldRefresh = 0.5;
+        emitWorld();
+      }
       const settled = sim.pending === 0 && sim.revision !== seenRevision;
       if (settled) seenRevision = sim.revision;
       if (settled || performance.now() - lastPollAt > POLL_MS) void poll();

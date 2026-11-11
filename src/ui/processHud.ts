@@ -1,8 +1,8 @@
 import { WMS_ACTIONS, onProcessEvent, type ProcessEvent } from '../sim/events';
-import { SKU_NAMES } from '../sim/layout';
+import { articleName } from '../sim/catalog';
 import type { Warehouse } from '../sim/warehouse';
 import { menu } from './menu';
-import { SKU_COLORS } from './warehouseView';
+import { skuColor } from './warehouseView';
 
 // HUD voor het magazijnproces: de opdracht (linksonder). API-log en voorraad staan in het menu rechtsboven;
 // welke toets je bij een object indrukt staat midden in beeld (src/ui/prompts.ts).
@@ -96,8 +96,8 @@ export function createProcessHud(sim: Warehouse) {
     for (const s of sim.stockList()) totals.set(s.sku, (totals.get(s.sku) ?? 0) + s.qty);
     const stockRows = [...totals]
       .sort()
-      .map(([sku, qty]) => `<tr><td><span class="sw" style="background:${SKU_COLORS[sku] ?? '#888'}"></span>${sku}</td>
-        <td>${esc(SKU_NAMES[sku] ?? '')}</td><td style="text-align:right">${qty}</td></tr>`)
+      .map(([sku, qty]) => `<tr><td><span class="sw" style="background:${skuColor(sku)}"></span>${esc(sku)}</td>
+        <td>${esc(articleName(sku))}</td><td style="text-align:right">${qty}</td></tr>`)
       .join('');
     const orderRows = sim.orders
       .filter((o) => o.status !== 'shipped')

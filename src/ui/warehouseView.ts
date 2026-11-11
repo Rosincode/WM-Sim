@@ -12,7 +12,13 @@ export const SKU_COLORS: Record<string, string> = {
   'SKU-004': '#e57373',
   'SKU-005': '#ba68c8',
 };
-const skuColor = (sku: string) => SKU_COLORS[sku] ?? '#a5784a';
+/** Vaste kleur per artikel; artikelen die de WMS erbij heeft gekregen krijgen een eigen kleur op basis van hun code. */
+export function skuColor(sku: string) {
+  if (SKU_COLORS[sku]) return SKU_COLORS[sku];
+  let h = 0;
+  for (const ch of sku) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return `hsl(${h}, 55%, 60%)`;
+}
 
 function box(w: number, h: number, d: number, color: string) {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshStandardMaterial({ color }));

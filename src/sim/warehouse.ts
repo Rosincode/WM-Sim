@@ -1,7 +1,8 @@
 import type { Item, Order } from '../shared/contract';
 import { publish, type Direction, type ProcessEvent, type ScanKind } from './events';
+import { articles, isBlocked, skus } from './catalog';
 import {
-  DOCKS, LANE_SLOTS, LOCATIONS, POINTS, SKUS,
+  DOCKS, LANE_SLOTS, LOCATIONS, POINTS,
   dist, lanePoint, location, shelfLocations, type Dock, type Point,
 } from './layout';
 import { offlineGateway, type WmsGateway, type WmsReply } from './wms';
@@ -73,6 +74,8 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
   const trucks: { in: Truck | null; out: Truck | null } = { in: null, out: null };
   /** Pallets die op de heftruck (of los op de vloer) staan: fysiek weg uit de stelling, in de WMS nog niet. */
   const forks = new Map<string, { locationId: string; sku: string; qty: number }>();
+  /** Pallets die iemand van een inslaglocatie heeft opgepakt: fysiek van het dock af, in de WMS staan ze er nog. */
+  const transit = new Map<string, { fromId: string; sku: string; qty: number }>();
   const messages: Message[] = [];
   let carry: Carry = null;
   let clock = 0;
@@ -212,6 +215,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     if (!pallet || carry) return refused('Hier valt niets op te pakken.');
     scanned('pallet', pallet.id, true, d.inId);
     laneIn[d.index][slot] = null;
+    transit.set(pallet.id, { fromId: d.inId, sku: pallet.sku, qty: pallet.qty });
     carry = { kind: 'pallet', pallet, fromId: d.inId };
     touch();
     return done(`${pallet.id} opgepakt (${pallet.qty}× ${pallet.sku}). Scan de stellinglocatie waar je hem wegzet.`);
@@ -222,6 +226,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     const lane = laneIn[d.index];
     if (!lane.includes(null)) return refused(`${d.inId} staat vol.`);
     lane[lane.lastIndexOf(null)] = carry.pallet;
+    transit.delete(carry.pallet.id);
     const text = `${carry.pallet.id} teruggezet op ${d.inId}.`;
     carry = null;
     touch();
@@ -244,6 +249,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     scanned('location', locId, r.ok, locId);
     if (!r.ok) return wmsRefused(r);
     if (carry?.kind === 'pallet' && carry.pallet.id === pallet.id) carry = null;
+    transit.delete(pallet.id);
     add(locId, pallet.sku, pallet.qty);
     touch();
     return done(`${pallet.id} weggezet op ${locId}.`);
@@ -374,7 +380,9 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     const loc = location(sectionLocId)!;
     const levels = LOCATIONS.filter((l) => l.x === loc.x && l.z === loc.z && l.type !== 'dock');
     scanned('location', loc.id, true, loc.id);
-    const text = levels.map((l) => `${l.id}: ${linesText(stockAt(l.id)) || 'leeg'}`).join(' · ');
+    const text = levels
+      .map((l) => `${l.id}: ${linesText(stockAt(l.id)) || 'leeg'}${isBlocked(l.id) ? ' (geblokkeerd)' : ''}`)
+      .join(' · ');
     say(text);
     return { ok: true, text };
   }
@@ -491,7 +499,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
       const levels = LOCATIONS.filter((l) => l.x === section.x && l.z === section.z && l.type !== 'dock');
       if (carry?.kind === 'pallet') {
         const { pallet } = carry;
-        const free = levels.find((l) => stockAt(l.id).every((s) => s.sku === pallet.sku));
+        const free = levels.find((l) => !isBlocked(l.id) && stockAt(l.id).every((s) => s.sku === pallet.sku));
         push(
           free
             ? interaction(`Scan ${free.id} en zet ${pallet.id} weg`, section, () => putaway(free.id))
@@ -616,11 +624,12 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     let dock = outDock;
     if (direction === 'in') do dock = rand(DOCKS.length); while (dock === outDock);
     const id = direction === 'in' ? `IN-${pad(seq.truckIn++)}` : `UIT-${pad(seq.truckOut++)}`;
+    const inbound = skus(); // een vrachtwagen brengt alleen artikelen die de WMS kent
     const cargo: Pallet[] =
       direction === 'in'
         ? Array.from({ length: 2 + rand(3) }, () => ({
             id: `PAL-${stamp}-${pad(seq.pallet++, 4)}`,
-            sku: SKUS[rand(SKUS.length)],
+            sku: inbound[rand(inbound.length)],
             qty: 5 * (2 + rand(5)),
           }))
         : [];
@@ -655,10 +664,10 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
 
   /** Zonder WMS-app speelt de sim zelf klant: een testorder via create_order. De WMS beslist of hij mag. */
   function placeDemoOrder() {
-    const skus = SKUS.filter((s) => shelfQty(s) > 0).sort(() => Math.random() - 0.5);
-    if (skus.length === 0) return;
-    const lines = skus
-      .slice(0, 1 + rand(Math.min(3, skus.length)))
+    const inStock = skus().filter((s) => shelfQty(s) > 0).sort(() => Math.random() - 0.5);
+    if (inStock.length === 0) return;
+    const lines = inStock
+      .slice(0, 1 + rand(Math.min(3, inStock.length)))
       .map((sku) => ({ sku, qty: 1 + rand(Math.min(5, shelfQty(sku))) }));
     const id = `ORD-${stamp}-${pad(seq.order++)}`;
     void ask({ type: 'OrderCreated', order: { id, lines, status: 'open' } }).then((r) => {
@@ -674,7 +683,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     driveTruck('in', dt);
     driveTruck('out', dt);
     if (!authority) return; // in multiplayer laat alleen de host nieuwe vrachtwagens en testorders ontstaan
-    if (!trucks.in && (inTimer -= dt) <= 0) trucks.in = spawnTruck('in');
+    if (!trucks.in && skus().length > 0 && (inTimer -= dt) <= 0) trucks.in = spawnTruck('in');
     const outboundWork = orders.some((o) => ['picking', 'picked', 'staged'].includes(o.status));
     if (!trucks.out && outboundWork && (outTimer -= dt) <= 0) trucks.out = spawnTruck('out');
     if ((orderTimer -= dt) <= 0) {
@@ -695,6 +704,8 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
       trucks,
       outDock,
       forks: [...forks],
+      transit: [...transit],
+      articles: articles(),
       seq: { truckIn: seq.truckIn, truckOut: seq.truckOut },
     });
   }
@@ -722,6 +733,8 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     outDock = s.outDock;
     forks.clear();
     for (const [id, f] of s.forks ?? []) forks.set(id, f);
+    transit.clear();
+    for (const [id, t] of s.transit ?? []) transit.set(id, t);
     seq.truckIn = Math.max(seq.truckIn, s.seq.truckIn);
     seq.truckOut = Math.max(seq.truckOut, s.seq.truckOut);
     // Draag je een order die een ander inmiddels heeft afgehandeld of teruggezet, dan ben je hem kwijt.
@@ -754,9 +767,56 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     }
   }
 
-  /** Tussentijdse stand uit de WMS: stellingvoorraad en open orders. Wat fysiek onderhanden is blijft staan. */
+  /**
+   * Zet de inslaglocaties gelijk aan de WMS: een ontvangst of correctie die in de WMS-app is geboekt staat
+   * daarna ook fysiek op het dock. Pallets die iemand heeft opgepakt tellen in de WMS nog mee op het dock.
+   */
+  function setDockStock(items: Item[]) {
+    for (const d of DOCKS) {
+      const lane = laneIn[d.index];
+      const want = new Map<string, number>();
+      const bump = (m: Map<string, number>, sku: string, qty: number) => m.set(sku, (m.get(sku) ?? 0) + qty);
+      for (const it of items) if (it.locationId === d.inId && it.qty > 0) bump(want, it.sku, it.qty);
+      for (const t of transit.values()) if (t.fromId === d.inId) bump(want, t.sku, -t.qty);
+      const have = new Map<string, number>();
+      for (const p of lane) if (p) bump(have, p.sku, p.qty);
+      // Te veel: pallets weghalen of kleiner maken
+      lane.forEach((p, i) => {
+        if (!p) return;
+        const over = (have.get(p.sku) ?? 0) - (want.get(p.sku) ?? 0);
+        if (over <= 0) return;
+        const take = Math.min(over, p.qty);
+        bump(have, p.sku, -take);
+        lane[i] = take === p.qty ? null : { ...p, qty: p.qty - take };
+      });
+      // Te weinig: een pallet erbij, zolang er plek is
+      for (const [sku, qty] of want) {
+        const short = qty - (have.get(sku) ?? 0);
+        if (short > 0 && lane.includes(null)) {
+          lane[lane.lastIndexOf(null)] = { id: `PAL-${stamp}-${pad(seq.pallet++, 4)}`, sku, qty: short };
+        }
+      }
+    }
+  }
+
+  /** Voorraad zoals hij nu in de hal staat (stellingen en inslaglocaties), voor wie de WMS niet zelf kan lezen. */
+  function worldStock(): Item[] {
+    const list = stockList();
+    DOCKS.forEach((d, i) => {
+      for (const p of laneIn[i]) {
+        if (!p) continue;
+        const cur = list.find((s) => s.locationId === d.inId && s.sku === p.sku);
+        if (cur) cur.qty += p.qty;
+        else list.push({ locationId: d.inId, sku: p.sku, qty: p.qty });
+      }
+    });
+    return list;
+  }
+
+  /** Tussentijdse stand uit de WMS: voorraad (stellingen en docks) en open orders. Wat fysiek onderhanden is blijft staan. */
   function syncFromWms(items: Item[], wmsOrders: Order[]) {
     setShelfStock(items);
+    setDockStock(items);
     const open = wmsOrders.filter(isOpen);
     const ids = new Set(open.map((o) => o.id));
     for (let i = orders.length - 1; i >= 0; i--) {
@@ -774,6 +834,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     laneIn.forEach((lane) => lane.fill(null));
     laneOut.forEach((lane) => lane.fill(null));
     forks.clear();
+    transit.clear();
     carry = null;
     if (trucks.out) trucks.out.loaded = [];
     orders.length = 0;
@@ -814,6 +875,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     /** true: de wereld is (mede) door een andere speler gevormd. */
     get foreign() { return foreign; },
     stockList,
+    worldStock,
     stockAt,
     forkliftTake,
     forkliftPlace,

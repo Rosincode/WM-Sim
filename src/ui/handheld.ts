@@ -7,7 +7,14 @@ import type { ScanTarget } from './scene/warehouse';
 // leest hij uit de WMS-gegevens die via setData() binnenkomen. Het beeld van de tablet is de WMS-app zelf.
 
 export type Tool = 'scanner' | 'tablet';
-export type WmsSnapshot = { mode: 'live' | 'mock'; locations: Location[]; stock: Item[]; orders: Order[] };
+export type WmsSnapshot = {
+  mode: 'live' | 'mock';
+  locations: (Location & { blocked?: boolean })[];
+  stock: Item[];
+  orders: Order[];
+  /** Artikelen uit de WMS, voor de omschrijving bij een voorraadregel. */
+  items?: { sku: string; description: string }[];
+};
 
 interface Options {
   camera: THREE.PerspectiveCamera;
@@ -238,7 +245,7 @@ export function createHandheld({ camera, canvas, world, scanTargets, onScan }: O
       g.fillStyle = '#9fb3c8';
       g.font = '22px Arial';
       const kind = loc ? { dock: 'Dock', rack: 'Bulklocatie', pick: 'Picklocatie' }[loc.type] : 'Onbekend in WMS';
-      g.fillText(kind, 20, 178);
+      g.fillText(loc?.blocked ? `${kind} · geblokkeerd` : kind, 20, 178);
       g.fillStyle = '#24384d';
       g.fillRect(20, 198, w - 40, 2);
       const lines = stockAt(lastScan.code);
@@ -253,7 +260,8 @@ export function createHandheld({ camera, canvas, world, scanTargets, onScan }: O
         g.fillStyle = '#fff';
         g.font = '26px Arial';
         g.textAlign = 'left';
-        g.fillText(s.sku, 20, y);
+        const name = data.items?.find((it) => it.sku === s.sku)?.description;
+        g.fillText(name ? `${s.sku} · ${name}` : s.sku, 20, y, w - 130);
         g.textAlign = 'right';
         g.font = 'bold 26px Arial';
         g.fillText(`${s.qty} st`, w - 20, y);
