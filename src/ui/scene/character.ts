@@ -16,6 +16,18 @@ export interface CharacterState {
   seatHipY?: number;
   /** Draagt iets voor zich uit. */
   carrying?: boolean;
+  /** Waar de linker-/rechterhand naartoe reikt (bijv. het stuur); zonder doel volgt de arm de gewone houding. */
+  leftHand?: HandTarget;
+  rightHand?: HandTarget;
+}
+
+export interface HandTarget {
+  /** Wereldpositie: het punt waar de handpalm op ligt, of — zonder `normal` — de pols. */
+  point: THREE.Vector3;
+  /** Normaal van het oppervlak (wereld): de hand ligt er plat op. */
+  normal?: THREE.Vector3;
+  /** Hand niet tekenen: die zit al aan wat de speler vasthoudt (scanner/tablet in first person). */
+  hideHand?: boolean;
 }
 
 export function createCharacter(group: THREE.Group = new THREE.Group()) {
@@ -95,7 +107,7 @@ export function createCharacter(group: THREE.Group = new THREE.Group()) {
   }
   // Kraag van het shirt en de nek
   mesh(new THREE.CylinderGeometry(0.062, 0.085, 0.045, 16), shirt, torso, 0, 0.578, 0.004);
-  mesh(new THREE.CylinderGeometry(0.048, 0.054, 0.1, 14), skin, torso, 0, 0.62, 0);
+  const neck = mesh(new THREE.CylinderGeometry(0.048, 0.054, 0.1, 14), skin, torso, 0, 0.62, 0);
 
   // Hoofd met gezicht, haar en helm
   const head = pivot(torso, 0, 0.62, 0);
@@ -119,10 +131,74 @@ export function createCharacter(group: THREE.Group = new THREE.Group()) {
     limb(0.056, 0.047, UPPER_ARM, shirt, shoulder); // mouw tot de elleboog
     const elbow = pivot(shoulder, 0, -UPPER_ARM, 0);
     limb(0.044, 0.033, FOREARM, skin, elbow);
-    const hand = ball(0.04, glove, elbow, 0, -FOREARM - 0.04, 0.004);
-    hand.scale.set(0.55, 1.3, 1);
-    ball(0.016, glove, elbow, -side * 0.02, -FOREARM - 0.025, 0.03); // duim
-    return { shoulder, elbow };
+    // Hand aan een pols, zodat hij plat op het stuur kan liggen. Vingers wijzen langs -y, de handpalm naar het lichaam.
+    const wrist = pivot(elbow, 0, -FOREARM, 0);
+    ball(0.045, glove, wrist, 0, -0.045, 0.002).scale.set(0.36, 1, 0.9);
+    const finger = new THREE.CapsuleGeometry(0.0095, 0.046, 4, 8);
+    for (const z of [0.031, 0.012, -0.007, -0.026]) mesh(finger, glove, wrist, 0, -0.105, z);
+    const thumb = mesh(new THREE.CapsuleGeometry(0.011, 0.034, 4, 8), glove, wrist, -side * 0.006, -0.05, 0.046);
+    thumb.rotation.x = -0.55;
+    return { side, shoulder, elbow, wrist, restZ: shoulder.rotation.z, reach: 0 };
+  }
+
+  // Arm naar een doel laten reiken (tweebots-IK in de ruimte van de romp); w = 0..1 mengt met de gewone houding.
+  const PALM = 0.016; // halve dikte van de handpalm
+  const wristW = new THREE.Vector3();
+  const fingers = new THREE.Vector3();
+  const toTarget = new THREE.Vector3();
+  const dir = new THREE.Vector3();
+  const pole = new THREE.Vector3();
+  const perp = new THREE.Vector3();
+  const upper = new THREE.Vector3();
+  const lower = new THREE.Vector3();
+  const bx = new THREE.Vector3();
+  const by = new THREE.Vector3();
+  const bz = new THREE.Vector3();
+  const basis = new THREE.Matrix4();
+  const qIK = new THREE.Quaternion();
+  const qArm = new THREE.Quaternion();
+  const qHand = new THREE.Quaternion();
+
+  function reachFor(a: ReturnType<typeof arm>, target: HandTarget, w: number) {
+    torso.updateWorldMatrix(true, false);
+    const n = target.normal;
+    wristW.copy(target.point);
+    if (n) {
+      // vingers wijzen van de schouder af, plat over het oppervlak; de pols ligt een handpalm terug
+      a.shoulder.getWorldPosition(fingers);
+      fingers.subVectors(target.point, fingers);
+      fingers.addScaledVector(n, -fingers.dot(n)).normalize();
+      wristW.addScaledVector(n, PALM).addScaledVector(fingers, -0.05);
+    }
+    toTarget.copy(wristW);
+    torso.worldToLocal(toTarget).sub(a.shoulder.position);
+    const d = THREE.MathUtils.clamp(toTarget.length(), 0.08, UPPER_ARM + FOREARM - 0.004);
+    dir.copy(toTarget).normalize();
+    // elleboog wijst omlaag en naar buiten
+    pole.set(a.side * 0.6, -1, -0.25);
+    perp.copy(pole).addScaledVector(dir, -pole.dot(dir)).normalize();
+    const cosA = THREE.MathUtils.clamp((UPPER_ARM ** 2 + d * d - FOREARM ** 2) / (2 * UPPER_ARM * d), -1, 1);
+    upper.copy(dir).multiplyScalar(cosA).addScaledVector(perp, Math.sqrt(1 - cosA * cosA));
+    lower.copy(dir).multiplyScalar(d).addScaledVector(upper, -UPPER_ARM).normalize();
+    // schouder: -y langs de bovenarm, z in het vlak van de buiging (de elleboog scharniert om x)
+    by.copy(upper).negate();
+    bz.copy(lower).addScaledVector(upper, -lower.dot(upper)).normalize();
+    bx.crossVectors(by, bz);
+    qIK.setFromRotationMatrix(basis.makeBasis(bx, by, bz));
+    a.shoulder.quaternion.slerp(qIK, w);
+    a.elbow.rotation.x = THREE.MathUtils.lerp(a.elbow.rotation.x, -Math.acos(THREE.MathUtils.clamp(upper.dot(lower), -1, 1)), w);
+    if (!n) {
+      a.wrist.quaternion.identity();
+      return;
+    }
+    // pols: handpalm tegen het oppervlak
+    bx.copy(n).multiplyScalar(a.side);
+    by.copy(fingers).negate();
+    bz.crossVectors(bx, by);
+    qHand.setFromRotationMatrix(basis.makeBasis(bx, by, bz));
+    torso.getWorldQuaternion(qArm).multiply(a.shoulder.quaternion).multiply(a.elbow.quaternion);
+    qHand.premultiply(qArm.invert());
+    a.wrist.quaternion.identity().slerp(qHand, w);
   }
 
   function leg(side: number) {
@@ -196,6 +272,7 @@ export function createCharacter(group: THREE.Group = new THREE.Group()) {
       // Zittend: bovenbenen naar voren, onderbenen omlaag
       hip = THREE.MathUtils.lerp(hip, -1.42, seat);
       knee = THREE.MathUtils.lerp(knee, 1.3, seat);
+      l.hip.rotation.z = (i ? -0.1 : 0.1) * seat; // zittend: knieën iets uit elkaar, om de stuurkolom
       l.hip.rotation.x = hip;
       l.knee.rotation.x = knee;
       l.foot.rotation.x = THREE.MathUtils.lerp(-(hip + knee) * 0.45, 0.1, seat); // zool ongeveer vlak
@@ -210,7 +287,7 @@ export function createCharacter(group: THREE.Group = new THREE.Group()) {
       shoulder = THREE.MathUtils.lerp(shoulder, i ? -0.2 : -1.2, air * (1 - carry));
       shoulder = THREE.MathUtils.lerp(shoulder, -0.85, seat); // handen aan het stuur
       elbow = THREE.MathUtils.lerp(elbow, -0.75, seat);
-      a.shoulder.rotation.x = shoulder;
+      a.shoulder.rotation.set(shoulder, 0, a.restZ);
       a.elbow.rotation.x = elbow;
     });
 
@@ -231,8 +308,22 @@ export function createCharacter(group: THREE.Group = new THREE.Group()) {
     const seatY = (state.seatHipY ?? 0.5) - p.y;
     rig.position.y = THREE.MathUtils.lerp(standY, seatY, seat);
     rig.position.x = 0.018 * Math.cos(phase) * gait * (1 - run);
+
+    // Handen met een doel (stuur, scanner/tablet): pas nu, want de romp staat in zijn eindstand
+    arms.forEach((a, i) => {
+      const target = i ? state.rightHand : state.leftHand;
+      a.reach = target ? ease(a.reach, 1, dt, 10) : 0;
+      a.wrist.visible = !target?.hideHand;
+      if (target) reachFor(a, target, a.reach);
+      else a.wrist.quaternion.identity();
+    });
+  }
+
+  /** First person in de heftruck: het hoofd niet tekenen, de camera zit op die plek. */
+  function setFirstPerson(on: boolean) {
+    head.visible = neck.visible = !on;
   }
 
   update(0);
-  return { group, update };
+  return { group, update, setFirstPerson };
 }

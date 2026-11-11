@@ -71,8 +71,15 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
   add(g, b(0.5, 0.12, 0.5), seat, 0, 1.24, -0.45);
   add(g, b(0.5, 0.5, 0.1), seat, 0, 1.5, -0.7, -0.15);
   add(g, b(0.9, 0.6, 0.12), yellow, 0, 1.0, 0.55);
-  add(g, new THREE.CylinderGeometry(0.02, 0.02, 0.4, 8), black, 0, 1.35, 0.42, -0.5);
-  const wheelRim = add(g, new THREE.TorusGeometry(0.16, 0.022, 8, 24), black, 0, 1.52, 0.33, Math.PI / 2 - 0.5);
+  // Stuurkolom vanaf de vloer schuin naar de bestuurder; het stuur zit binnen handbereik boven de knieën.
+  add(g, new THREE.CylinderGeometry(0.025, 0.03, 1.0, 10), black, 0, 1.19, 0.17, -0.5);
+  const wheelRim = add(g, new THREE.TorusGeometry(0.16, 0.022, 10, 32), black, 0, 1.63, -0.07, Math.PI / 2 - 0.5);
+  add(wheelRim, new THREE.CylinderGeometry(0.04, 0.04, 0.03, 16), black, 0, 0, 0, Math.PI / 2);
+  for (const a of [Math.PI / 2, -Math.PI / 2, Math.PI]) add(wheelRim, b(0.024, 0.15, 0.012), black, Math.sin(a) * 0.08, Math.cos(a) * 0.08, 0, 0, -a);
+  // Plek op de stuurrand (linksboven) waar de hand van de bestuurder ligt; draait mee met het stuur.
+  const wheelGrip = new THREE.Object3D();
+  wheelGrip.position.set(Math.sin(1.05) * 0.16, Math.cos(1.05) * 0.16, 0);
+  wheelRim.add(wheelGrip);
 
   // Beschermkooi
   for (const x of [-0.5, 0.5]) {
@@ -310,6 +317,14 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
     marker,
     /** Plek van het hoofd van de bestuurder (lokaal). */
     seat: new THREE.Vector3(0, 1.95, -0.42),
+    /** Plek van de ogen in first person (lokaal): net boven de romp, zodat je je eigen lichaam onder je ziet. */
+    eye: new THREE.Vector3(0, 2.07, -0.38),
+    /** Punt op het stuur waar de handpalm van de bestuurder op ligt, met de normaal van het stuurvlak (wereld). */
+    steeringGrip(point: THREE.Vector3, normal: THREE.Vector3) {
+      wheelGrip.getWorldPosition(point);
+      normal.set(0, 0, -1).transformDirection(wheelRim.matrixWorld);
+      point.addScaledVector(normal, 0.022); // bovenop de rand
+    },
     get driving() {
       return driving;
     },

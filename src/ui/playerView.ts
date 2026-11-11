@@ -18,7 +18,11 @@ interface Options {
   onModeChange?: (mode: ViewMode) => void;
 }
 
+/** Voertuig waarin de speler zit: `seat` is de plek van de speler, `eye` die van de camera in first person (lokaal). */
+type Vehicle = { object: THREE.Object3D; seat: THREE.Vector3; eye?: THREE.Vector3 };
+
 const EYE_HEIGHT = 1.6;
+const SEAT_PITCH = -0.3; // zittend kijk je iets omlaag: stuur en handen onder in beeld
 const GRAVITY = 22;
 const JUMP_SPEED = 7.5;
 const MOUSE_SENS = 0.0022;
@@ -33,7 +37,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   let grounded = true;
   let moving = 0; // 0..1, voor de loopbeweging van wat je vasthoudt
   /** Voertuig waarin de speler zit (heftruck); de speler en camera volgen het dan. */
-  let vehicle: { object: THREE.Object3D; seat: THREE.Vector3 } | null = null;
+  let vehicle: Vehicle | null = null;
   let lookYaw = 0; // rondkijken vanaf de stoel
   const seatWorld = new THREE.Vector3();
 
@@ -53,20 +57,20 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   };
 
   const drivingText =
-    '<b>WM-Sim — Heftruck</b><br>W/S: rijden · A/D: sturen · <b>↑/↓</b>: vorken heffen/zakken · Muis: rondkijken<br>Oppakken: vorken onder de pallet en heffen · Neerzetten: zakken<br><b>R</b>: uitstappen · <b>V</b>: first/third person · <b>C</b>: overzicht';
+    '<b>WM-Sim — Heftruck</b><br>W/S: rijden · A/D: sturen · <b>↑/↓</b>: vorken heffen/zakken · Muis: rondkijken<br><b>1</b>: scanner · <b>2</b>: tablet (F: WMS-app) in je rechterhand<br>Oppakken: vorken onder de pallet en heffen · Neerzetten: zakken<br><b>R</b>: uitstappen · <b>V</b>: first/third person · <b>C</b>: overzicht';
   const refreshHud = () => (hud.innerHTML = (vehicle && mode !== 'overview' ? drivingText : hudText[mode]) + processKeys);
 
   function setMode(m: ViewMode) {
     mode = m;
     if (m !== 'overview') closeMode = m;
     controls.enabled = m === 'overview';
-    player.visible = m !== 'first'; // eigen lichaam niet in beeld
+    player.visible = m !== 'first' || !!vehicle; // lopend geen eigen lichaam in beeld; in de heftruck zie je het onder je
     if (m !== 'first' && document.pointerLockElement === canvas) document.exitPointerLock();
     if (m === 'overview') {
       camera.position.set(-48, 58, 82); // schuin van voren: dockgevel en voorgevel in beeld
       controls.target.set(-6, 0, 2);
     } else if (m === 'first') {
-      pitch = 0;
+      pitch = vehicle ? SEAT_PITCH : 0;
     }
     refreshHud();
     onModeChange?.(m);
@@ -119,7 +123,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
       if (mode === 'overview') {
         controls.update();
       } else if (mode === 'first') {
-        camera.position.copy(seatWorld);
+        o.localToWorld(camera.position.copy(vehicle.eye ?? vehicle.seat));
         camera.rotation.set(pitch, o.rotation.y + Math.PI + lookYaw, 0, 'YXZ');
       } else {
         forward.set(Math.sin(o.rotation.y), 0, Math.cos(o.rotation.y));
@@ -189,10 +193,11 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   }
 
   /** Stap in (voertuig) of uit (null); bij uitstappen zet de aanroeper de speler neer. */
-  function setVehicle(v: { object: THREE.Object3D; seat: THREE.Vector3 } | null) {
+  function setVehicle(v: Vehicle | null) {
     vehicle = v;
     lookYaw = 0;
-    pitch = v ? -0.12 : 0;
+    pitch = v ? SEAT_PITCH : 0;
+    player.visible = mode !== 'first' || !!v;
     player.position.y = 0;
     velY = 0;
     grounded = true;
@@ -200,5 +205,13 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     onModeChange?.(mode);
   }
 
-  return { update, setMode, setVehicle, get mode() { return mode; }, get moving() { return moving; } };
+  return {
+    update,
+    setMode,
+    setVehicle,
+    get mode() { return mode; },
+    get moving() { return moving; },
+    /** Kijkrichting: omhoog/omlaag, en vanaf de stoel van een voertuig ook opzij. */
+    get look() { return { yaw: lookYaw, pitch }; },
+  };
 }
