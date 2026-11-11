@@ -1,20 +1,24 @@
+import { createAppFrame, getAppUrl } from './wmsApp';
 import { mountWmsPanel } from './wmsPanel';
 
-// Het scherm van de pc in het magazijn: aanmelden bij het WMS (links) en orders (rechts).
+// Het scherm van de pc in het magazijn: de echte WMS-app (iframe) en de koppeling (aanmelden + orders).
 // Opent met E bij de pc; sluit met Esc, E, het kruisje of door weg te lopen.
 
 const css = `
 .pc-backdrop { position: fixed; inset: 0; z-index: 50; display: none; align-items: center; justify-content: center;
   background: rgba(0,0,0,.5); font: 14px system-ui, sans-serif; color: #fff; }
 .pc-backdrop.open { display: flex; }
-.pc-monitor { width: min(820px, 94vw); padding: 14px 14px 22px; border-radius: 14px; background: #15171a;
+.pc-monitor { width: min(1100px, 96vw); padding: 14px 14px 22px; border-radius: 14px; background: #15171a;
   box-shadow: 0 20px 60px rgba(0,0,0,.6); }
-.pc-display { display: flex; flex-direction: column; height: min(500px, 78vh); border-radius: 4px; overflow: hidden;
+.pc-display { display: flex; flex-direction: column; height: min(680px, 84vh); border-radius: 4px; overflow: hidden;
   background: #10243a; }
 .pc-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #1b3a5c; }
-.pc-bar b { flex: 1; }
-.pc-bar .clock { color: #9fb3c8; font-variant-numeric: tabular-nums; }
+.pc-bar b { margin-right: 8px; }
+.pc-bar .clock { flex: 1; text-align: right; color: #9fb3c8; font-variant-numeric: tabular-nums; }
 .pc-bar button { border: 0; border-radius: 4px; padding: 2px 9px; background: #c62828; color: #fff; font: inherit; cursor: pointer; }
+.pc-bar button.tab { padding: 3px 12px; background: rgba(255,255,255,.12); }
+.pc-bar button.tab.on { background: #3b6ea5; }
+.pc-app { flex: 1; min-height: 0; }
 .pc-body { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 14px; min-height: 0; }
 .pc-pane { padding: 12px 14px; border-radius: 8px; background: rgba(255,255,255,.06); overflow-y: auto; line-height: 1.45; }
 .pc-pane h3 { margin: 0 0 8px; font-size: 13px; color: #9fb3c8; text-transform: uppercase; letter-spacing: .05em; }
@@ -50,8 +54,12 @@ export function createPcScreen({ orderAction, runOrderAction, orders }: Options)
   backdrop.innerHTML = `
     <div class="pc-monitor">
       <div class="pc-display">
-        <div class="pc-bar"><b>WMS-werkstation</b><span class="clock"></span><button data-act="close" title="Sluiten (Esc)">✕</button></div>
-        <div class="pc-body">
+        <div class="pc-bar"><b>WMS-werkstation</b>
+          <button class="tab" data-tab="app">WMS-app</button>
+          <button class="tab" data-tab="link">Koppeling &amp; orders</button>
+          <span class="clock"></span><button data-act="close" title="Sluiten (Esc)">✕</button></div>
+        <div class="pc-app" data-view="app"></div>
+        <div class="pc-body" data-view="link">
           <div class="pc-pane" data-pane="login">
             <h3>Aanmelden</h3>
             <div class="hint">Zonder aanmelden draait het magazijn op de mock-WMS.</div>
@@ -69,8 +77,23 @@ export function createPcScreen({ orderAction, runOrderAction, orders }: Options)
   mountWmsPanel(loginPane);
   loginPane.appendChild(loginPane.querySelector('.hint')!); // hint onder het inlogpaneel
 
+  // Tabbladen: de echte WMS-app (iframe) of de koppeling + orders van de sim
+  const app = createAppFrame();
+  backdrop.querySelector('[data-view="app"]')!.appendChild(app.el);
+  let tab: 'app' | 'link' = getAppUrl() ? 'app' : 'link';
+  function setTab(t: typeof tab) {
+    tab = t;
+    backdrop.querySelectorAll<HTMLElement>('[data-view]').forEach((v) => (v.style.display = v.dataset.view === t ? '' : 'none'));
+    backdrop.querySelectorAll<HTMLElement>('[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
+    if (t === 'app' && open) app.show();
+  }
+  backdrop.querySelectorAll<HTMLElement>('[data-tab]').forEach((b) =>
+    b.addEventListener('click', () => setTab(b.dataset.tab as typeof tab)),
+  );
+
   let open = false;
   let lastOrders = '';
+  setTab(tab);
 
   function setOpen(value: boolean) {
     if (open === value) return;
@@ -79,6 +102,7 @@ export function createPcScreen({ orderAction, runOrderAction, orders }: Options)
     if (open) {
       document.exitPointerLock?.(); // muis vrij om te klikken en te typen
       lastOrders = '';
+      if (tab === 'app') app.show();
       refresh();
     } else if (document.activeElement instanceof HTMLElement && backdrop.contains(document.activeElement)) {
       document.activeElement.blur(); // anders blijft de besturing denken dat je typt
