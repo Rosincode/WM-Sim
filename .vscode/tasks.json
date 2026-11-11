@@ -7,7 +7,7 @@
       "command": "bash",
       "args": ["${workspaceFolder}/sync.sh"],
       "windows": {
-        "command": "C:\Program Files\Git\bin\bash.exe"
+        "command": "C:\\Program Files\\Git\\bin\\bash.exe"
       },
       "options": { "cwd": "${workspaceFolder}" },
       "isBackground": true,
