@@ -159,7 +159,12 @@ const forklift = createForklift({
 forklift.group.position.set(-14, 0, 2.5); // voor de stellingen, in het middelste gangpad
 forklift.group.rotation.y = Math.PI / 2;
 scene.add(forklift.group, forklift.marker);
-if (import.meta.env.DEV) Object.assign(window, { wmDebug: { forklift, hall, setDriving: (on: boolean) => setDriving(on) } });
+// Pallets op de vorken of los op de vloer zijn van hun locatie af, maar staan bij de WMS nog op de oude plek.
+warehouse.setInTransit(() => {
+  const s = forklift.getState();
+  return [...(s.load ? [s.load] : []), ...s.loose].map((l) => ({ locationId: l.from, sku: l.sku, qty: l.qty }));
+});
+if (import.meta.env.DEV) Object.assign(window, { wmDebug: { forklift, hall, warehouse, wms, setDriving: (on: boolean) => setDriving(on) } });
 
 const driveHint = document.createElement('div');
 driveHint.style.cssText =
@@ -227,6 +232,7 @@ async function refreshWms() {
 void refreshWms();
 setInterval(refreshWms, 3000);
 wms.onChange(() => void refreshWms());
+wms.onIdle(() => void refreshWms()); // direct na een boeking, niet pas bij de volgende ronde
 
 // --- Loop ---
 let last = performance.now();

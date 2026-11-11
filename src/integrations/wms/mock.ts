@@ -62,6 +62,12 @@ export function createMockClient(): WmsClient {
       return structuredClone(locations);
     },
 
+    mirror(items, openOrders) {
+      stock.clear();
+      for (const it of items) if (locations.some((l) => l.id === it.locationId)) add(it.sku, it.locationId, it.qty);
+      orders.splice(0, orders.length, ...structuredClone(openOrders));
+    },
+
     async getStock() {
       return structuredClone([...stock.values()]);
     },

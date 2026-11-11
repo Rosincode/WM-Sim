@@ -15,6 +15,11 @@ export interface WmsClient {
   createOrder(lines: OrderLine[], orderId?: string): Promise<string>;
   startPicking(orderId: string): Promise<void>;
   confirmPick(orderId: string): Promise<void>;
+  /**
+   * Alleen de mock: neemt de stand van het spel over. Nodig bij samen spelen zonder echte WMS,
+   * want dan heeft elke speler zijn eigen mock die de acties van de anderen niet ziet.
+   */
+  mirror?(stock: Item[], openOrders: Order[]): void;
 }
 
 export class WmsError extends Error {

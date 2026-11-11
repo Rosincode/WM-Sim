@@ -70,7 +70,8 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
         list<OrderRow>('order', "status ne 'done'"),
         list<OrderLineRow>('order_line'),
       ]);
-      return orders.map((o) => ({
+      // Sinds de procesacties (docs/wms/04) kent de WMS ook staged/loaded/shipped: die zijn niet meer open.
+      return orders.filter((o) => o.status === 'open' || o.status === 'picking').map((o) => ({
         id: o.order_id,
         status: o.status,
         lines: lines.filter((l) => l.order_id === o.order_id).map((l) => ({ sku: l.sku, qty: Number(l.qty) })),

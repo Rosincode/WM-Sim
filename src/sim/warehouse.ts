@@ -581,6 +581,37 @@ export function createWarehouse() {
     say(`Voorraad (${items.length} regels) en ${wmsOrders.length} open order(s) geladen uit ${source}.`, 'ok');
   }
 
+  // ========== Afstemmen met de WMS ==========
+
+  /** Gepickt, maar nog niet bij de WMS afgeboekt: dat gebeurt pas als de order compleet is (confirm_pick). */
+  function pickedUnconfirmed(): Item[] {
+    return orders
+      .filter((o) => o.status === 'picking')
+      .flatMap((o) => o.tasks.filter((t) => t.done).map((t) => ({ locationId: t.locationId, sku: t.sku, qty: t.qty })));
+  }
+
+  /** Zet de voorraad gelijk aan `target`: de stand volgens de WMS, zonder wat nog onderweg is. */
+  function syncStock(target: Item[], note: string) {
+    const before = new Map(stock);
+    stock.clear();
+    for (const it of target) if (location(it.locationId) && it.qty > 0) add(it.locationId, it.sku, it.qty);
+    // Klopt een inslaglocatie niet meer, dan staan daar de pallets die de WMS kent.
+    for (const d of DOCKS) {
+      const lines = stockAt(d.inId);
+      const had = [...before.keys()].filter((k) => k.startsWith(`${d.inId}|`)).length;
+      if (lines.length === had && lines.every((l) => before.get(key(d.inId, l.sku)) === l.qty)) continue;
+      const lane = laneIn[d.index];
+      lane.fill(null);
+      for (const l of lines) {
+        const carried = carry?.kind === 'pallet' && carry.fromId === d.inId && carry.pallet.sku === l.sku ? carry.pallet.qty : 0;
+        if (l.qty - carried > 0 && lane.includes(null)) {
+          lane[lane.lastIndexOf(null)] = { id: `PAL-${stamp}-${pad(seq.pallet++, 4)}`, sku: l.sku, qty: l.qty - carried };
+        }
+      }
+    }
+    say(note, 'ok');
+  }
+
   return {
     update,
     interact,
@@ -601,6 +632,8 @@ export function createWarehouse() {
     stockAt,
     forkliftTake,
     forkliftPlace,
+    pickedUnconfirmed,
+    syncStock,
     order,
     sharedState,
     applyShared,
