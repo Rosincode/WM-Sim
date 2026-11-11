@@ -124,15 +124,11 @@ export function createWarehouseView(
   const root = new THREE.Group();
   scene.add(root);
 
-  // --- Terrein buiten de docks ---
-  const yard = new THREE.Mesh(new THREE.PlaneGeometry(26, 30), new THREE.MeshStandardMaterial({ color: '#2b2d30' }));
-  yard.rotation.x = -Math.PI / 2;
-  yard.position.set(-33, -0.01, 0);
-  yard.receiveShadow = true;
-  root.add(yard);
-
-  // --- Vaste objecten: banen en de pc (orderterminal + WMS-aanmelding) ---
-  root.add(floorMark(POINTS.laneIn, 4, 2.6, '#4fc3f7'), floorMark(POINTS.laneOut, 4, 2.6, '#81c784'));
+  // --- Vaste objecten: per dock een inslag- en uitslagbaan, en de pc (orderterminal + WMS-aanmelding) ---
+  // (het buitenterrein staat in src/ui/scene/exterior.ts)
+  for (const d of DOCKS) {
+    root.add(floorMark(d.laneIn, LANE_LENGTH + 0.3, 1.5, '#4fc3f7'), floorMark(d.laneOut, LANE_LENGTH + 0.3, 1.5, '#81c784'));
+  }
   const pc = createPcMesh();
   pc.group.position.set(POINTS.terminal.x, 0, POINTS.terminal.z);
   root.add(pc.group);
