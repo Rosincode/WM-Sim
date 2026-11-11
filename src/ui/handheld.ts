@@ -168,6 +168,7 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
   let scanTimer = 0;
   let bobPhase = 0;
   let seated = false;
+  let scans = 0;
   let seatK = 0; // 0..1 overgang naar de eenhandige houding
   const raise = { scanner: 0, tablet: 0 };
 
@@ -429,10 +430,16 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
     raycaster.set(camPos, camDir);
     raycaster.far = 40;
     let dist = 12;
+    raycaster.camera = camera; // verplicht zodra er sprites (naam- en taaklabels) in de scène staan
     for (const hit of raycaster.intersectObject(world, true)) {
+      if ((hit.object as THREE.Sprite).isSprite) continue; // zwevende labels houden de laser niet tegen
       let o: THREE.Object3D | null = hit.object;
-      while (o && o !== camera) o = o.parent;
-      if (o === camera) continue; // eigen handen/apparaat
+      let hidden = false;
+      while (o && o !== camera) {
+        if (!o.visible) hidden = true; // de raycaster raakt ook onzichtbare objecten (eigen lichaam, lasers van anderen)
+        o = o.parent;
+      }
+      if (o === camera || hidden) continue; // eigen handen/apparaat
       dist = hit.distance;
       break;
     }
@@ -451,6 +458,7 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
     }
 
     lastScan = { code: best ? best.code : null, time: clock() };
+    scans++;
     scanTimer = 0.4;
     beep(!!best);
     drawScanner();
@@ -508,6 +516,10 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
   const qTmp = new THREE.Quaternion();
 
   return {
+    /** Aantal keer gescand (voor andere spelers: die zien de laser). */
+    get scans() {
+      return scans;
+    },
     get tool() {
       return tool;
     },
