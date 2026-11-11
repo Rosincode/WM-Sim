@@ -118,17 +118,9 @@ export function mountMultiplayer(o: Options) {
   const avatars = new Map<string, Avatar>();
 
   function addAvatar(peer: Peer): Avatar {
-    const character = createCharacter();
-    const color = VEST_COLORS[parseInt(peer.id.slice(0, 4), 16) % VEST_COLORS.length];
-    // Elke speler een eigen kleur hesje (het hesje is één materiaal binnen de figuur).
-    const seen = new Set<THREE.Material>();
-    character.group.traverse((obj) => {
-      const m = (obj as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
-      if (m?.color && !seen.has(m) && m.color.getHexString() === 'ee5a12') {
-        seen.add(m);
-        m.color.set(color);
-      }
-    });
+    // Elke speler een eigen kleur hesje, zodat je elkaar uit elkaar houdt.
+    const color = VEST_COLORS[(parseInt(peer.id.slice(0, 4), 16) || 0) % VEST_COLORS.length];
+    const character = createCharacter(undefined, { vest: color });
     const tag = nameTag();
     tag.sprite.position.y = 2.2;
     const load = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ roughness: 0.8 }));

@@ -30,9 +30,9 @@ export interface HandTarget {
   hideHand?: boolean;
 }
 
-export function createCharacter(group: THREE.Group = new THREE.Group()) {
+export function createCharacter(group: THREE.Group = new THREE.Group(), colors: { /** Kleur van het hesje (andere spelers krijgen een eigen kleur). */ vest?: string } = {}) {
   const mat = (color: string, roughness = 0.85, metalness = 0) => new THREE.MeshStandardMaterial({ color, roughness, metalness });
-  const vest = mat('#f0590f', 0.8);
+  const vest = mat(colors.vest ?? '#f0590f', 0.8);
   const stripe = new THREE.MeshStandardMaterial({ color: '#e4e7e2', roughness: 0.3, metalness: 0.35, side: THREE.DoubleSide });
   const shirt = mat('#243349');
   const trousers = mat('#2c313b', 0.9);
