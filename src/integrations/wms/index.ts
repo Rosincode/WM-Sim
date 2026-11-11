@@ -1,5 +1,6 @@
 import { bus } from '../../shared/bus';
 import type { SimEvent } from '../../shared/contract';
+import { onProcessEvent } from '../../sim/events';
 import { createLiveClient } from './live';
 import { createMockClient } from './mock';
 import { clearCredentials, loadCredentials, saveCredentials } from './session';
@@ -16,6 +17,32 @@ let connectedUrl: string | null = saved?.baseUrl ?? null;
 type Listener = () => void;
 const changeListeners: Listener[] = [];
 const errorListeners: ((msg: string) => void)[] = [];
+const idleListeners: Listener[] = [];
+
+// Boekingen gaan één voor één en in volgorde naar de WMS: een pallet moet eerst ontvangen zijn
+// voordat het wegzetten ervan wordt geboekt.
+let queue: Promise<void> = Promise.resolve();
+let pending = 0;
+let writes = 0;
+
+function enqueue(label: string, call: (c: WmsClient) => Promise<unknown>) {
+  const target = client; // boeking hoort bij de WMS waar hij ontstond, ook als er intussen wordt uitgelogd
+  pending++;
+  writes++;
+  queue = queue
+    .then(() => call(target))
+    .then(
+      () => undefined,
+      (err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[WMS] ${label} mislukt:`, msg);
+        errorListeners.forEach((l) => l(`${label}: ${msg}`));
+      },
+    )
+    .then(() => {
+      if (--pending === 0) idleListeners.forEach((l) => l());
+    });
+}
 
 export const wms = {
   get client() {
@@ -23,6 +50,14 @@ export const wms = {
   },
   get connectedUrl() {
     return connectedUrl;
+  },
+  /** Aantal boekingen dat nog onderweg is naar de WMS. */
+  get pending() {
+    return pending;
+  },
+  /** Teller van alle boekingen; verandert hij, dan is er sinds je vorige lezing iets geboekt. */
+  get writes() {
+    return writes;
   },
   /** Test de verbinding; bij succes worden de gegevens voor deze browsersessie bewaard. */
   async connect(c: WmsCredentials) {
@@ -46,32 +81,38 @@ export const wms = {
   onError(l: (msg: string) => void) {
     errorListeners.push(l);
   },
+  /** Alle boekingen zijn verwerkt: de WMS is weer actueel om uit te lezen. */
+  onIdle(l: Listener) {
+    idleListeners.push(l);
+  },
 };
 
 /** Koppelt sim-events aan WMS-acties. */
 export function startWmsBridge() {
-  bus.on((e) => {
-    handle(e).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[WMS] ${e.type} mislukt:`, msg);
-      errorListeners.forEach((l) => l(`${e.type}: ${msg}`));
-    });
+  bus.on(handle);
+
+  // Wegzetten (ook verplaatsen met de heftruck): het contract-event mist aantal en van-locatie,
+  // daarom luistert de bridge hiervoor naar het volledige proces-event van de sim.
+  onProcessEvent((e) => {
+    if (e.type !== 'PutawayDone') return;
+    enqueue('PutawayDone', (c) =>
+      c.confirmPutaway({ sku: e.sku, qty: e.qty, fromLocationId: e.fromLocationId, toLocationId: e.locationId }),
+    );
   });
 }
 
-async function handle(e: SimEvent) {
+function handle(e: SimEvent) {
   switch (e.type) {
     case 'GoodsReceived':
-      return client.registerGoodsReceived({ sku: e.sku, qty: e.qty, dockId: e.dockId });
+      return enqueue(e.type, (c) => c.registerGoodsReceived({ sku: e.sku, qty: e.qty, dockId: e.dockId }));
     case 'OrderCreated':
-      await client.createOrder(e.order.lines, e.order.id);
-      return;
+      return enqueue(e.type, (c) => c.createOrder(e.order.lines, e.order.id));
     case 'PickCompleted':
-      await client.startPicking(e.orderId);
-      return client.confirmPick(e.orderId);
+      return enqueue(e.type, async (c) => {
+        await c.startPicking(e.orderId);
+        await c.confirmPick(e.orderId);
+      });
     case 'PutawayDone':
-      // Event mist qty en van-locatie; zie voorstel contract-wijziging.
-      console.warn('[WMS] PutawayDone nog niet gekoppeld: event mist qty en fromLocationId.');
-      return;
+      return; // zie startWmsBridge: geboekt via het proces-event
   }
 }
