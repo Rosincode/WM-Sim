@@ -97,13 +97,13 @@ function nameTag() {
 
 export function mountMultiplayer(o: Options) {
   const room = createRoom(o.room);
-  let name = '';
+  let stored = '';
   try {
-    name = localStorage.getItem(NAME_KEY) ?? '';
+    stored = (localStorage.getItem(NAME_KEY) ?? '').trim().slice(0, 20);
   } catch {
     // geen opslag beschikbaar
   }
-  if (!name) name = `Speler ${room.id.slice(0, 3).toUpperCase()}`;
+  let name = stored || `Speler ${room.id.slice(0, 3).toUpperCase()}`;
 
   // ---------- Andere spelers ----------
   type Avatar = {
@@ -235,18 +235,87 @@ export function mountMultiplayer(o: Options) {
   chipNames.style.color = '#b9c0c7';
   chip.append(chipTitle, chipNames);
   document.body.appendChild(chip);
-  chip.addEventListener('click', () => {
-    const next = prompt('Jouw naam (zichtbaar voor andere spelers):', name)?.trim().slice(0, 20);
-    if (!next) return;
-    name = next;
-    try {
-      localStorage.setItem(NAME_KEY, name);
-    } catch {
-      // geen opslag beschikbaar
+  chip.addEventListener('click', () => askName(false));
+
+  // ---------- Naam opgeven ----------
+  // Bij de eerste keer spelen vragen we om een naam; die blijft in deze browser bewaard (localStorage).
+  let nameDialog: HTMLDivElement | null = null;
+  function askName(first: boolean) {
+    if (nameDialog) return;
+    document.exitPointerLock?.();
+    const overlay = document.createElement('div');
+    nameDialog = overlay;
+    overlay.style.cssText =
+      'position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);font:14px system-ui,sans-serif';
+    const form = document.createElement('form');
+    form.style.cssText =
+      'width:min(340px,calc(100vw - 32px));padding:20px;border-radius:12px;background:#1f2429;color:#fff;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:12px';
+    const title = document.createElement('div');
+    title.textContent = first ? 'Welkom! Hoe heet je?' : 'Je naam wijzigen';
+    title.style.cssText = 'font-size:18px;font-weight:600';
+    const info = document.createElement('div');
+    info.textContent = 'Je naam is zichtbaar voor andere spelers en wordt op deze pc onthouden.';
+    info.style.cssText = 'color:#b9c0c7;line-height:1.45';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 20;
+    input.placeholder = 'Jouw naam';
+    input.autocomplete = 'off';
+    input.value = first ? '' : name;
+    input.style.cssText =
+      'padding:9px 11px;border-radius:8px;border:1px solid #47505a;background:#12161a;color:#fff;font:inherit;font-size:16px;outline:none';
+    const buttons = document.createElement('div');
+    buttons.style.cssText = 'display:flex;gap:8px;justify-content:flex-end';
+    const button = (text: string, primary: boolean) => {
+      const b = document.createElement('button');
+      b.type = primary ? 'submit' : 'button';
+      b.textContent = text;
+      b.style.cssText = `padding:8px 14px;border-radius:8px;border:0;font:inherit;cursor:pointer;color:#fff;background:${primary ? '#1e88e5' : '#3a424a'}`;
+      return b;
+    };
+    const cancel = button(first ? 'Overslaan' : 'Annuleren', false);
+    const save = button('Opslaan', true);
+    buttons.append(cancel, save);
+    form.append(title, info, input, buttons);
+    overlay.appendChild(form);
+    document.body.appendChild(overlay);
+
+    const close = () => {
+      overlay.remove();
+      nameDialog = null;
+    };
+    const syncSave = () => {
+      save.disabled = !input.value.trim();
+      save.style.opacity = save.disabled ? '.5' : '1';
+    };
+    syncSave();
+    input.addEventListener('input', syncSave);
+    cancel.addEventListener('click', close);
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const next = input.value.trim().slice(0, 20);
+      if (!next) return;
+      name = next;
+      try {
+        localStorage.setItem(NAME_KEY, name);
+      } catch {
+        // geen opslag beschikbaar: de naam geldt dan alleen voor deze sessie
+      }
+      sendPose(true);
+      refreshChip();
+      close();
+    });
+    // Toetsen in het venster mogen de speler niet laten lopen of de camera wisselen.
+    for (const type of ['keydown', 'keyup', 'keypress'] as const) {
+      overlay.addEventListener(type, (e) => {
+        if (type === 'keydown' && e.key === 'Escape') close();
+        e.stopPropagation();
+      });
     }
-    sendPose(true);
-    refreshChip();
-  });
+    input.focus();
+    input.select();
+  }
+  if (!stored) askName(true);
 
   let chipText = '';
   function refreshChip() {
