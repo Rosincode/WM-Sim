@@ -1,11 +1,14 @@
 import { wms } from '../integrations/wms';
 
-// Status van de WMS-koppeling + inlogformulier. Staat op het scherm van de pc in het magazijn (src/ui/pcScreen.ts).
+// Aanmelden bij de WMS-API: de koppeling waarmee de scanner en het magazijn hun handelingen aan de WMS
+// voorleggen. Los van de WMS-app op pc en tablet (die heeft zijn eigen login in het iframe).
+// Zweeft ingeklapt rechtsboven; klik of K klapt het open.
 
 const css = `
-.wms-panel { position: fixed; right: 16px; top: 16px; width: 280px; padding: 12px 14px; border-radius: 8px;
+.wms-panel { position: fixed; right: 16px; top: 84px; width: 280px; padding: 12px 14px; border-radius: 8px; z-index: 40;
   background: rgba(0,0,0,.7); color: #fff; font: 14px system-ui, sans-serif; line-height: 1.4; }
 .wms-panel.embedded { position: static; width: auto; padding: 0; background: none; }
+.wms-panel.collapsed { width: auto; padding: 6px 12px; font-size: 13px; cursor: pointer; user-select: none; }
 .wms-panel b { display: block; margin-bottom: 4px; }
 .wms-panel .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
 .wms-panel input { box-sizing: border-box; width: 100%; margin: 4px 0; padding: 6px 8px; border-radius: 4px;
@@ -20,16 +23,16 @@ const css = `
 .wms-panel .hint { color: #9aa0a6; font-size: 12px; }
 `;
 
-/** Zonder parent zweeft het paneel rechtsboven; met parent staat het in dat element (het scherm van de pc). */
+/** Zonder parent zweeft het paneel (ingeklapt) rechtsboven; met parent staat het uitgeklapt in dat element. */
 export function mountWmsPanel(parent?: HTMLElement) {
   const style = document.createElement('style');
   style.textContent = css;
   document.head.appendChild(style);
 
   const panel = document.createElement('div');
-  panel.className = parent ? 'wms-panel embedded' : 'wms-panel';
   (parent ?? document.body).appendChild(panel);
 
+  let collapsed = !parent;
   let showForm = false;
   let message = '';
   let messageClass = '';
@@ -40,14 +43,29 @@ export function mountWmsPanel(parent?: HTMLElement) {
     render();
   };
 
+  function setCollapsed(on: boolean) {
+    collapsed = on;
+    if (!on) document.exitPointerLock?.(); // muis vrij om te klikken en te typen
+    else if (document.activeElement instanceof HTMLElement && panel.contains(document.activeElement)) document.activeElement.blur();
+    render();
+  }
+
   function render() {
     const live = wms.client.mode === 'live';
+    const dot = `<span class="dot" style="background:${live ? '#4caf50' : '#f2b134'}"></span>`;
+    panel.className = `wms-panel${parent ? ' embedded' : ''}${collapsed ? ' collapsed' : ''}`;
+    if (collapsed) {
+      panel.title = 'Aanmelden bij de WMS-API (K)';
+      panel.innerHTML = `${dot}WMS-API: ${live ? 'verbonden' : 'mock-modus'} <span class="hint">· K</span>`;
+      return;
+    }
+    panel.title = '';
     const status = live
-      ? `<span class="dot" style="background:#4caf50"></span>Verbonden met WMS<div class="hint">${escapeHtml(wms.connectedUrl ?? '')}</div>`
-      : `<span class="dot" style="background:#f2b134"></span>Mock-modus (geen WMS)`;
+      ? `${dot}Verbonden met WMS<div class="hint">${escapeHtml(wms.connectedUrl ?? '')}</div>`
+      : `${dot}Mock-modus (geen WMS)`;
 
     panel.innerHTML = `
-      <b>WMS</b>
+      <b>WMS-API</b>
       <div>${status}</div>
       ${
         showForm
@@ -63,9 +81,15 @@ export function mountWmsPanel(parent?: HTMLElement) {
             ? `<button data-act="test">Test verbinding</button> <button class="secondary" data-act="logout">Uitloggen</button>`
             : `<button data-act="login">Inloggen bij WMS</button>`
       }
+      ${parent ? '' : '<button class="secondary" data-act="collapse">Sluiten</button>'}
       ${message ? `<div class="msg ${messageClass}">${escapeHtml(message)}</div>` : ''}
+      <div class="hint">De scanner en het magazijn leggen elke handeling via deze API voor aan de WMS. Zonder aanmelden draait alles op de mock-WMS.</div>
     `;
 
+    panel.querySelector('[data-act="collapse"]')?.addEventListener('click', (e) => {
+      e.stopPropagation(); // anders klapt de klik op het paneel hem meteen weer open
+      setCollapsed(true);
+    });
     panel.querySelector('[data-act="login"]')?.addEventListener('click', () => {
       showForm = true;
       message = '';
@@ -110,6 +134,17 @@ export function mountWmsPanel(parent?: HTMLElement) {
         showForm = true;
         setMessage(err instanceof Error ? err.message : String(err), 'err');
       }
+    });
+  }
+
+  if (!parent) {
+    panel.addEventListener('click', () => {
+      if (collapsed) setCollapsed(false);
+    });
+    window.addEventListener('keydown', (e) => {
+      const t = e.target;
+      if (e.repeat || t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return;
+      if (e.code === 'KeyK') setCollapsed(!collapsed);
     });
   }
 

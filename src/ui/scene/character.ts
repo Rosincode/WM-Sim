@@ -19,6 +19,12 @@ export interface CharacterState {
   /** Waar de linker-/rechterhand naartoe reikt (bijv. het stuur); zonder doel volgt de arm de gewone houding. */
   leftHand?: HandTarget;
   rightHand?: HandTarget;
+  /** Kijkrichting van het hoofd t.o.v. het lichaam (rad): yaw + = naar links, pitch + = omhoog. */
+  look?: { yaw: number; pitch: number };
+  /** Wat de figuur zichtbaar vasthoudt: scanner in de rechterhand of tablet voor de borst. */
+  tool?: 'scanner' | 'tablet';
+  /** 0..1: is aan het scannen (arm richt, laser aan). */
+  scan?: number;
 }
 
 export interface HandTarget {
@@ -217,6 +223,31 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
 
   const arms = [arm(1), arm(-1)];
   const legs = [leg(1), leg(-1)];
+  head.rotation.order = 'YXZ';
+
+  // Wat de figuur vasthoudt, zoals anderen het zien: scanner in de rechterhand, tablet voor de borst.
+  const device = mat('#25272b', 0.55);
+  const accent = mat('#f2b705', 0.5);
+  const box = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
+  // Met de onderarm naar voren wijst in de pols -y vooruit en +z omhoog.
+  const scanner = pivot(arms[1].wrist, 0.012, -0.075, 0.05);
+  mesh(box(0.07, 0.17, 0.034), device, scanner);
+  mesh(box(0.074, 0.014, 0.038), accent, scanner, 0, -0.08, 0);
+  mesh(box(0.074, 0.012, 0.038), accent, scanner, 0, 0.08, 0);
+  mesh(box(0.056, 0.08, 0.002), new THREE.MeshBasicMaterial({ color: '#2a6fd0' }), scanner, 0, -0.02, 0.018).castShadow = false;
+  const laser = new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+  laser.color.setRGB(5, 0.25, 0.2);
+  const beam = mesh(box(0.005, 6, 0.005), laser, scanner, 0, -3.09, 0);
+  beam.castShadow = false;
+  const tablet = pivot(torso, 0, 0.24, 0.36);
+  tablet.rotation.x = -0.6; // scherm schuin naar het gezicht
+  mesh(box(0.272, 0.012, 0.182), device, tablet);
+  mesh(box(0.24, 0.002, 0.15), new THREE.MeshBasicMaterial({ color: '#dfe7f1' }), tablet, 0, 0.007, 0).castShadow = false;
+  mesh(box(0.24, 0.0022, 0.016), new THREE.MeshBasicMaterial({ color: '#17346b' }), tablet, 0, 0.0072, -0.067).castShadow = false;
+  const tabletHands: HandTarget[] = [{ point: new THREE.Vector3() }, { point: new THREE.Vector3() }];
+  scanner.visible = tablet.visible = false;
+  let holdScanner = 0;
+  let holdTablet = 0;
 
   const prev = new THREE.Vector3();
   let hasPrev = false;
@@ -278,6 +309,19 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
       l.foot.rotation.x = THREE.MathUtils.lerp(-(hip + knee) * 0.45, 0.1, seat); // zool ongeveer vlak
     });
 
+    // Scanner/tablet in de hand (niet terwijl je iets draagt)
+    const tool = state.carrying ? undefined : state.tool;
+    const scan = state.scan ?? 0;
+    const lookPitch = THREE.MathUtils.clamp(state.look?.pitch ?? 0, -1.1, 1.1);
+    const lookYaw = THREE.MathUtils.clamp(state.look?.yaw ?? 0, -1.3, 1.3);
+    holdScanner = ease(holdScanner, tool === 'scanner' ? 1 : 0, dt, 10);
+    holdTablet = ease(holdTablet, tool === 'tablet' ? 1 : 0, dt, 10);
+    scanner.visible = holdScanner > 0.05;
+    tablet.visible = holdTablet > 0.05;
+    beam.visible = scan > 0 && holdScanner > 0.5;
+    laser.opacity = Math.min(1, scan * 3);
+    tablet.position.x = -0.2 * seat; // rijdend: in de rechterhand, naast het stuur
+
     arms.forEach((a, i) => {
       const swing = Math.sin(phase + i * Math.PI); // arm zwaait tegengesteld aan het been aan dezelfde kant
       let shoulder = armAmp * swing + 0.03 * breathe * (1 - gait);
@@ -287,6 +331,11 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
       shoulder = THREE.MathUtils.lerp(shoulder, i ? -0.2 : -1.2, air * (1 - carry));
       shoulder = THREE.MathUtils.lerp(shoulder, -0.85, seat); // handen aan het stuur
       elbow = THREE.MathUtils.lerp(elbow, -0.75, seat);
+      if (i) {
+        // scanner: onderarm naar voren, richt mee met de blik; bij scannen strekt de arm
+        shoulder = THREE.MathUtils.lerp(shoulder, -0.45 - lookPitch * 0.8 - 0.3 * scan, holdScanner);
+        elbow = THREE.MathUtils.lerp(elbow, -1.15 + 0.4 * scan, holdScanner);
+      }
       a.shoulder.rotation.set(shoulder, 0, a.restZ);
       a.elbow.rotation.x = elbow;
     });
@@ -297,8 +346,8 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
     torso.rotation.y = -(0.1 + 0.16 * (1 - carry)) * twist;
     torso.rotation.x = (0.04 + 0.2 * run) * gait * Math.sign(speed || 1) + 0.1 * carry - 0.08 * seat;
     torso.rotation.z = -0.03 * twist;
-    head.rotation.y = -(rig.rotation.y + torso.rotation.y) * 0.8;
-    head.rotation.x = -torso.rotation.x * 0.6;
+    head.rotation.y = -(rig.rotation.y + torso.rotation.y) * 0.8 + lookYaw;
+    head.rotation.x = -torso.rotation.x * 0.6 - lookPitch * 0.75;
     shell.scale.z = SZ + 0.012 * breathe;
 
     // Deinen: het laagst als beide voeten aan de grond staan, het hoogst boven het standbeen
@@ -311,7 +360,13 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
 
     // Handen met een doel (stuur, scanner/tablet): pas nu, want de romp staat in zijn eindstand
     arms.forEach((a, i) => {
-      const target = i ? state.rightHand : state.leftHand;
+      let target = i ? state.rightHand : state.leftHand;
+      if (!target && tool === 'tablet' && tablet.visible && (i || !state.seated)) {
+        // handen aan de zijkanten van de tablet (rijdend alleen rechts)
+        tablet.updateWorldMatrix(true, false);
+        target = tabletHands[i];
+        tablet.localToWorld(target.point.set(i ? -0.15 : 0.15, -0.02, -0.04));
+      }
       a.reach = target ? ease(a.reach, 1, dt, 10) : 0;
       a.wrist.visible = !target?.hideHand;
       if (target) reachFor(a, target, a.reach);

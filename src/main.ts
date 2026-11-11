@@ -6,7 +6,6 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { startWmsBridge, wms } from './integrations/wms';
 import { createPlayerView, type ViewMode } from './ui/playerView';
 import { createHandheld } from './ui/handheld';
 import { createTabletApp } from './ui/tabletApp';
@@ -17,7 +16,9 @@ import { createCharacter, type HandTarget } from './ui/scene/character';
 import { mountWarehouse } from './ui/warehouse';
 import { mountMultiplayer } from './ui/multiplayer';
 
-startWmsBridge(); // aanmelden bij het WMS gebeurt op de pc in het magazijn (src/ui/pcScreen.ts)
+// De WMS-koppeling loopt via de poort van de sim (src/sim/wms.ts, ingevuld in src/ui/wmsGateway.ts):
+// elke handeling wacht op het antwoord van de WMS. De bridge op de bus (startWmsBridge) start daarom
+// niet meer; die zou dezelfde stappen een tweede keer boeken.
 
 const params = new URLSearchParams(location.search);
 
@@ -95,7 +96,13 @@ hud.style.cssText =
   'position:fixed;left:16px;top:16px;padding:10px 14px;border-radius:8px;background:rgba(0,0,0,.6);color:#fff;font:14px system-ui,sans-serif;line-height:1.5;pointer-events:none';
 document.body.appendChild(hud);
 
-const handheld = createHandheld({ camera, canvas: renderer.domElement, world: scene, scanTargets: hall.scanTargets });
+const handheld = createHandheld({
+  camera,
+  canvas: renderer.domElement,
+  world: scene,
+  scanTargets: hall.scanTargets,
+  onScan: (code) => warehouse.scan(code), // de scan gaat naar de WMS; het antwoord komt op het scannerscherm
+});
 // De echte WMS-app op het scherm van de tablet (2); F haalt hem dichtbij om te bedienen.
 const tabletApp = createTabletApp({ camera, display: handheld.tabletDisplay, onClose: () => handheld.setFocus(false) });
 
@@ -144,6 +151,7 @@ window.addEventListener('keydown', (e) => {
 
 // Processim (vrachtwagens, banen, taken). De voorraad in de stellingen tekent de hal zelf.
 const warehouse = mountWarehouse({ scene, camera, player, rackStock: false });
+warehouse.onWmsData((data) => handheld.setData(data)); // wat de scanner over een locatie laat zien komt uit de WMS
 const refreshHall = () => hall.setStock(warehouse.stockList().filter((s) => !s.locationId.startsWith('DOCK')));
 setInterval(refreshHall, 500);
 
@@ -159,12 +167,7 @@ const forklift = createForklift({
 forklift.group.position.set(-14, 0, 2.5); // voor de stellingen, in het middelste gangpad
 forklift.group.rotation.y = Math.PI / 2;
 scene.add(forklift.group, forklift.marker);
-// Pallets op de vorken of los op de vloer zijn van hun locatie af, maar staan bij de WMS nog op de oude plek.
-warehouse.setInTransit(() => {
-  const s = forklift.getState();
-  return [...(s.load ? [s.load] : []), ...s.loose].map((l) => ({ locationId: l.from, sku: l.sku, qty: l.qty }));
-});
-if (import.meta.env.DEV) Object.assign(window, { wmDebug: { forklift, hall, warehouse, wms, setDriving: (on: boolean) => setDriving(on) } });
+if (import.meta.env.DEV) Object.assign(window, { wmDebug: { forklift, hall, warehouse, setDriving: (on: boolean) => setDriving(on) } });
 
 const driveHint = document.createElement('div');
 driveHint.style.cssText =
@@ -185,6 +188,9 @@ const multiplayer = params.has('solo')
       forklift,
       seatHipY: forklift.seat.y - 0.56,
       isDriving: () => driving,
+      look: () => (view.mode === 'first' ? view.look : { yaw: 0, pitch: 0 }),
+      tool: () => (view.mode !== 'first' ? 0 : handheld.tool === 'scanner' ? 1 : 2),
+      scans: () => handheld.scans,
       leaveForklift: () => setDriving(false),
     });
 
@@ -214,25 +220,6 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
   composer.setSize(window.innerWidth, window.innerHeight);
 });
-
-// --- WMS-gegevens ophalen voor de weergave op scanner en tablet ---
-let lastSnapshot = '';
-async function refreshWms() {
-  const client = wms.client;
-  try {
-    const [locations, stock, orders] = await Promise.all([client.getLocations(), client.getStock(), client.getOpenOrders()]);
-    const snapshot = JSON.stringify([client.mode, locations.length, stock, orders]);
-    if (snapshot === lastSnapshot) return;
-    lastSnapshot = snapshot;
-    handheld.setData({ mode: client.mode, locations, stock, orders });
-  } catch {
-    // de fout staat al in het API-log; de weergave houdt de laatste stand
-  }
-}
-void refreshWms();
-setInterval(refreshWms, 3000);
-wms.onChange(() => void refreshWms());
-wms.onIdle(() => void refreshWms()); // direct na een boeking, niet pas bij de volgende ronde
 
 // --- Loop ---
 let last = performance.now();

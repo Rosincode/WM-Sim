@@ -75,7 +75,10 @@ export const LEVEL_Y = [0, 0, 2, 4];
 
 /** Interactiepunten op de vloer (naast de docks). */
 export const POINTS = {
+  /** De pc met de WMS-app. */
   terminal: { x: -11.3, z: 0 },
+  /** Lege rolcontainers: hier begin je aan een order. */
+  containers: { x: -11.3, z: 5 },
 } satisfies Record<string, Point>;
 
 /** Palletplek i in een baan; plek 0 ligt het dichtst bij de dockdeur. */

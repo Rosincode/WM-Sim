@@ -10,7 +10,7 @@ import { connectMqtt, type MqttConnection } from './mqtt';
  */
 const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://test.mosquitto.org:8081/mqtt'];
 /** Willekeurig voorvoegsel zodat de kamer niet botst met andermans berichten op de broker. */
-const PREFIX = 'hal-9d41f6c2';
+const PREFIX = 'hal-5b7e3a90';
 const SETTLE_MS = 1500; // zo lang kijken we na het verbinden wie er al is, voordat we host kunnen worden
 const PEER_TIMEOUT_MS = 5000;
 const GONE_GRACE_MS = 1500;

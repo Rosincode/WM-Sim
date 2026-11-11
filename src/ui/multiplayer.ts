@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { createRoom, type Peer } from '../sim/multiplayer/room';
 import type { SharedState } from '../sim/warehouse';
-import { createCharacter } from './scene/character';
+import { createCharacter, type HandTarget } from './scene/character';
 import type { ForkliftState } from './scene/forklift';
 import { SKU_COLORS } from './warehouseView';
 
@@ -25,6 +25,11 @@ type Pose = {
   /** Rijdt in de heftruck */ d: 0 | 1;
   /** Draagt: '' | 'order' | artikel van de pallet */ c: string;
   /** Stand van de heftruck, alleen als deze speler rijdt */ f?: ForkliftState;
+  /** Kijkrichting: omhoog/omlaag */ p: number;
+  /** Kijkrichting opzij t.o.v. het lichaam (vanaf de stoel van de heftruck) */ ly: number;
+  /** In de hand: 0 niets, 1 scanner, 2 tablet */ t: 0 | 1 | 2;
+  /** Aantal keer gescand (teller) */ sc: number;
+  /** Stuuruitslag -1..1, als deze speler rijdt */ w: number;
 };
 type StateMsg = { rev: number; w: string; sim: SharedState; fork: ForkliftState };
 
@@ -35,7 +40,20 @@ interface Options {
   room: string;
   shared: { state(): SharedState; apply(s: SharedState): void; setAuthority(on: boolean): void };
   carryLabel(): string;
-  forklift: { getState(): ForkliftState; applyState(s: ForkliftState): void; setRemoteDriven(on: boolean): void };
+  forklift: {
+    getState(): ForkliftState;
+    applyState(s: ForkliftState): void;
+    setRemoteDriven(on: boolean): void;
+    readonly steer: number;
+    setRemoteSteer(v: number): void;
+    steeringGrip(point: THREE.Vector3, normal: THREE.Vector3): void;
+  };
+  /** Kijkrichting van deze speler (first person), anders nul. */
+  look(): { yaw: number; pitch: number };
+  /** Wat deze speler in de hand heeft: 0 niets, 1 scanner, 2 tablet. */
+  tool(): 0 | 1 | 2;
+  /** Aantal keer dat deze speler gescand heeft. */
+  scans(): number;
   /** Hoogte van de heupen van iemand die in de heftruck zit. */
   seatHipY: number;
   isDriving(): boolean;
@@ -114,6 +132,12 @@ export function mountMultiplayer(o: Options) {
     target: THREE.Vector3;
     pose: Pose;
     placed: boolean;
+    /** Gladgestreken kijkrichting. */
+    look: { yaw: number; pitch: number };
+    /** Resterende tijd van de scanflits. */
+    scanT: number;
+    /** Linkerhand op het stuur, als deze speler rijdt. */
+    wheelHand: HandTarget;
   };
   const avatars = new Map<string, Avatar>();
 
@@ -131,8 +155,11 @@ export function mountMultiplayer(o: Options) {
     const avatar: Avatar = {
       character, tag, load, color,
       target: new THREE.Vector3(),
-      pose: { n: '', x: 0, y: 0, z: 0, r: 0, d: 0, c: '' },
+      pose: { n: '', x: 0, y: 0, z: 0, r: 0, d: 0, c: '', p: 0, ly: 0, t: 0, sc: 0, w: 0 },
       placed: false,
+      look: { yaw: 0, pitch: 0 },
+      scanT: 0,
+      wheelHand: { point: new THREE.Vector3(), normal: new THREE.Vector3() },
     };
     avatars.set(peer.id, avatar);
     return avatar;
@@ -168,12 +195,17 @@ export function mountMultiplayer(o: Options) {
   let lastPoseAt = 0;
   function sendPose(force = false) {
     const p = o.player.position;
+    const look = o.look();
     const pose: Pose = {
       n: name,
       x: round(p.x), y: round(p.y), z: round(p.z),
       r: round(o.player.rotation.y, 1000),
       d: o.isDriving() ? 1 : 0,
       c: o.carryLabel(),
+      p: round(look.pitch), ly: round(look.yaw),
+      t: o.tool(),
+      sc: o.scans(),
+      w: o.isDriving() ? round(o.forklift.steer, 10) : 0,
     };
     if (pose.d) pose.f = o.forklift.getState();
     const json = JSON.stringify(pose);
@@ -193,12 +225,19 @@ export function mountMultiplayer(o: Options) {
     } else if (kind === 'p' && isObj(data)) {
       const a = avatars.get(from.id) ?? addAvatar(from);
       const wasNew = !a.placed;
+      const prevScans = a.pose.sc;
       a.pose = {
         n: String(data.n ?? '').slice(0, 20) || 'Speler',
         x: num(data.x), y: num(data.y), z: num(data.z), r: num(data.r),
         d: data.d === 1 ? 1 : 0,
         c: String(data.c ?? '').slice(0, 20),
+        p: THREE.MathUtils.clamp(num(data.p), -1.6, 1.6),
+        ly: THREE.MathUtils.clamp(num(data.ly), -2.5, 2.5),
+        t: data.t === 1 || data.t === 2 ? data.t : 0,
+        sc: num(data.sc),
+        w: THREE.MathUtils.clamp(num(data.w), -1, 1),
       };
+      if (!wasNew && a.pose.sc !== prevScans) a.scanT = 0.4; // heeft net gescand: laser tonen
       a.target.set(a.pose.x, a.pose.y, a.pose.z);
       if (a.pose.d && validFork(data.f)) {
         if (o.isDriving()) {
@@ -346,7 +385,9 @@ export function mountMultiplayer(o: Options) {
       room.start(); // pas verbinden als de eerste beelden lopen
       room.update();
       o.shared.setAuthority(room.isHost);
-      o.forklift.setRemoteDriven(!o.isDriving() && !!remoteDriver());
+      const driver = remoteDriver();
+      o.forklift.setRemoteDriven(!o.isDriving() && !!driver);
+      o.forklift.setRemoteSteer(driver ? driver.pose.w : 0);
 
       // Figuren van de andere spelers soepel naar hun laatste positie bewegen
       const k = 1 - Math.exp(-dt * 12);
@@ -360,7 +401,21 @@ export function mountMultiplayer(o: Options) {
           g.position.lerp(a.target, k);
           g.rotation.y += Math.atan2(Math.sin(a.pose.r - g.rotation.y), Math.cos(a.pose.r - g.rotation.y)) * k;
         }
-        a.character.update(dt, { seated: a.pose.d === 1, seatHipY: o.seatHipY, carrying: !!a.pose.c });
+        // Hoofd, handen en wat de speler vasthoudt
+        a.look.yaw += (a.pose.ly - a.look.yaw) * k;
+        a.look.pitch += (a.pose.p - a.look.pitch) * k;
+        a.scanT = Math.max(0, a.scanT - dt);
+        const seated = a.pose.d === 1;
+        if (seated) o.forklift.steeringGrip(a.wheelHand.point, a.wheelHand.normal!);
+        a.character.update(dt, {
+          seated,
+          seatHipY: o.seatHipY,
+          carrying: !!a.pose.c,
+          look: a.look,
+          tool: a.pose.t === 1 ? 'scanner' : a.pose.t === 2 ? 'tablet' : undefined,
+          scan: a.scanT / 0.4,
+          leftHand: seated ? a.wheelHand : undefined,
+        });
         a.tag.set(a.pose.n, a.color);
         a.load.visible = !!a.pose.c && !a.pose.d;
         if (a.load.visible) {

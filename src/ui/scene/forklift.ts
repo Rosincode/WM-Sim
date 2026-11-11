@@ -222,6 +222,7 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
   /** Doelstand als een andere speler rijdt (of de truck heeft geparkeerd); de truck beweegt er soepel naartoe. */
   let remote: { x: number; z: number; r: number; h: number } | null = null;
   let remoteDriven = false;
+  let remoteSteer = 0;
 
   function getState(): ForkliftState {
     const t = remote ?? { x: g.position.x, z: g.position.z, r: g.rotation.y, h: forkH };
@@ -268,7 +269,8 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
     g.rotation.y += Math.atan2(Math.sin(t.r - g.rotation.y), Math.cos(t.r - g.rotation.y)) * (far ? 1 : k);
     forkH += (t.h - forkH) * k;
     speed = 0;
-    steer = 0;
+    steer += (remoteSteer - steer) * k;
+    wheelRim.rotation.z = -steer * 1.2;
     carriage.position.y = forkH - 0.11;
     innerMast.position.y = Math.max(0, forkH - 1.7);
     marker.visible = false;
@@ -324,6 +326,14 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
       wheelGrip.getWorldPosition(point);
       normal.set(0, 0, -1).transformDirection(wheelRim.matrixWorld);
       point.addScaledVector(normal, 0.022); // bovenop de rand
+    },
+    /** Stuuruitslag -1..1 (links +). */
+    get steer() {
+      return steer;
+    },
+    /** Stuuruitslag van de speler die op afstand rijdt, zodat het stuur (en zijn hand) meedraait. */
+    setRemoteSteer(v: number) {
+      remoteSteer = THREE.MathUtils.clamp(v, -1, 1);
     },
     get driving() {
       return driving;

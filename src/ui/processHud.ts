@@ -64,14 +64,14 @@ export function createProcessHud(sim: Warehouse) {
     if (log.length > 60) log.pop();
     dirty = true;
   };
-  onProcessEvent((e) => {
-    const map = WMS_ACTIONS[e.type];
+  // WMS = door de WMS verwerkt, geweigerd = de WMS zei nee, lokaal = nog geen endpoint (alleen in de game).
+  onProcessEvent((e, result) => {
     pushLog({
       at: now(),
-      title: `${e.type} → ${map.action}`,
-      detail: describe(e),
-      badge: map.linked ? 'WMS' : 'voorstel',
-      cls: map.linked ? 'linked' : 'proposed',
+      title: `${e.type} → ${WMS_ACTIONS[e.type]}`,
+      detail: result.ok ? describe(e) : `${describe(e)} — ${result.error ?? 'geweigerd'}`,
+      badge: !result.ok ? 'geweigerd' : result.linked ? 'WMS' : 'lokaal',
+      cls: !result.ok ? 'error' : result.linked ? 'linked' : 'proposed',
     });
   });
 
@@ -141,7 +141,7 @@ export function createProcessHud(sim: Warehouse) {
           : 'Handen vrij';
     const html = `
       <div class="goal">${esc(obj?.text ?? 'Wachten op werk…')}</div>
-      <div class="act ${it?.enabled ? '' : 'off'}"><kbd>E</kbd>${esc(it?.label ?? 'Loop naar een vrachtwagen, baan, pc of stelling')}</div>
+      <div class="act ${it?.enabled ? '' : 'off'}"><kbd>E</kbd>${esc(it?.label ?? 'Loop naar een vrachtwagen, baan, rolcontainer, pc of stelling')}</div>
       <div class="msg">${esc(carrying)}</div>
       ${sim.messages.slice(-3).map((m) => `<div class="msg ${m.kind}">${esc(m.text)}</div>`).join('')}`;
     if (html !== lastTask) {

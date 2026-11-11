@@ -1,17 +1,25 @@
 import type * as THREE from 'three';
-import { wms } from '../integrations/wms';
-import type { Item } from '../shared/contract';
-import { POINTS, dist, location } from '../sim/layout';
-import { createWarehouse, type SharedState } from '../sim/warehouse';
+import type { Item, Location, Order } from '../shared/contract';
+import { wms, type WmsClient } from '../integrations/wms';
+import { POINTS, dist } from '../sim/layout';
+import { createWarehouse, type SharedState, type Warehouse } from '../sim/warehouse';
 import { createPcScreen } from './pcScreen';
 import { createProcessHud } from './processHud';
 import { createWarehouseView } from './warehouseView';
+import { createWmsGateway } from './wmsGateway';
+import { mountWmsPanel } from './wmsPanel';
 
-// Koppelt de magazijn-sim aan de 3D-scène, de HUD en het toetsenbord.
-// Toetsen: E = scannen / actie (bij de pc: pc gebruiken), L = API-log, I = voorraad & orders.
+// Koppelt de magazijn-sim aan de WMS (poort + stand ophalen), de 3D-scène, de HUD en het toetsenbord.
+// Toetsen: E = scannen / actie (bij de pc: de WMS-app bedienen), L = API-log, I = voorraad & orders,
+// K = aanmelden bij de WMS-API.
 
-/** Binnen deze afstand van de pc opent E het pc-scherm; verder weglopen sluit het. */
+/** Binnen deze afstand van de pc opent E de WMS-app; verder weglopen sluit hem. */
 const PC_RADIUS = 2;
+/** Hoe vaak de stand uit de WMS wordt opgehaald (ms). */
+const POLL_MS = 3000;
+
+/** De laatste stand uit de WMS, voor het scherm van de handscanner. */
+export type WmsData = { mode: 'live' | 'mock'; locations: Location[]; stock: Item[]; orders: Order[] };
 
 export function mountWarehouse({
   scene,
@@ -25,9 +33,16 @@ export function mountWarehouse({
   /** false: de hal tekent de stellingvoorraad zelf (src/ui/scene/warehouse). */
   rackStock?: boolean;
 }) {
-  const sim = createWarehouse();
+  // Elke speler heeft zijn eigen mock-WMS. Zodra de wereld (mede) van een andere speler komt, loopt die mock
+  // niet meer gelijk en slaan we hem over; de echte WMS is voor iedereen dezelfde en blijft altijd leidend.
+  const mockOutOfStep = () => wms.client.mode === 'mock' && sim.foreign;
+  const sim: Warehouse = createWarehouse({
+    gateway: createWmsGateway({ bypass: mockOutOfStep }),
+    demoOrders: () => wms.client.mode === 'mock', // met een echte WMS komen orders uit de WMS-app
+  });
   const view = createWarehouseView(scene, player, sim, { rackStock });
   const hud = createProcessHud(sim);
+  mountWmsPanel();
 
   const pos = () => ({ x: player.position.x, z: player.position.z });
   const nearPc = () => dist(pos(), POINTS.terminal) <= PC_RADIUS;
@@ -47,100 +62,60 @@ export function mountWarehouse({
     if (e.code === 'KeyI') hud.setTab('stock');
   });
 
-  // WMS is leidend: voorraad en open orders overnemen bij start en na in- of uitloggen (alleen lezen).
-  // Multiplayer: wie bij een lopend spel aanschuift neemt die wereld over en laadt bij de start niet opnieuw.
-  let adopted = false;
-  async function syncFromWms(initial = false) {
+  // ---------- WMS is leidend: de stand ophalen ----------
+  const dataListeners: ((d: WmsData) => void)[] = [];
+  let lastData = '';
+  let locations: Location[] = [];
+  let locationsOf: WmsClient | null = null;
+  /** De client waarvan de hele wereld is overgenomen; bij een andere client (in- of uitloggen) gebeurt dat opnieuw. */
+  let loadedFrom: WmsClient | null = null;
+  let polling = false;
+  let lastPollAt = -Infinity;
+  let lastError = '';
+  let seenRevision = sim.revision;
+
+  async function poll() {
+    if (polling) return;
+    polling = true;
+    lastPollAt = performance.now();
     const client = wms.client;
+    const revision = sim.revision;
     try {
+      if (locationsOf !== client) {
+        locations = await client.getLocations();
+        locationsOf = client;
+      }
       const [stock, orders] = await Promise.all([client.getStock(), client.getOpenOrders()]);
-      if (initial && adopted) return;
-      if (client === wms.client) sim.loadSnapshot(stock, orders, client.mode === 'live' ? 'de WMS' : 'de mock-WMS');
-    } catch (err) {
-      hud.addError(`Voorraad laden mislukt: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  wms.onChange(() => void syncFromWms());
-  wms.onError((msg) => hud.addError(msg));
-  void syncFromWms(true);
+      if (client !== wms.client) return; // intussen in- of uitgelogd
+      lastError = '';
 
-  // --- Voorraad afstemmen: de WMS is leidend ---
-  // Elke handeling wordt bij de WMS geboekt. Wijkt de voorraad daarna toch af (een boeking is geweigerd,
-  // of iemand heeft in de WMS zelf iets gewijzigd), dan neemt het spel de stand van de WMS over.
-  let inTransit: () => Item[] = () => [];
-  let authority = true;
-  let checking = false;
-  let lastDiff = '';
-  let checkTimer = 6;
-
-  function totals(items: Item[], sign = 1, into = new Map<string, number>()) {
-    for (const i of items) {
-      const k = `${i.locationId}|${i.sku}`;
-      into.set(k, (into.get(k) ?? 0) + sign * i.qty);
-    }
-    return into;
-  }
-  const toItems = (m: Map<string, number>): Item[] =>
-    [...m]
-      .filter(([, qty]) => qty > 0)
-      .map(([k, qty]) => {
-        const [locationId, sku] = k.split('|');
-        return { locationId, sku, qty };
-      });
-  /** Wat het spel al heeft afgeboekt maar de WMS nog niet: gepickte regels en pallets op de heftruck. */
-  const transit = () => [...sim.pickedUnconfirmed(), ...inTransit()];
-  /** De voorraad die de WMS hoort te hebben als alles klopt. */
-  const expectedInWms = () => totals(transit(), 1, totals(sim.stockList()));
-
-  async function reconcile(force = false): Promise<string> {
-    const client = wms.client;
-    if (checking || wms.pending > 0) return 'bezig';
-    // Zonder echte WMS valt er niets af te stemmen; bij samen spelen doet alleen de host dit.
-    if (!force && (client.mode !== 'live' || !authority)) return 'niet van toepassing';
-    checking = true;
-    try {
-      const mark = wms.writes;
-      const items = await client.getStock();
-      if (client !== wms.client || wms.pending > 0 || wms.writes !== mark) return 'bezig'; // intussen is er geboekt
-      const inWms = totals(items.filter((i) => location(i.locationId) && i.qty > 0));
-      const expected = expectedInWms();
-      const diff = [...new Set([...inWms.keys(), ...expected.keys()])]
-        .filter((k) => (inWms.get(k) ?? 0) !== (expected.get(k) ?? 0))
-        .sort()
-        .join(', ');
-      if (!diff) {
-        lastDiff = '';
-        return 'gelijk';
+      const data: WmsData = { mode: client.mode, locations, stock, orders };
+      const json = JSON.stringify([data.mode, locations.length, stock, orders]);
+      if (json !== lastData) {
+        lastData = json;
+        dataListeners.forEach((l) => l(data));
       }
-      // Pas corrigeren als hetzelfde verschil twee keer achter elkaar gezien is: een boeking van een
-      // medespeler kan net onderweg zijn.
-      if (!force && diff !== lastDiff) {
-        lastDiff = diff;
-        return `verschil: ${diff}`;
+
+      if (loadedFrom !== client) {
+        // Multiplayer: wie bij een lopend spel aanschuift neemt die wereld over en laadt bij de start niet opnieuw.
+        const joined = loadedFrom === null && sim.foreign;
+        loadedFrom = client;
+        if (!joined) sim.loadSnapshot(stock, orders, client.mode === 'live' ? 'de WMS' : 'de mock-WMS');
+      } else if (sim.authority && !mockOutOfStep() && sim.pending === 0 && sim.revision === revision) {
+        // Alleen de host haalt de stand binnen (de rest krijgt hem via de gedeelde wereld), en alleen als
+        // er sinds het ophalen niets is gebeurd: anders zou een oude stand een verse handeling terugdraaien.
+        sim.syncFromWms(stock, orders);
       }
-      lastDiff = '';
-      const n = diff.split(', ').length;
-      sim.syncStock(toItems(totals(transit(), -1, inWms)), `Voorraad gelijkgetrokken met de WMS (${n} regel${n === 1 ? '' : 's'} week af).`);
-      return `gecorrigeerd: ${diff}`;
     } catch (err) {
-      return `fout: ${err instanceof Error ? err.message : String(err)}`;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg !== lastError) hud.addError(`Stand ophalen uit de WMS mislukt: ${msg}`);
+      lastError = msg;
     } finally {
-      checking = false;
+      polling = false;
     }
   }
-  wms.onIdle(() => (checkTimer = Math.min(checkTimer, 1.5)));
-
-  /** Samen spelen zonder echte WMS: de eigen mock volgt de gedeelde wereld, zodat scanner en tablet kloppen. */
-  function mirrorToMock() {
-    const client = wms.client;
-    if (client.mode !== 'mock' || !client.mirror || wms.pending > 0) return;
-    client.mirror(
-      toItems(expectedInWms()),
-      sim.orders
-        .filter((o) => o.status === 'open' || o.status === 'picking')
-        .map((o) => ({ id: o.id, lines: o.lines, status: 'open' as const })),
-    );
-  }
+  wms.onChange(() => void poll());
+  void poll();
 
   return {
     stockList: () => sim.stockList(),
@@ -148,40 +123,34 @@ export function mountWarehouse({
     carrying: () => !!sim.carry,
     /** Wat de speler draagt, voor andere spelers: '' (niets), 'order' of het artikel van de pallet. */
     carryLabel: () => (sim.carry?.kind === 'pallet' ? sim.carry.pallet.sku : sim.carry ? 'order' : ''),
+    /** De handscanner las een locatielabel: de sim legt de scan voor aan de WMS. null = alleen kijken. */
+    scan: (code: string) => sim.scan(code, pos()),
+    /** De stand uit de WMS, telkens als die verandert (voor het scherm van de handscanner). */
+    onWmsData(l: (d: WmsData) => void) {
+      dataListeners.push(l);
+    },
     /** Multiplayer: de gedeelde wereld lezen, overnemen en bepalen wie hem laat draaien. */
     shared: {
       state: () => sim.sharedState(),
-      apply(s: SharedState) {
-        adopted = true;
-        sim.applyShared(s);
-        mirrorToMock();
-      },
-      setAuthority(on: boolean) {
-        authority = on;
-        sim.setAuthority(on);
-      },
+      apply: (s: SharedState) => sim.applyShared(s),
+      setAuthority: sim.setAuthority,
     },
     /** Voor de heftruck: hele pallets van en naar stellinglocaties. */
     forkliftTake: sim.forkliftTake,
     forkliftPlace: sim.forkliftPlace,
-    /** Pallets die van een locatie zijn gehaald maar nog niet zijn neergezet (heftruck). */
-    setInTransit(fn: () => Item[]) {
-      inTransit = fn;
-    },
-    /** Vergelijkt de voorraad met de WMS en neemt bij een blijvend verschil de WMS over. */
-    reconcile,
     update(dt: number) {
       sim.update(dt);
-      if ((checkTimer -= dt) <= 0) {
-        checkTimer = 6;
-        void reconcile();
-      }
       view.update(dt);
 
       const near = nearPc();
       if (pc.isOpen && !near) pc.close();
       pc.update(dt);
       hud.update(dt, pos(), near ? (pc.isOpen ? 'Pc verlaten' : 'Pc gebruiken: WMS openen') : undefined);
+
+      // Direct na een handeling de stand opnieuw ophalen, verder op een vast ritme.
+      const settled = sim.pending === 0 && sim.revision !== seenRevision;
+      if (settled) seenRevision = sim.revision;
+      if (settled || performance.now() - lastPollAt > POLL_MS) void poll();
     },
   };
 }

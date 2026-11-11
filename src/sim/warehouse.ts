@@ -1,12 +1,15 @@
 import type { Item, Order } from '../shared/contract';
-import { publish, type Direction } from './events';
+import { publish, type Direction, type ProcessEvent, type ScanKind } from './events';
 import {
-  DOCKS, LANE_SLOTS, LOCATIONS, POINTS, SKUS, SKU_NAMES,
+  DOCKS, LANE_SLOTS, LOCATIONS, POINTS, SKUS,
   dist, lanePoint, location, shelfLocations, type Dock, type Point,
 } from './layout';
+import { offlineGateway, type WmsGateway, type WmsReply } from './wms';
 
-// De fysieke wereld van het magazijn: vrachtwagens, pallets, voorraad op locaties en orders.
-// Elke handeling van de speler is een processtap die als event wordt gepubliceerd.
+// De fysieke wereld van het magazijn: vrachtwagens, pallets, rolcontainers en wat er in de stellingen staat.
+// De sim beslist niets wat van de WMS is: geen orders aanmaken, geen locatie-advies, geen pickverdeling,
+// geen voorraadcontroles. Elke handeling van de speler gaat eerst als vraag naar de WMS (src/sim/wms.ts);
+// pas na akkoord gebeurt hij fysiek. Weigert de WMS, dan gebeurt er niets en ziet de speler de melding.
 
 export type Pallet = { id: string; sku: string; qty: number };
 export type TruckStatus = 'arriving' | 'waiting' | 'checkedIn' | 'departing';
@@ -22,29 +25,54 @@ export type Truck = {
   cargo: Pallet[];
   loaded: string[];
 };
-export type PickTask = { sku: string; qty: number; locationId: string; done: boolean };
+/** picked = wat er al in de rolcontainer ligt. */
+export type OrderLine = { sku: string; qty: number; picked: number };
+/** Eén greep uit een locatie; booked = de WMS heeft hem al afgeboekt. */
+export type Pick = { sku: string; qty: number; locationId: string; booked: boolean };
+/** Waar de rolcontainer van de order fysiek is; 'open' = nog niet gepakt. */
 export type SimOrderStatus = 'open' | 'picking' | 'picked' | 'staged' | 'loaded' | 'shipped';
-export type SimOrder = { id: string; lines: { sku: string; qty: number }[]; status: SimOrderStatus; tasks: PickTask[] };
-export type Carry = { kind: 'pallet'; pallet: Pallet; targetId: string; fromId: string } | { kind: 'order'; orderId: string } | null;
+export type SimOrder = {
+  id: string;
+  lines: OrderLine[];
+  status: SimOrderStatus;
+  /** Status in de WMS toen de order daar voor het laatst gelezen of gewijzigd is. */
+  wmsStatus: Order['status'];
+  picks: Pick[];
+};
+export type Carry = { kind: 'pallet'; pallet: Pallet; fromId: string } | { kind: 'order'; orderId: string } | null;
 export type Message = { text: string; kind: 'info' | 'ok' | 'err'; at: number };
 export type Interaction = { label: string; point: Point; enabled: boolean; run?: () => void };
-export type Objective = { point: Point; level?: number; text: string };
+/** point ontbreekt als de WMS (app of scanner) de speler moet vertellen waar hij heen moet. */
+export type Objective = { point?: Point; level?: number; text: string };
+/** Uitkomst van een scan of handeling, voor het scherm van de scanner. */
+export type ScanResult = { ok: boolean; text: string };
 
 const DRIVE_SECONDS = 4;
-const ORDER_INTERVAL = 45;
-const MAX_OPEN_ORDERS = 2;
+const DEMO_ORDER_INTERVAL = 45;
+const DEMO_MAX_OPEN_ORDERS = 2;
+/** Zo dichtbij (m) moet je staan om op een gescande locatie iets neer te zetten of te pakken. */
+const REACH = 3.2;
+const DOCK_REACH = 4.5;
 
 const rand = (n: number) => Math.floor(Math.random() * n);
 const pad = (n: number, w = 3) => String(n).padStart(w, '0');
-const stamp = Date.now().toString(36).slice(-4).toUpperCase(); // uniek per sessie, voor order-id's in de echte WMS
+const stamp = Date.now().toString(36).slice(-4).toUpperCase(); // uniek per sessie, voor id's in de echte WMS
 
-export function createWarehouse() {
-  const stock = new Map<string, number>(); // sleutel: locationId|sku
+interface Options {
+  gateway?: WmsGateway;
+  /** true: er is geen WMS-app om orders in te voeren (mock); de sim speelt dan zelf klant via create_order. */
+  demoOrders?: () => boolean;
+}
+
+export function createWarehouse({ gateway = offlineGateway, demoOrders = () => false }: Options = {}) {
+  const stock = new Map<string, number>(); // wat er fysiek in de stellingen staat; sleutel: locationId|sku
   const orders: SimOrder[] = [];
   // Per dock een inslagbaan (pallets) en een uitslagbaan (order-id's).
   const laneIn: (Pallet | null)[][] = DOCKS.map(() => Array(LANE_SLOTS).fill(null));
   const laneOut: (string | null)[][] = DOCKS.map(() => Array(LANE_SLOTS).fill(null));
   const trucks: { in: Truck | null; out: Truck | null } = { in: null, out: null };
+  /** Pallets die op de heftruck (of los op de vloer) staan: fysiek weg uit de stelling, in de WMS nog niet. */
+  const forks = new Map<string, { locationId: string; sku: string; qty: number }>();
   const messages: Message[] = [];
   let carry: Carry = null;
   let clock = 0;
@@ -54,14 +82,54 @@ export function createWarehouse() {
   /** Dock waar de volgende (of huidige) uitgaande vrachtwagen komt; daar zet je orders klaar. */
   let outDock = rand(DOCKS.length);
   const seq = { truckIn: 1, truckOut: 1, pallet: 1, order: 1 };
+  let authority = true;
+  /** De wereld is (mede) door een andere speler gevormd. */
+  let foreign = false;
+  /** Aantal vragen dat nog bij de WMS loopt. */
+  let pending = 0;
+  /** Telt elke wijziging in de fysieke wereld; zo herkent de UI een verouderde WMS-stand. */
+  let revision = 0;
+  const touch = () => void revision++;
 
   // --- Berichten ---
   function say(text: string, kind: Message['kind'] = 'info') {
     messages.push({ text, kind, at: clock });
     if (messages.length > 6) messages.shift();
   }
+  const done = (text: string): ScanResult => (say(text, 'ok'), { ok: true, text });
+  const refused = (text: string): ScanResult => (say(text, 'err'), { ok: false, text });
+  const wmsRefused = (r: WmsReply & { ok: false }, what = '') => refused(`WMS weigert${what}: ${r.error}`);
 
-  // --- Voorraad ---
+  // --- De WMS vragen ---
+  async function ask(e: ProcessEvent): Promise<WmsReply> {
+    pending++;
+    let reply: WmsReply;
+    try {
+      reply = await gateway.send(e);
+    } catch (err) {
+      reply = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+    pending--;
+    publish(e, reply.ok ? { ok: true, linked: reply.linked } : { ok: false, linked: true, error: reply.error });
+    return reply;
+  }
+  /** Elke scan, ook een mislukte (register_scan). */
+  const scanned = (kind: ScanKind, barcode: string, ok: boolean, locationId?: string) =>
+    publish({ type: 'Scanned', kind, barcode, ok, locationId });
+
+  /** De speler doet één ding tegelijk: tijdens een vraag aan de WMS wacht de volgende handeling. */
+  let acting = false;
+  async function guard(action: () => Promise<ScanResult> | ScanResult): Promise<ScanResult> {
+    if (acting) return { ok: false, text: 'Even wachten: de WMS verwerkt de vorige scan.' };
+    acting = true;
+    try {
+      return await action();
+    } finally {
+      acting = false;
+    }
+  }
+
+  // --- Wat er fysiek staat ---
   const key = (loc: string, sku: string) => `${loc}|${sku}`;
   const qtyAt = (loc: string, sku: string) => stock.get(key(loc, sku)) ?? 0;
   function add(loc: string, sku: string, qty: number) {
@@ -76,208 +144,239 @@ export function createWarehouse() {
     });
   }
   const stockAt = (loc: string) => stockList().filter((s) => s.locationId === loc);
-  const shelfQty = (sku: string) =>
-    shelfLocations().reduce((n, l) => n + qtyAt(l.id, sku), 0);
-
-  /** Vrij beschikbaar: voorraad in de stellingen minus wat open orders nog nodig hebben. */
-  function available(sku: string) {
-    let claimed = 0;
-    for (const o of orders) {
-      if (o.status === 'open') claimed += o.lines.filter((l) => l.sku === sku).reduce((n, l) => n + l.qty, 0);
-      if (o.status === 'picking') claimed += o.tasks.filter((t) => !t.done && t.sku === sku).reduce((n, t) => n + t.qty, 0);
-    }
-    return shelfQty(sku) - claimed;
-  }
-
-  function seed() {
-    const shelves = shelfLocations();
-    for (let i = 0; i < 70; i++) add(shelves[rand(shelves.length)].id, SKUS[rand(SKUS.length)], 5 + rand(46));
-  }
-  seed();
-
-  // --- Wegzetten: locatie kiezen ---
-  function putawayTarget(sku: string): string | null {
-    const shelves = shelfLocations();
-    const same = shelves.find((l) => qtyAt(l.id, sku) > 0 && stockAt(l.id).length === 1);
-    if (same) return same.id;
-    const empty = shelves.filter((l) => stockAt(l.id).length === 0);
-    return (empty.find((l) => l.type === 'rack') ?? empty[0])?.id ?? null;
-  }
-
-  // --- Picken: bronlocaties volgens dezelfde regel als de WMS (eerst pick, dan rack, op id) ---
-  function pickTasks(o: SimOrder): PickTask[] | string {
-    const rank = (id: string) => (location(id)?.type === 'pick' ? 0 : 1);
-    const tasks: PickTask[] = [];
-    for (const line of o.lines) {
-      const sources = shelfLocations()
-        .filter((l) => qtyAt(l.id, line.sku) > 0)
-        .sort((a, b) => rank(a.id) - rank(b.id) || a.id.localeCompare(b.id));
-      let rest = line.qty;
-      for (const s of sources) {
-        const take = Math.min(rest, qtyAt(s.id, line.sku));
-        tasks.push({ sku: line.sku, qty: take, locationId: s.id, done: false });
-        rest -= take;
-        if (rest === 0) break;
-      }
-      if (rest > 0) return `Onvoldoende voorraad ${line.sku}: nodig ${line.qty}, aanwezig ${line.qty - rest}.`;
-    }
-    return tasks;
-  }
+  const shelfQty = (sku: string) => shelfLocations().reduce((n, l) => n + qtyAt(l.id, sku), 0);
+  const isShelf = (id: string) => {
+    const l = location(id);
+    return !!l && l.type !== 'dock';
+  };
 
   const order = (id: string) => orders.find((o) => o.id === id);
+  const truck = (id: string) => [trucks.in, trucks.out].find((t) => t?.id === id) ?? null;
   const carriedOrder = () => (carry?.kind === 'order' ? order(carry.orderId) : undefined);
-  const nextTask = (o?: SimOrder) => o?.tasks.find((t) => !t.done);
+  const openLines = (o: SimOrder) => o.lines.filter((l) => l.picked < l.qty);
+  const linesText = (lines: { sku: string; qty: number }[]) => lines.map((l) => `${l.qty}× ${l.sku}`).join(', ');
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-  // ========== Acties ==========
+  // ========== Handelingen: eerst de WMS, dan de fysieke wereld ==========
 
-  function createOrder() {
-    const candidates = SKUS.filter((s) => available(s) > 0).sort(() => Math.random() - 0.5);
-    if (candidates.length === 0) {
-      say('Geen vrije voorraad voor een nieuwe order.', 'err');
-      return;
-    }
-    const lines = candidates
-      .slice(0, 1 + rand(Math.min(3, candidates.length)))
-      .map((sku) => ({ sku, qty: 1 + rand(Math.min(5, available(sku))) }));
-    const id = `ORD-${stamp}-${pad(seq.order++)}`;
-    orders.push({ id, lines, status: 'open', tasks: [] });
-    say(`Nieuwe order ${id} (${lines.length} regel${lines.length > 1 ? 's' : ''}).`);
-    publish({ type: 'OrderCreated', order: { id, lines: structuredClone(lines), status: 'open' } });
+  async function checkIn(truckId: string): Promise<ScanResult> {
+    const t = truck(truckId);
+    if (!t || t.status !== 'waiting') return refused(`${truckId} staat niet te wachten.`);
+    const r = await ask({ type: 'TruckCheckedIn', truckId, direction: t.direction, dockId: t.dockId });
+    scanned('truck', truckId, r.ok, t.dockId);
+    if (!r.ok) return wmsRefused(r);
+    const now = truck(truckId);
+    if (now) now.status = 'checkedIn';
+    touch();
+    return done(`${truckId} aangemeld aan ${t.dockId}.`);
   }
 
-  function checkIn(t: Truck) {
-    t.status = 'checkedIn';
-    publish({ type: 'Scanned', kind: 'truck', barcode: t.id, ok: true, locationId: t.dockId });
-    publish({ type: 'TruckCheckedIn', truckId: t.id, direction: t.direction, dockId: t.dockId });
-    say(`${t.id} aangemeld aan ${t.dockId}.`, 'ok');
-  }
-
-  function checkOut(t: Truck) {
-    t.status = 'departing';
-    for (const id of t.loaded) {
+  async function checkOut(truckId: string): Promise<ScanResult> {
+    const t = truck(truckId);
+    if (!t || t.status !== 'checkedIn') return refused(`${truckId} is niet aangemeld.`);
+    const r = await ask({ type: 'TruckCheckedOut', truckId, direction: t.direction, dockId: t.dockId, orderIds: [...t.loaded] });
+    scanned('truck', truckId, r.ok, t.dockId);
+    if (!r.ok) return wmsRefused(r);
+    const now = truck(truckId);
+    if (!now) return refused(`${truckId} is al vertrokken.`);
+    now.status = 'departing';
+    for (const id of now.loaded) {
       const o = order(id);
       if (o) o.status = 'shipped';
     }
-    publish({ type: 'Scanned', kind: 'truck', barcode: t.id, ok: true, locationId: t.dockId });
-    publish({ type: 'TruckCheckedOut', truckId: t.id, direction: t.direction, dockId: t.dockId, orderIds: [...t.loaded] });
-    say(`${t.id} uitgemeld${t.loaded.length ? ` met ${t.loaded.length} order(s)` : ''}.`, 'ok');
+    touch();
+    return done(`${truckId} uitgemeld${now.loaded.length ? ` met ${plural(now.loaded.length, 'order')}` : ''}.`);
   }
 
-  function unload(t: Truck) {
+  async function unload(truckId: string): Promise<ScanResult> {
+    const t = truck(truckId);
+    const pallet = t?.cargo[0];
+    if (!t || !pallet) return refused('Er staat niets meer in de vrachtwagen.');
     const { inId } = DOCKS[t.dock];
     const lane = laneIn[t.dock];
-    const pallet = t.cargo.shift()!;
-    lane[lane.lastIndexOf(null)] = pallet; // doorschuiven: de eerste pallet staat het verst de hal in
-    add(inId, pallet.sku, pallet.qty);
-    publish({ type: 'Scanned', kind: 'pallet', barcode: pallet.id, ok: true, locationId: inId });
-    publish({ type: 'GoodsReceived', sku: pallet.sku, qty: pallet.qty, dockId: inId, palletId: pallet.id });
-    say(`Ontvangen op ${inId}: ${pallet.id}, ${pallet.qty}× ${pallet.sku}.`, 'ok');
+    if (!lane.includes(null)) return refused(`${inId} staat vol: zet eerst pallets weg.`);
+    const r = await ask({ type: 'GoodsReceived', sku: pallet.sku, qty: pallet.qty, dockId: inId, palletId: pallet.id });
+    scanned('pallet', pallet.id, r.ok, inId);
+    if (!r.ok) return wmsRefused(r);
+    const now = truck(truckId);
+    const i = now?.cargo.findIndex((p) => p.id === pallet.id) ?? -1;
+    if (!now || i < 0 || !laneIn[t.dock].includes(null)) return refused(`${pallet.id} is al gelost.`);
+    now.cargo.splice(i, 1);
+    laneIn[t.dock][laneIn[t.dock].lastIndexOf(null)] = pallet; // doorschuiven: de eerste pallet staat het verst de hal in
+    touch();
+    return done(`Ontvangen op ${inId}: ${pallet.id}, ${pallet.qty}× ${pallet.sku}.`);
   }
 
-  function pickUpPallet(d: Dock, slot: number) {
-    const pallet = laneIn[d.index][slot]!;
-    const targetId = putawayTarget(pallet.sku);
-    publish({ type: 'Scanned', kind: 'pallet', barcode: pallet.id, ok: !!targetId, locationId: d.inId });
-    if (!targetId) {
-      say('Geen vrije stellinglocatie voor deze pallet.', 'err');
-      return;
-    }
+  function pickUpPallet(d: Dock, slot: number): ScanResult {
+    const pallet = laneIn[d.index][slot];
+    if (!pallet || carry) return refused('Hier valt niets op te pakken.');
+    scanned('pallet', pallet.id, true, d.inId);
     laneIn[d.index][slot] = null;
-    carry = { kind: 'pallet', pallet, targetId, fromId: d.inId };
-    say(`${pallet.id} opgepakt. Wegzetten naar ${targetId}.`);
+    carry = { kind: 'pallet', pallet, fromId: d.inId };
+    touch();
+    return done(`${pallet.id} opgepakt (${pallet.qty}× ${pallet.sku}). Scan de stellinglocatie waar je hem wegzet.`);
   }
 
-  function returnPallet(d: Dock) {
-    if (carry?.kind !== 'pallet') return;
+  function returnPallet(d: Dock): ScanResult {
+    if (carry?.kind !== 'pallet') return refused('Je draagt geen pallet.');
     const lane = laneIn[d.index];
+    if (!lane.includes(null)) return refused(`${d.inId} staat vol.`);
     lane[lane.lastIndexOf(null)] = carry.pallet;
-    say(`${carry.pallet.id} teruggezet op ${d.inId}.`);
+    const text = `${carry.pallet.id} teruggezet op ${d.inId}.`;
     carry = null;
+    touch();
+    return done(text);
   }
 
-  function putaway(locId: string) {
-    if (carry?.kind !== 'pallet') return;
+  /** Zet de gedragen pallet op de gescande locatie. Of dat mag bepaalt de WMS (confirm_putaway). */
+  async function putaway(locId: string): Promise<ScanResult> {
+    if (carry?.kind !== 'pallet') return refused('Je draagt geen pallet.');
     const { pallet, fromId } = carry;
-    add(fromId, pallet.sku, -pallet.qty);
-    add(locId, pallet.sku, pallet.qty);
-    publish({ type: 'Scanned', kind: 'location', barcode: locId, ok: true, locationId: locId });
-    publish({
+    if (!isShelf(locId)) return refused(`${locId} is geen stellinglocatie.`);
+    if (stockAt(locId).some((s) => s.sku !== pallet.sku)) {
+      scanned('location', locId, false, locId);
+      return refused(`Op ${locId} staat al een ander artikel: daar past deze pallet niet bij.`);
+    }
+    const r = await ask({
       type: 'PutawayDone', sku: pallet.sku, qty: pallet.qty,
       fromLocationId: fromId, locationId: locId, palletId: pallet.id,
     });
-    say(`${pallet.id} weggezet op ${locId}.`, 'ok');
-    carry = null;
+    scanned('location', locId, r.ok, locId);
+    if (!r.ok) return wmsRefused(r);
+    if (carry?.kind === 'pallet' && carry.pallet.id === pallet.id) carry = null;
+    add(locId, pallet.sku, pallet.qty);
+    touch();
+    return done(`${pallet.id} weggezet op ${locId}.`);
   }
 
-  function wrongScan(locId: string, expected: string) {
-    publish({ type: 'Scanned', kind: 'location', barcode: locId, ok: false, locationId: locId });
-    say(`Verkeerde locatie ${locId}: verwacht ${expected}.`, 'err');
-  }
-
-  function infoScan(sectionLocId: string) {
-    const loc = location(sectionLocId)!;
-    const levels = LOCATIONS.filter((l) => l.x === loc.x && l.z === loc.z && l.type !== 'dock');
-    publish({ type: 'Scanned', kind: 'location', barcode: loc.id, ok: true, locationId: loc.id });
-    const text = levels
-      .map((l) => `${l.id}: ${stockAt(l.id).map((s) => `${s.qty}× ${s.sku}`).join(', ') || 'leeg'}`)
-      .join(' · ');
-    say(text);
-  }
-
-  function startPick(o: SimOrder) {
-    const tasks = pickTasks(o);
-    publish({ type: 'Scanned', kind: 'order', barcode: o.id, ok: typeof tasks !== 'string' });
-    if (typeof tasks === 'string') {
-      say(`${o.id}: ${tasks}`, 'err');
-      return;
+  /** Pakt een rolcontainer voor de eerste open order uit de WMS (start_picking). */
+  async function takeContainer(): Promise<ScanResult> {
+    if (carry) return refused('Handen vol.');
+    const o = orders.find((x) => x.status === 'open');
+    if (!o) return refused('Geen open orders in de WMS.');
+    // Stond de order in de WMS al op picking (herstart, of eerder teruggezet), dan gaan we daarmee verder.
+    if (o.wmsStatus !== 'picking') {
+      const r = await ask({ type: 'PickStarted', orderId: o.id });
+      scanned('order', o.id, r.ok);
+      if (!r.ok) return wmsRefused(r);
     }
-    o.tasks = tasks;
-    o.status = 'picking';
-    carry = { kind: 'order', orderId: o.id };
-    publish({ type: 'PickStarted', orderId: o.id });
-    say(`Picken gestart: ${o.id}, ${tasks.length} pickopdracht(en).`);
+    const now = order(o.id);
+    if (!now || now.status !== 'open' || carry) return refused(`${o.id} is al door iemand anders gepakt.`);
+    now.status = 'picking';
+    now.wmsStatus = 'picking';
+    carry = { kind: 'order', orderId: now.id };
+    touch();
+    return done(`Rolcontainer voor ${now.id}: ${linesText(now.lines)}. Zoek de locaties op in de WMS-app.`);
   }
 
-  function pickLine(o: SimOrder, task: PickTask) {
-    add(task.locationId, task.sku, -task.qty);
-    task.done = true;
-    publish({ type: 'Scanned', kind: 'location', barcode: task.locationId, ok: true, locationId: task.locationId });
-    publish({ type: 'PickLineConfirmed', orderId: o.id, sku: task.sku, qty: task.qty, locationId: task.locationId });
-    if (nextTask(o)) {
-      say(`Gepickt: ${task.qty}× ${task.sku} van ${task.locationId}.`, 'ok');
-    } else {
+  /** Legt alles terug en zet de rolcontainer weer weg. */
+  function returnContainer(): ScanResult {
+    const o = carriedOrder();
+    if (!o || o.status !== 'picking') return refused('Je hebt geen order onderhanden.');
+    if (o.picks.some((p) => p.booked)) return refused(`${o.id}: de WMS heeft al picks geboekt; maak de order af.`);
+    for (const p of o.picks) add(p.locationId, p.sku, p.qty);
+    o.picks = [];
+    for (const l of o.lines) l.picked = 0;
+    o.status = 'open';
+    carry = null;
+    touch();
+    return done(`Rolcontainer van ${o.id} teruggezet.`);
+  }
+
+  /** Pakt van de gescande locatie wat de order nog nodig heeft. Of dat klopt bepaalt de WMS. */
+  async function pickAt(locId: string): Promise<ScanResult> {
+    const o = carriedOrder();
+    if (!o || o.status !== 'picking') return refused('Je hebt geen order onderhanden.');
+    if (openLines(o).length === 0) return completePick(o.id);
+    const line = openLines(o).find((l) => qtyAt(locId, l.sku) > 0);
+    if (!line) {
+      scanned('location', locId, false, locId);
+      return refused(`Op ${locId} ligt niets wat ${o.id} nog nodig heeft.`);
+    }
+    const { sku } = line;
+    const qty = Math.min(line.qty - line.picked, qtyAt(locId, sku));
+    const r = await ask({ type: 'PickLineConfirmed', orderId: o.id, sku, qty, locationId: locId });
+    scanned('location', locId, r.ok, locId);
+    if (!r.ok) return wmsRefused(r);
+    const now = order(o.id);
+    const nowLine = now?.lines.find((l) => l.sku === sku && l.picked < l.qty);
+    if (!now || !nowLine || qtyAt(locId, sku) < qty) return refused(`${locId} is intussen gewijzigd: scan opnieuw.`);
+    add(locId, sku, -qty);
+    nowLine.picked += qty;
+    now.picks.push({ sku, qty, locationId: locId, booked: r.linked });
+    touch();
+    if (openLines(now).length === 0) return completePick(now.id);
+    return done(`Gepickt: ${qty}× ${sku} van ${locId}. Nog nodig: ${linesText(openLines(now).map((l) => ({ sku: l.sku, qty: l.qty - l.picked })))}.`);
+  }
+
+  /** Meldt de complete order af bij de WMS (confirm_pick). */
+  async function completePick(orderId: string): Promise<ScanResult> {
+    const r = await ask({ type: 'PickCompleted', orderId });
+    if (!r.ok) return wmsRefused(r, ` het afmelden van ${orderId}`);
+    const o = order(orderId);
+    if (o) {
       o.status = 'picked';
-      publish({ type: 'PickCompleted', orderId: o.id });
-      say(`${o.id} compleet gepickt. Breng naar een uitslaglocatie of de vrachtwagen.`, 'ok');
+      o.wmsStatus = 'done';
     }
+    touch();
+    return done(`${orderId} compleet gepickt en afgemeld. Breng hem naar een uitslaglocatie of de vrachtwagen.`);
   }
 
-  function stage(o: SimOrder, d: Dock) {
-    const lane = laneOut[d.index];
-    lane[lane.indexOf(null)] = o.id;
-    o.status = 'staged';
+  async function stage(dockIndex: number): Promise<ScanResult> {
+    const o = carriedOrder();
+    const d = DOCKS[dockIndex];
+    if (!o || o.status !== 'picked') return refused('Je hebt geen afgemelde order bij je.');
+    if (!laneOut[dockIndex].includes(null)) return refused(`${d.outId} staat vol.`);
+    const r = await ask({ type: 'OrderStaged', orderId: o.id, dockId: d.outId });
+    scanned('location', d.outId, r.ok, d.outId);
+    if (!r.ok) return wmsRefused(r);
+    const now = order(o.id);
+    const lane = laneOut[dockIndex];
+    if (!now || !lane.includes(null)) return refused(`${d.outId} staat vol.`);
+    lane[lane.indexOf(null)] = now.id;
+    now.status = 'staged';
     carry = null;
-    publish({ type: 'Scanned', kind: 'location', barcode: d.outId, ok: true, locationId: d.outId });
-    publish({ type: 'OrderStaged', orderId: o.id, dockId: d.outId });
-    say(`${o.id} klaargezet op ${d.outId}.`, 'ok');
+    touch();
+    return done(`${now.id} klaargezet op ${d.outId}.`);
   }
 
-  function takeStaged(d: Dock, slot: number) {
-    const o = order(laneOut[d.index][slot]!)!;
+  function takeStaged(d: Dock, slot: number): ScanResult {
+    const id = laneOut[d.index][slot];
+    const o = id ? order(id) : undefined;
+    if (!o || carry) return refused('Hier valt niets op te pakken.');
     laneOut[d.index][slot] = null;
     o.status = 'picked';
     carry = { kind: 'order', orderId: o.id };
-    publish({ type: 'Scanned', kind: 'order', barcode: o.id, ok: true, locationId: d.outId });
-    say(`${o.id} opgepakt voor inladen.`);
+    scanned('order', o.id, true, d.outId);
+    touch();
+    return done(`${o.id} opgepakt voor inladen.`);
   }
 
-  function load(t: Truck, o: SimOrder) {
-    t.loaded.push(o.id);
-    o.status = 'loaded';
+  async function load(truckId: string): Promise<ScanResult> {
+    const t = truck(truckId);
+    const o = carriedOrder();
+    if (!t || !o) return refused('Niets om in te laden.');
+    const r = await ask({ type: 'OrderLoaded', orderId: o.id, truckId, dockId: t.dockId });
+    scanned('order', o.id, r.ok, t.dockId);
+    if (!r.ok) return wmsRefused(r);
+    const nowTruck = truck(truckId);
+    const now = order(o.id);
+    if (!nowTruck || !now) return refused(`${truckId} is al vertrokken.`);
+    nowTruck.loaded.push(now.id);
+    now.status = 'loaded';
     carry = null;
-    publish({ type: 'Scanned', kind: 'order', barcode: o.id, ok: true, locationId: t.dockId });
-    publish({ type: 'OrderLoaded', orderId: o.id, truckId: t.id, dockId: t.dockId });
-    say(`${o.id} ingeladen in ${t.id}.`, 'ok');
+    touch();
+    return done(`${now.id} ingeladen in ${truckId}.`);
+  }
+
+  /** Wat staat hier fysiek? Voor wie zonder scanner (E) langs een stelling loopt. */
+  function lookAt(sectionLocId: string): ScanResult {
+    const loc = location(sectionLocId)!;
+    const levels = LOCATIONS.filter((l) => l.x === loc.x && l.z === loc.z && l.type !== 'dock');
+    scanned('location', loc.id, true, loc.id);
+    const text = levels.map((l) => `${l.id}: ${linesText(stockAt(l.id)) || 'leeg'}`).join(' · ');
+    say(text);
+    return { ok: true, text };
   }
 
   // ========== Heftruck: hele pallets tussen stellinglocaties verplaatsen ==========
@@ -287,44 +386,60 @@ export function createWarehouse() {
     const top = stockAt(locId).sort((a, b) => b.qty - a.qty)[0];
     if (!top) return null;
     const qty = Math.min(maxQty, top.qty);
+    const pallet = { id: `PAL-${stamp}-${pad(seq.pallet++, 4)}`, sku: top.sku, qty };
     add(locId, top.sku, -qty);
+    forks.set(pallet.id, { locationId: locId, sku: top.sku, qty });
+    touch();
     say(`Heftruck: ${qty}× ${top.sku} van ${locId} gepakt.`);
-    return { id: `PAL-${stamp}-${pad(seq.pallet++, 4)}`, sku: top.sku, qty };
+    return pallet;
   }
 
-  /** Zet een pallet van de vorken op een stellinglocatie; verplaatsen geldt als wegzetten (confirm_putaway). */
+  /**
+   * Zet een pallet van de vorken op een stellinglocatie en meldt de verplaatsing bij de WMS (confirm_putaway).
+   * De pallet staat er dan al; weigert de WMS, dan blijft de WMS leidend en trekt de volgende stand het recht.
+   */
   function forkliftPlace(locId: string, pallet: Pallet, fromLocationId: string) {
     add(locId, pallet.sku, pallet.qty);
+    touch();
     if (fromLocationId === locId) {
+      forks.delete(pallet.id);
       say(`${pallet.id} teruggezet op ${locId}.`);
       return;
     }
-    publish({ type: 'Scanned', kind: 'location', barcode: locId, ok: true, locationId: locId });
-    publish({ type: 'PutawayDone', sku: pallet.sku, qty: pallet.qty, fromLocationId, locationId: locId, palletId: pallet.id });
-    say(`${pallet.id} verplaatst van ${fromLocationId} naar ${locId}.`, 'ok');
+    void ask({
+      type: 'PutawayDone', sku: pallet.sku, qty: pallet.qty,
+      fromLocationId, locationId: locId, palletId: pallet.id,
+    }).then((r) => {
+      forks.delete(pallet.id);
+      touch();
+      if (r.ok) say(`${pallet.id} verplaatst van ${fromLocationId} naar ${locId}.`, 'ok');
+      else say(`WMS weigert de verplaatsing van ${fromLocationId} naar ${locId}: ${r.error} De WMS blijft leidend.`, 'err');
+    });
   }
 
-  // ========== Interacties rond de speler ==========
+  // ========== Interacties rond de speler (E) ==========
+
+  type Action = () => Promise<ScanResult> | ScanResult;
+  const interaction = (label: string, point: Point, action?: Action): Interaction => ({
+    label, point, enabled: !!action, run: action && (() => void guard(action)),
+  });
 
   function truckInteraction(t: Truck | null): Interaction | null {
     if (!t || t.status === 'arriving' || t.status === 'departing') return null;
-    const point = DOCKS[t.dock].truck;
-    const i = (label: string, run?: () => void): Interaction => ({ label, point, enabled: !!run, run });
-    if (t.status === 'waiting') return i(`Aanmelden ${t.id}`, () => checkIn(t));
+    const i = (label: string, action?: Action) => interaction(label, DOCKS[t.dock].truck, action);
+    if (t.status === 'waiting') return i(`Scan ${t.id}: aanmelden`, () => checkIn(t.id));
     if (carry?.kind === 'pallet') return i('Zet eerst je pallet weg');
 
     if (t.direction === 'in') {
       if (carry) return i('Handen vol');
-      if (t.cargo.length === 0) return i(`Uitmelden ${t.id}`, () => checkOut(t));
-      if (!laneIn[t.dock].includes(null)) return i(`${DOCKS[t.dock].inId} vol: eerst wegzetten`);
+      if (t.cargo.length === 0) return i(`Scan ${t.id}: uitmelden`, () => checkOut(t.id));
       const p = t.cargo[0];
-      return i(`Scan ${p.id} en los (${p.qty}× ${p.sku}, nog ${t.cargo.length})`, () => unload(t));
+      return i(`Scan ${p.id} en los (${p.qty}× ${p.sku}, nog ${t.cargo.length})`, () => unload(t.id));
     }
 
     const o = carriedOrder();
-    if (o) return o.status === 'picked' ? i(`Scan ${o.id} en laad in`, () => load(t, o)) : i(`${o.id} is nog niet compleet`);
-    if (t.loaded.length === 0) return i('Laad eerst een gepickte order in');
-    return i(`Uitmelden ${t.id} (${t.loaded.length} order${t.loaded.length > 1 ? 's' : ''})`, () => checkOut(t));
+    if (o) return o.status === 'picked' ? i(`Scan ${o.id} en laad in`, () => load(t.id)) : i(`${o.id} is nog niet afgemeld`);
+    return i(`Scan ${t.id}: uitmelden (${plural(t.loaded.length, 'order')})`, () => checkOut(t.id));
   }
 
   function candidates(pos: Point): (Interaction & { radius: number })[] {
@@ -341,60 +456,66 @@ export function createWarehouse() {
       const inPoint = lanePoint(d.laneIn, pos);
       const inSlot = laneIn[d.index].findLastIndex((p) => p); // de pallet aan de halkant eerst
       if (carry?.kind === 'pallet') {
-        if (carry.fromId === d.inId)
-          push({ label: `Pallet terugzetten op ${d.inId}`, point: inPoint, enabled: true, run: () => returnPallet(d) }, 1.5);
+        if (carry.fromId === d.inId) push(interaction(`Pallet terugzetten op ${d.inId}`, inPoint, () => returnPallet(d)), 1.5);
       } else if (!carry && inSlot >= 0) {
         const p = laneIn[d.index][inSlot]!;
-        push({ label: `Scan ${p.id} op ${d.inId} en pak op (${p.qty}× ${p.sku})`, point: inPoint, enabled: true, run: () => pickUpPallet(d, inSlot) }, 1.5);
+        push(interaction(`Scan ${p.id} op ${d.inId} en pak op (${p.qty}× ${p.sku})`, inPoint, () => pickUpPallet(d, inSlot)), 1.5);
       }
 
       const outPoint = lanePoint(d.laneOut, pos);
       const outSlot = laneOut[d.index].findIndex((id) => id);
       if (o?.status === 'picked' && laneOut[d.index].includes(null)) {
-        push({ label: `${o.id} klaarzetten op ${d.outId}`, point: outPoint, enabled: true, run: () => stage(o, d) }, 1.5);
+        push(interaction(`Scan ${d.outId}: ${o.id} klaarzetten`, outPoint, () => stage(d.index)), 1.5);
       } else if (!carry && outSlot >= 0) {
-        push({ label: `Scan ${laneOut[d.index][outSlot]} op ${d.outId} en pak op`, point: outPoint, enabled: true, run: () => takeStaged(d, outSlot) }, 1.5);
+        push(interaction(`Scan ${laneOut[d.index][outSlot]} op ${d.outId} en pak op`, outPoint, () => takeStaged(d, outSlot)), 1.5);
       }
     }
 
-    // Orderterminal
-    const open = orders.find((x) => x.status === 'open');
+    // Rolcontainers: hier begin je aan de volgende order uit de WMS
     if (!carry) {
+      const open = orders.find((x) => x.status === 'open');
       push(
         open
-          ? { label: `Start picken ${open.id} (${open.lines.length} regel${open.lines.length > 1 ? 's' : ''})`, point: POINTS.terminal, enabled: true, run: () => startPick(open) }
-          : { label: 'Geen open orders: maak een testorder', point: POINTS.terminal, enabled: true, run: createOrder },
-        2,
-      );
-    } else if (o?.status === 'picking') {
-      push({ label: `Bezig met ${o.id}`, point: POINTS.terminal, enabled: false }, 2);
-    }
-
-    // Stellingen: doel-locatie scannen, of een andere locatie (fout / info)
-    const target =
-      carry?.kind === 'pallet' ? carry.targetId : o?.status === 'picking' ? nextTask(o)?.locationId : undefined;
-    const targetLoc = target ? location(target) : undefined;
-    if (targetLoc) {
-      const task = nextTask(o);
-      push({
-        label: carry?.kind === 'pallet'
-          ? `Scan ${target} en zet weg`
-          : `Scan ${target} en pick ${task!.qty}× ${task!.sku}`,
-        point: targetLoc,
-        enabled: true,
-        run: () => (carry?.kind === 'pallet' ? putaway(target!) : pickLine(o!, task!)),
-      }, 2.8);
-    }
-    const section = shelfLocations()
-      .filter((l) => l.level === 1)
-      .find((l) => dist(l, pos) < 1.8 && !(targetLoc && l.x === targetLoc.x && l.z === targetLoc.z));
-    if (section) {
-      push(
-        target
-          ? { label: `Scan ${section.id.slice(0, -2)}: verkeerde locatie`, point: section, enabled: true, run: () => wrongScan(section.id, target) }
-          : { label: `Scan ${section.id.slice(0, -2)}: voorraad bekijken`, point: section, enabled: true, run: () => infoScan(section.id) },
+          ? interaction(`Pak een rolcontainer voor ${open.id} (${plural(open.lines.length, 'regel')})`, POINTS.containers, takeContainer)
+          : interaction('Geen open orders in de WMS', POINTS.containers),
         1.8,
       );
+    } else if (o?.status === 'picking') {
+      push(interaction(`Rolcontainer van ${o.id} terugzetten`, POINTS.containers, returnContainer), 1.8);
+    }
+
+    // Stellingen: zonder scanner in de hand scan je met E de sectie waar je voor staat
+    const section = shelfLocations().find((l) => l.level === 1 && dist(l, pos) < 1.8);
+    if (section) {
+      const name = section.id.slice(0, -2);
+      const levels = LOCATIONS.filter((l) => l.x === section.x && l.z === section.z && l.type !== 'dock');
+      if (carry?.kind === 'pallet') {
+        const { pallet } = carry;
+        const free = levels.find((l) => stockAt(l.id).every((s) => s.sku === pallet.sku));
+        push(
+          free
+            ? interaction(`Scan ${free.id} en zet ${pallet.id} weg`, section, () => putaway(free.id))
+            : interaction(`${name}: geen plek voor deze pallet`, section),
+          1.8,
+        );
+      } else if (o?.status === 'picking') {
+        const rest = openLines(o);
+        const hit = levels.flatMap((l) => rest.filter((line) => qtyAt(l.id, line.sku) > 0).map((line) => ({ l, line })))[0];
+        push(
+          rest.length === 0
+            ? interaction(`${o.id} afmelden bij de WMS`, section, () => completePick(o.id))
+            : hit
+              ? interaction(
+                  `Scan ${hit.l.id} en pick ${Math.min(hit.line.qty - hit.line.picked, qtyAt(hit.l.id, hit.line.sku))}× ${hit.line.sku}`,
+                  section,
+                  () => pickAt(hit.l.id),
+                )
+              : interaction(`${name}: hier ligt niets voor ${o.id}`, section),
+          1.8,
+        );
+      } else {
+        push(interaction(`Scan ${name}: wat staat hier?`, section, () => lookAt(section.id)), 1.8);
+      }
     }
     return list;
   }
@@ -418,6 +539,29 @@ export function createWarehouse() {
     else if (it) say(it.label, 'err');
   }
 
+  // ========== De handscanner: een gescand locatielabel ==========
+
+  /**
+   * Verwerkt een scan van de handscanner. Wat de scan betekent hangt af van wat je bij je hebt: een pallet
+   * (wegzetten), een order onderhanden (picken) of een afgemelde order (klaarzetten). null = alleen kijken.
+   */
+  async function scan(code: string, pos: Point): Promise<ScanResult | null> {
+    const loc = location(code);
+    if (!loc) return null;
+    const o = carriedOrder();
+    const far = (reach: number, point: Point) =>
+      dist(point, pos) > reach ? { ok: false, text: `Loop naar ${code} om daar iets te doen.` } : null;
+
+    if (loc.type === 'dock') {
+      const d = DOCKS.find((x) => x.outId === code);
+      if (!d || o?.status !== 'picked') return null;
+      return far(DOCK_REACH, lanePoint(d.laneOut, pos)) ?? guard(() => stage(d.index));
+    }
+    if (carry?.kind === 'pallet') return far(REACH, loc) ?? guard(() => putaway(code));
+    if (o?.status === 'picking') return far(REACH, loc) ?? guard(() => pickAt(code));
+    return null;
+  }
+
   // ========== Volgende stap voor de speler ==========
 
   function objective(): Objective | null {
@@ -425,34 +569,35 @@ export function createWarehouse() {
     const to = trucks.out;
     const o = carriedOrder();
     if (carry?.kind === 'pallet') {
-      const l = location(carry.targetId)!;
-      return { point: l, level: l.level, text: `Breng ${carry.pallet.id} naar ${l.id}` };
+      const { pallet } = carry;
+      return { text: `Zet ${pallet.id} (${pallet.qty}× ${pallet.sku}) weg: scan een stellinglocatie` };
     }
     if (o?.status === 'picking') {
-      const t = nextTask(o)!;
-      const l = location(t.locationId)!;
-      return { point: l, level: l.level, text: `Pick ${t.qty}× ${t.sku} (${SKU_NAMES[t.sku]}) op ${l.id}` };
+      const rest = openLines(o).map((l) => ({ sku: l.sku, qty: l.qty - l.picked }));
+      return rest.length
+        ? { text: `Pick voor ${o.id}: ${linesText(rest)} · de locaties staan in de WMS-app` }
+        : { text: `Meld ${o.id} af: scan een stellinglocatie` };
     }
     if (o?.status === 'picked') {
       if (to?.status === 'checkedIn') return { point: DOCKS[to.dock].truck, text: `Laad ${o.id} in ${to.id} (${to.dockId})` };
       const d = laneOut[outDock].includes(null) ? DOCKS[outDock] : DOCKS.find((x) => laneOut[x.index].includes(null));
       return d ? { point: d.laneOut, text: `Zet ${o.id} klaar op ${d.outId}` } : null;
     }
-    const inPoint = ti ? DOCKS[ti.dock].truck : null;
-    const outPoint = to ? DOCKS[to.dock].truck : null;
-    if (ti?.status === 'waiting') return { point: inPoint!, text: `Meld ${ti.id} aan bij ${ti.dockId}` };
+    const inPoint = ti ? DOCKS[ti.dock].truck : undefined;
+    const outPoint = to ? DOCKS[to.dock].truck : undefined;
+    if (ti?.status === 'waiting') return { point: inPoint, text: `Meld ${ti.id} aan bij ${ti.dockId}` };
     if (ti?.status === 'checkedIn' && ti.cargo.length && laneIn[ti.dock].includes(null))
-      return { point: inPoint!, text: `Los ${ti.id} (${ti.cargo.length} pallet${ti.cargo.length > 1 ? 's' : ''})` };
+      return { point: inPoint, text: `Los ${ti.id} (${plural(ti.cargo.length, 'pallet')})` };
     const full = DOCKS.find((d) => laneIn[d.index].some((p) => p));
     if (full) return { point: full.laneIn, text: `Zet de pallets van ${full.inId} weg` };
-    if (ti?.status === 'checkedIn' && !ti.cargo.length) return { point: inPoint!, text: `Meld ${ti.id} uit` };
-    if (to?.status === 'waiting') return { point: outPoint!, text: `Meld ${to.id} aan bij ${to.dockId}` };
+    if (ti?.status === 'checkedIn' && !ti.cargo.length) return { point: inPoint, text: `Meld ${ti.id} uit` };
+    if (to?.status === 'waiting') return { point: outPoint, text: `Meld ${to.id} aan bij ${to.dockId}` };
     if (to?.status === 'checkedIn') {
       const staged = [DOCKS[to.dock], ...DOCKS].find((d) => laneOut[d.index].some((id) => id));
       if (staged) return { point: staged.laneOut, text: `Pak de order op ${staged.outId} op om in te laden` };
     }
-    if (orders.some((x) => x.status === 'open')) return { point: POINTS.terminal, text: 'Start een order bij de orderterminal' };
-    if (to?.status === 'checkedIn' && to.loaded.length) return { point: outPoint!, text: `Meld ${to.id} uit` };
+    if (orders.some((x) => x.status === 'open')) return { point: POINTS.containers, text: 'Pak een rolcontainer voor de volgende order' };
+    if (to?.status === 'checkedIn' && to.loaded.length) return { point: outPoint, text: `Meld ${to.id} uit` };
     return null;
   }
 
@@ -495,6 +640,10 @@ export function createWarehouse() {
       t.t = Math.max(0, t.t - dt / DRIVE_SECONDS);
       if (t.t === 0) {
         trucks[slot] = null;
+        for (const id of t.loaded) {
+          const i = orders.findIndex((o) => o.id === id && o.status === 'shipped');
+          if (i >= 0) orders.splice(i, 1); // de order is de deur uit
+        }
         if (slot === 'in') inTimer = 20;
         else {
           outTimer = 8;
@@ -504,23 +653,37 @@ export function createWarehouse() {
     }
   }
 
+  /** Zonder WMS-app speelt de sim zelf klant: een testorder via create_order. De WMS beslist of hij mag. */
+  function placeDemoOrder() {
+    const skus = SKUS.filter((s) => shelfQty(s) > 0).sort(() => Math.random() - 0.5);
+    if (skus.length === 0) return;
+    const lines = skus
+      .slice(0, 1 + rand(Math.min(3, skus.length)))
+      .map((sku) => ({ sku, qty: 1 + rand(Math.min(5, shelfQty(sku))) }));
+    const id = `ORD-${stamp}-${pad(seq.order++)}`;
+    void ask({ type: 'OrderCreated', order: { id, lines, status: 'open' } }).then((r) => {
+      if (!r.ok) return void say(`WMS weigert testorder ${id}: ${r.error}`, 'err');
+      if (!order(id)) orders.push(fromWms({ id, lines, status: 'open' }));
+      touch();
+      say(`Nieuwe order ${id} (${plural(lines.length, 'regel')}).`);
+    });
+  }
+
   function update(dt: number) {
     clock += dt;
     driveTruck('in', dt);
     driveTruck('out', dt);
-    if (!authority) return; // in multiplayer laat alleen de host nieuwe vrachtwagens en orders ontstaan
+    if (!authority) return; // in multiplayer laat alleen de host nieuwe vrachtwagens en testorders ontstaan
     if (!trucks.in && (inTimer -= dt) <= 0) trucks.in = spawnTruck('in');
     const outboundWork = orders.some((o) => ['picking', 'picked', 'staged'].includes(o.status));
     if (!trucks.out && outboundWork && (outTimer -= dt) <= 0) trucks.out = spawnTruck('out');
     if ((orderTimer -= dt) <= 0) {
-      orderTimer = ORDER_INTERVAL;
-      if (orders.filter((o) => o.status === 'open').length < MAX_OPEN_ORDERS) createOrder();
+      orderTimer = DEMO_ORDER_INTERVAL;
+      if (demoOrders() && orders.filter((o) => o.status === 'open').length < DEMO_MAX_OPEN_ORDERS) placeDemoOrder();
     }
   }
 
   // ========== Multiplayer: de wereld die alle spelers delen ==========
-
-  let authority = true;
 
   /** Alles wat spelers delen. Wat je zelf draagt (carry) en je berichten blijven lokaal. */
   function sharedState() {
@@ -531,15 +694,23 @@ export function createWarehouse() {
       laneOut,
       trucks,
       outDock,
+      forks: [...forks],
       seq: { truckIn: seq.truckIn, truckOut: seq.truckOut },
     });
   }
 
-  /** Neemt de gedeelde wereld van een andere speler over. Publiceert geen events: dat deed die speler al. */
+  /** Neemt de gedeelde wereld van een andere speler over. Vraagt de WMS niets: dat deed die speler al. */
   function applyShared(s: ReturnType<typeof sharedState>) {
+    foreign = true;
     stock.clear();
     for (const [k, qty] of s.stock) stock.set(k, qty);
-    orders.splice(0, orders.length, ...s.orders);
+    // Een speler met een oudere versie stuurt orders zonder picks/wmsStatus: aanvullen.
+    orders.splice(0, orders.length, ...s.orders.map((o) => ({
+      ...o,
+      wmsStatus: o.wmsStatus ?? 'open',
+      picks: o.picks ?? [],
+      lines: o.lines.map((l) => ({ ...l, picked: l.picked ?? 0 })),
+    })));
     laneIn.splice(0, laneIn.length, ...s.laneIn);
     laneOut.splice(0, laneOut.length, ...s.laneOut);
     for (const slot of ['in', 'out'] as const) {
@@ -549,6 +720,8 @@ export function createWarehouse() {
       trucks[slot] = next;
     }
     outDock = s.outDock;
+    forks.clear();
+    for (const [id, f] of s.forks ?? []) forks.set(id, f);
     seq.truckIn = Math.max(seq.truckIn, s.seq.truckIn);
     seq.truckOut = Math.max(seq.truckOut, s.seq.truckOut);
     // Draag je een order die een ander inmiddels heeft afgehandeld of teruggezet, dan ben je hem kwijt.
@@ -558,58 +731,63 @@ export function createWarehouse() {
     }
   }
 
-  // ========== WMS is leidend: voorraad en open orders overnemen ==========
+  // ========== WMS is leidend: voorraad en open orders komen uit de WMS ==========
 
-  function loadSnapshot(items: Item[], wmsOrders: Order[], source: string) {
+  /** Alleen orders waar nog aan gewerkt moet worden (de WMS kent ook latere statussen, zie docs/wms/04). */
+  const isOpen = (o: Order) => (o.status as string) === 'open' || (o.status as string) === 'picking';
+  const fromWms = (o: Order): SimOrder => ({
+    id: o.id,
+    lines: o.lines.map((l) => ({ sku: l.sku, qty: l.qty, picked: 0 })),
+    status: 'open',
+    wmsStatus: o.status,
+    picks: [],
+  });
+
+  /** Zet de stellingvoorraad gelijk aan de WMS, minus wat fysiek onderweg is (heftruck, lopende picks). */
+  function setShelfStock(items: Item[]) {
     stock.clear();
+    for (const it of items) if (isShelf(it.locationId) && it.qty > 0) add(it.locationId, it.sku, it.qty);
+    for (const f of forks.values()) add(f.locationId, f.sku, -f.qty);
+    for (const o of orders) {
+      if (o.status !== 'picking') continue;
+      for (const p of o.picks) if (!p.booked) add(p.locationId, p.sku, -p.qty);
+    }
+  }
+
+  /** Tussentijdse stand uit de WMS: stellingvoorraad en open orders. Wat fysiek onderhanden is blijft staan. */
+  function syncFromWms(items: Item[], wmsOrders: Order[]) {
+    setShelfStock(items);
+    const open = wmsOrders.filter(isOpen);
+    const ids = new Set(open.map((o) => o.id));
+    for (let i = orders.length - 1; i >= 0; i--) {
+      if (orders[i].status === 'open' && !ids.has(orders[i].id)) orders.splice(i, 1); // elders afgehandeld of vervallen
+    }
+    for (const w of open) {
+      const cur = order(w.id);
+      if (!cur) orders.push(fromWms(w));
+      else if (cur.status === 'open') Object.assign(cur, fromWms(w));
+    }
+  }
+
+  /** Begin (of opnieuw aanmelden): de hele wereld overnemen uit de WMS, ook wat er bij de docks staat. */
+  function loadSnapshot(items: Item[], wmsOrders: Order[], source: string) {
     laneIn.forEach((lane) => lane.fill(null));
     laneOut.forEach((lane) => lane.fill(null));
+    forks.clear();
     carry = null;
     if (trucks.out) trucks.out.loaded = [];
+    orders.length = 0;
+    setShelfStock(items);
     for (const it of items) {
-      if (!location(it.locationId) || it.qty <= 0) continue;
-      add(it.locationId, it.sku, it.qty);
       const lane = laneIn[DOCKS.findIndex((d) => d.inId === it.locationId)];
-      if (lane?.includes(null)) {
+      if (it.qty > 0 && lane?.includes(null)) {
         lane[lane.lastIndexOf(null)] = { id: `PAL-${stamp}-${pad(seq.pallet++, 4)}`, sku: it.sku, qty: it.qty };
       }
     }
-    orders.length = 0;
-    for (const o of wmsOrders) {
-      orders.push({ id: o.id, lines: structuredClone(o.lines), status: 'open', tasks: [] });
-    }
-    say(`Voorraad (${items.length} regels) en ${wmsOrders.length} open order(s) geladen uit ${source}.`, 'ok');
-  }
-
-  // ========== Afstemmen met de WMS ==========
-
-  /** Gepickt, maar nog niet bij de WMS afgeboekt: dat gebeurt pas als de order compleet is (confirm_pick). */
-  function pickedUnconfirmed(): Item[] {
-    return orders
-      .filter((o) => o.status === 'picking')
-      .flatMap((o) => o.tasks.filter((t) => t.done).map((t) => ({ locationId: t.locationId, sku: t.sku, qty: t.qty })));
-  }
-
-  /** Zet de voorraad gelijk aan `target`: de stand volgens de WMS, zonder wat nog onderweg is. */
-  function syncStock(target: Item[], note: string) {
-    const before = new Map(stock);
-    stock.clear();
-    for (const it of target) if (location(it.locationId) && it.qty > 0) add(it.locationId, it.sku, it.qty);
-    // Klopt een inslaglocatie niet meer, dan staan daar de pallets die de WMS kent.
-    for (const d of DOCKS) {
-      const lines = stockAt(d.inId);
-      const had = [...before.keys()].filter((k) => k.startsWith(`${d.inId}|`)).length;
-      if (lines.length === had && lines.every((l) => before.get(key(d.inId, l.sku)) === l.qty)) continue;
-      const lane = laneIn[d.index];
-      lane.fill(null);
-      for (const l of lines) {
-        const carried = carry?.kind === 'pallet' && carry.fromId === d.inId && carry.pallet.sku === l.sku ? carry.pallet.qty : 0;
-        if (l.qty - carried > 0 && lane.includes(null)) {
-          lane[lane.lastIndexOf(null)] = { id: `PAL-${stamp}-${pad(seq.pallet++, 4)}`, sku: l.sku, qty: l.qty - carried };
-        }
-      }
-    }
-    say(note, 'ok');
+    const open = wmsOrders.filter(isOpen);
+    orders.push(...open.map(fromWms));
+    touch();
+    say(`Voorraad (${items.length} regels) en ${plural(open.length, 'open order')} geladen uit ${source}.`, 'ok');
   }
 
   return {
@@ -617,8 +795,9 @@ export function createWarehouse() {
     interact,
     interactionAt,
     objective,
+    scan,
     loadSnapshot,
-    createOrder,
+    syncFromWms,
     get trucks() { return trucks; },
     get laneIn() { return laneIn; },
     get laneOut() { return laneOut; },
@@ -628,16 +807,20 @@ export function createWarehouse() {
     get orders() { return orders; },
     get messages() { return messages; },
     get clock() { return clock; },
+    /** Loopt er nog een vraag bij de WMS? */
+    get pending() { return pending; },
+    get revision() { return revision; },
+    get authority() { return authority; },
+    /** true: de wereld is (mede) door een andere speler gevormd. */
+    get foreign() { return foreign; },
     stockList,
     stockAt,
     forkliftTake,
     forkliftPlace,
-    pickedUnconfirmed,
-    syncStock,
     order,
     sharedState,
     applyShared,
-    /** false: een andere speler is host en laat vrachtwagens en orders ontstaan. */
+    /** false: een andere speler is host en laat vrachtwagens en testorders ontstaan. */
     setAuthority(on: boolean) {
       authority = on;
     },

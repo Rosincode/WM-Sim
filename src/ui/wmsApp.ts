@@ -74,7 +74,7 @@ export function createAppFrame() {
       <a target="_blank" rel="noopener noreferrer" title="Open in een nieuw tabblad">↗</a>
     </form>
     <div class="note">Blijft dit leeg of geweigerd? Dan staat de app insluiten niet toe (frame-ancestors). Open hem met ↗.</div>
-    <div class="empty">Vul hierboven het adres van de WMS-app in.</div>`;
+    <div class="empty">Nog geen adres van de WMS-app.<br>Pak dit scherm erbij (pc: E, tablet: F) en vul het adres in.</div>`;
   const form = el.querySelector('form')!;
   const input = el.querySelector('input')!;
   const link = el.querySelector('a')!;

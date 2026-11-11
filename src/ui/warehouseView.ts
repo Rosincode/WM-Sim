@@ -133,8 +133,16 @@ export function createWarehouseView(
   pc.group.position.set(POINTS.terminal.x, 0, POINTS.terminal.z);
   root.add(pc.group);
 
-  const labels = { terminal: label(), truckIn: label(4.5), truckOut: label(4.5) };
-  labels.terminal.sprite.position.set(POINTS.terminal.x, 2.2, POINTS.terminal.z);
+  // Lege rolcontainers: hier pak je er een voor de volgende order
+  for (const dx of [-0.95, 0, 0.95]) {
+    const t = tote();
+    t.children[1].visible = false; // nog niets in
+    t.position.set(POINTS.containers.x + dx, 0, POINTS.containers.z);
+    root.add(t);
+  }
+
+  const labels = { containers: label(3.4), truckIn: label(4.5), truckOut: label(4.5) };
+  labels.containers.sprite.position.set(POINTS.containers.x, 2.2, POINTS.containers.z);
   Object.values(labels).forEach((l) => root.add(l.sprite));
   // Baanlabels verschijnen alleen als er iets staat (of als je er een order moet klaarzetten).
   const laneLabels = DOCKS.map((d) => {
@@ -225,7 +233,7 @@ export function createWarehouseView(
     placeTruck(trucks.out, labels.truckOut, sim.trucks.out);
 
     const open = sim.orders.filter((o) => o.status === 'open').length;
-    labels.terminal.set(`PC · ${open} open order${open === 1 ? '' : 's'}`);
+    labels.containers.set(open ? `Rolcontainers · ${open} order${open === 1 ? '' : 's'}` : '');
 
     const staging = sim.carry?.kind === 'order' && sim.order(sim.carry.orderId)?.status === 'picked';
     DOCKS.forEach((d, i) => {
@@ -266,12 +274,14 @@ export function createWarehouseView(
     }
 
     // Doelmarkering
+    // Zonder punt wijst de game niets aan: waar je heen moet staat dan in de WMS-app.
     const obj = sim.objective();
-    beam.visible = arrow.visible = !!obj;
-    if (obj) {
-      beam.position.set(obj.point.x, 3, obj.point.z);
+    const point = obj?.point;
+    beam.visible = arrow.visible = !!point;
+    if (obj && point) {
+      beam.position.set(point.x, 3, point.z);
       const y = obj.level ? LEVEL_Y[obj.level] + 1.4 : 3;
-      arrow.position.set(obj.point.x, y + Math.sin(time * 3) * 0.15, obj.point.z);
+      arrow.position.set(point.x, y + Math.sin(time * 3) * 0.15, point.z);
     }
   }
 

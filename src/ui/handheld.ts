@@ -2,8 +2,9 @@ import * as THREE from 'three';
 import type { Item, Location, Order } from '../shared/contract';
 import type { ScanTarget } from './scene/warehouse';
 
-// Wat de speler in first person vasthoudt: 1 = handscanner, 2 = tablet (het scherm is de echte WMS-app, zie tabletApp.ts).
-// Alleen weergave: leest de WMS-gegevens die via setData() binnenkomen.
+// Wat de speler in first person vasthoudt: 1 = handscanner, 2 = tablet met de WMS-app.
+// De scanner legt elke scan voor aan de WMS (onScan) en toont het antwoord; wat er op een locatie ligt
+// leest hij uit de WMS-gegevens die via setData() binnenkomen. Het beeld van de tablet is de WMS-app zelf.
 
 export type Tool = 'scanner' | 'tablet';
 export type WmsSnapshot = { mode: 'live' | 'mock'; locations: Location[]; stock: Item[]; orders: Order[] };
@@ -14,8 +15,28 @@ interface Options {
   /** Wortel waartegen de laser wordt geraycast (de scène). */
   world: THREE.Object3D;
   scanTargets: ScanTarget[];
+  /** Een label is gelezen: leg de scan voor aan de WMS. null = er hoeft niets te gebeuren (alleen kijken). */
+  onScan?: (code: string) => Promise<ScanReply | null>;
 }
 
+/** Breekt tekst af op de breedte van het scherm. */
+function wrap(g: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  const lines: string[] = [];
+  let line = '';
+  for (const word of text.split(' ')) {
+    const next = line ? `${line} ${word}` : word;
+    if (line && g.measureText(next).width > maxWidth) {
+      lines.push(line);
+      line = word;
+    } else line = next;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+/** Antwoord van de WMS op een scan. */
+export type ScanReply = { ok: boolean; text: string };
+type Scan = { code: string | null; time: string; reply?: ScanReply | 'wait' };
 /** Afmetingen van het tabletscherm in meters. */
 export const TABLET_SCREEN = { w: 0.2368, h: 0.148 };
 const SCAN_RANGE = 8;
@@ -51,7 +72,7 @@ function forearm(from: THREE.Vector3, to: THREE.Vector3, sleeve: THREE.Material,
   return g;
 }
 
-export function createHandheld({ camera, canvas, world, scanTargets }: Options) {
+export function createHandheld({ camera, canvas, world, scanTargets, onScan }: Options) {
   const root = new THREE.Group();
   camera.add(root);
 
@@ -129,6 +150,7 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
   // ---------- Tablet ----------
   const tabletRig = new THREE.Group();
   root.add(tabletRig);
+  // Het beeld zelf is de WMS-app (iframe), die er als HTML-laag overheen ligt: zie src/ui/tabletApp.ts.
   const tabletDisplay = mesh(new THREE.PlaneGeometry(TABLET_SCREEN.w, TABLET_SCREEN.h), new THREE.MeshBasicMaterial({ color: '#0b0d10', fog: false }), 0, 0, 0.0065);
   {
     const box = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
@@ -161,7 +183,7 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
   let active = false;
   let focus = false;
   let data: WmsSnapshot = { mode: 'mock', locations: [], stock: [], orders: [] };
-  let lastScan: { code: string | null; time: string } | null = null;
+  let lastScan: Scan | null = null;
   let scanTimer = 0;
   let bobPhase = 0;
   let seated = false;
@@ -224,7 +246,8 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
         g.font = '26px Arial';
         g.fillText('Locatie is leeg', 20, 240);
       }
-      lines.slice(0, 5).forEach((s, i) => {
+      const reply = lastScan.reply;
+      lines.slice(0, reply ? 2 : 5).forEach((s, i) => {
         const y = 234 + i * 38;
         g.fillStyle = '#fff';
         g.font = '26px Arial';
@@ -235,6 +258,18 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
         g.fillText(`${s.qty} st`, w - 20, y);
         g.textAlign = 'left';
       });
+      if (reply) {
+        // Antwoord van de WMS op deze scan
+        g.fillStyle = reply === 'wait' ? '#24384d' : reply.ok ? '#1e6b35' : '#8c1d18';
+        g.beginPath();
+        g.roundRect(12, 304, w - 24, 106, 10);
+        g.fill();
+        g.fillStyle = '#fff';
+        g.font = 'bold 20px Arial';
+        wrap(g, reply === 'wait' ? 'De WMS verwerkt de scan…' : reply.text, w - 48)
+          .slice(0, 4)
+          .forEach((t, i) => g.fillText(t, 24, 324 + i * 23));
+      }
     }
     texture.needsUpdate = true;
   }
@@ -299,10 +334,22 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
       }
     }
 
-    lastScan = { code: best ? best.code : null, time: clock() };
+    const current: Scan = { code: best ? best.code : null, time: clock() };
+    lastScan = current;
     scans++;
     scanTimer = 0.4;
     beep(!!best);
+    if (best && onScan) {
+      // De scan gaat naar de WMS; het antwoord verschijnt op het schermpje.
+      current.reply = 'wait';
+      const show = (reply: ScanReply | null) => {
+        current.reply = reply ?? undefined;
+        if (lastScan !== current) return; // er is alweer iets anders gescand
+        if (reply && !reply.ok) beep(false);
+        drawScanner();
+      };
+      onScan(best.code).then(show, (err: unknown) => show({ ok: false, text: err instanceof Error ? err.message : String(err) }));
+    }
     drawScanner();
 
     // laserstraal van de scannerneus naar het richtpunt, plus de lijn op het oppervlak
@@ -341,10 +388,7 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
   }
 
   drawScanner();
-  setInterval(() => {
-    // klokje bijwerken
-    drawScanner();
-  }, 20000);
+  setInterval(drawScanner, 20000); // klokje bijwerken
 
   const tabletPos = new THREE.Vector3();
   const AXIS_X = new THREE.Vector3(1, 0, 0);

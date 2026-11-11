@@ -1,9 +1,9 @@
 import { bus } from '../shared/bus';
 import type { Order, SimEvent } from '../shared/contract';
 
-// Alle processtappen in de game. Vier ervan bestaan al in het contract (src/shared/contract.ts)
-// en gaan via de bus naar de WMS-bridge. De rest is een voorstel voor het contract; tot dat er is,
-// blijven ze lokaal (log in de UI) en roept de bridge nog geen API aan.
+// Alle processtappen in de game. Elke stap gaat eerst als vraag naar de WMS (src/sim/wms.ts); het antwoord
+// komt hier langs voor het API-log. Vier stappen bestaan ook in het contract (src/shared/contract.ts) en
+// gaan na akkoord van de WMS de bus op.
 
 export type Direction = 'in' | 'out';
 export type ScanKind = 'truck' | 'pallet' | 'location' | 'order';
@@ -25,20 +25,23 @@ export type ProcessEvent =
 
 export type ProcessEventType = ProcessEvent['type'];
 
-/** Welke WMS-actie bij een event hoort, en of die al via de bus gekoppeld is. */
-export const WMS_ACTIONS: Record<ProcessEventType, { action: string; linked: boolean }> = {
-  GoodsReceived: { action: 'register_goods_received', linked: true },
-  PutawayDone: { action: 'confirm_putaway', linked: true },
-  OrderCreated: { action: 'create_order', linked: true },
-  PickCompleted: { action: 'start_picking + confirm_pick', linked: true },
-  TruckCheckedIn: { action: 'truck_check_in', linked: false },
-  TruckCheckedOut: { action: 'truck_check_out', linked: false },
-  Scanned: { action: 'register_scan', linked: false },
-  PickStarted: { action: 'start_picking', linked: false },
-  PickLineConfirmed: { action: 'confirm_pick_line', linked: false },
-  OrderStaged: { action: 'stage_order', linked: false },
-  OrderLoaded: { action: 'load_order', linked: false },
+/** Welke WMS-actie bij een processtap hoort (docs/wms/01 en 04). */
+export const WMS_ACTIONS: Record<ProcessEventType, string> = {
+  GoodsReceived: 'register_goods_received',
+  PutawayDone: 'confirm_putaway',
+  OrderCreated: 'create_order',
+  PickStarted: 'start_picking',
+  PickCompleted: 'confirm_pick',
+  TruckCheckedIn: 'truck_check_in',
+  TruckCheckedOut: 'truck_check_out',
+  Scanned: 'register_scan',
+  PickLineConfirmed: 'confirm_pick_line',
+  OrderStaged: 'stage_order',
+  OrderLoaded: 'load_order',
 };
+
+/** Wat de WMS met de stap deed. linked = echt in de WMS verwerkt; false = alleen lokaal (nog geen endpoint). */
+export type EventResult = { ok: boolean; linked: boolean; error?: string };
 
 /** Vertaalt naar het huidige contract; null = (nog) niet in het contract. */
 function toContract(e: ProcessEvent): SimEvent | null {
@@ -56,7 +59,7 @@ function toContract(e: ProcessEvent): SimEvent | null {
   }
 }
 
-type Listener = (e: ProcessEvent) => void;
+type Listener = (e: ProcessEvent, result: EventResult) => void;
 const listeners: Listener[] = [];
 
 export function onProcessEvent(l: Listener) {
@@ -64,8 +67,10 @@ export function onProcessEvent(l: Listener) {
   return () => listeners.splice(listeners.indexOf(l), 1);
 }
 
-export function publish(e: ProcessEvent) {
-  listeners.forEach((l) => l(e));
+/** Meldt een processtap met het antwoord van de WMS. Alleen geslaagde stappen gaan de bus op. */
+export function publish(e: ProcessEvent, result: EventResult = { ok: true, linked: false }) {
+  listeners.forEach((l) => l(e, result));
+  if (!result.ok) return;
   const shared = toContract(e);
   if (shared) bus.emit(shared);
 }

@@ -46,12 +46,12 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   const right = new THREE.Vector3();
   const camTarget = new THREE.Vector3();
 
-  const processKeys = '<br><b>E</b>: scannen / actie · <b>L</b>: API-log · <b>I</b>: voorraad';
+  const processKeys = '<br><b>E</b>: scannen / actie (bij de pc: WMS-app) · <b>L</b>: API-log · <b>I</b>: voorraad · <b>K</b>: WMS-API';
   const hudText: Record<ViewMode, string> = {
     overview:
       '<b>WM-Sim — Overzicht</b><br>Slepen: draaien · Scroll: zoom · Rechts slepen: schuiven<br><b>C</b>: dichtbij (first person)',
     first:
-      '<b>WM-Sim — First person</b><br>Klik: muis vastzetten · Muis: rondkijken · Esc: muis los<br>W/S: lopen · A/D: zijwaarts · ←/→: draaien · Shift: rennen · Spatie: springen<br><b>1</b>: scanner (klik = scannen) · <b>2</b>: tablet met WMS (F: dichtbij en bedienen)<br><b>R</b>: in de heftruck stappen (als je ernaast staat) · <b>V</b>: third person · <b>C</b>: overzicht',
+      '<b>WM-Sim — First person</b><br>Klik: muis vastzetten · Muis: rondkijken · Esc: muis los<br>W/S: lopen · A/D: zijwaarts · ←/→: draaien · Shift: rennen · Spatie: springen<br><b>1</b>: scanner (klik op een label = scannen naar de WMS) · <b>2</b>: tablet met WMS (F: dichtbij en bedienen)<br><b>R</b>: in de heftruck stappen (als je ernaast staat) · <b>V</b>: third person · <b>C</b>: overzicht',
     third:
       '<b>WM-Sim — Third person</b><br>W/S: lopen · A/D: draaien · Shift: rennen · Spatie: springen<br><b>V</b>: first person · <b>C</b>: overzicht',
   };
