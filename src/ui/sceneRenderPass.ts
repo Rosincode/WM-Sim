@@ -11,13 +11,13 @@ export class SceneRenderPass extends Pass {
   private target: THREE.WebGLRenderTarget;
   private copy: THREE.ShaderMaterial;
   private quad: FullScreenQuad;
+  private scene: THREE.Scene;
+  private camera: THREE.Camera;
 
-  constructor(
-    private scene: THREE.Scene,
-    private camera: THREE.Camera,
-    samples: number,
-  ) {
+  constructor(scene: THREE.Scene, camera: THREE.Camera, samples: number) {
     super();
+    this.scene = scene;
+    this.camera = camera;
     this.needsSwap = false; // het resultaat staat in de leesbuffer, net als bij RenderPass
     this.target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples });
     this.copy = new THREE.ShaderMaterial({
