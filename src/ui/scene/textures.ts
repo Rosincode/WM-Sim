@@ -394,20 +394,11 @@ function barcode(g: CanvasRenderingContext2D, x: number, y: number, w: number, h
 }
 
 /** Locatielabel voor op de stellingligger. */
-<<<<<<< HEAD
 export function locationLabel(id: string, arrow: 'up' | 'down', scale = 1) {
   return canvasTexture(512 * scale, 192 * scale, (g) => {
     const w = 512;
     const h = 192;
     g.scale(scale, scale); // kleinere textuur, zelfde tekening (er hangen honderden labels)
-=======
-export function locationLabel(id: string, arrow: 'up' | 'down') {
-  // half formaat: er hangen honderden labels in de hal
-  return canvasTexture(256, 96, (g) => {
-    g.scale(0.5, 0.5);
-    const w = 512;
-    const h = 192;
->>>>>>> 30faee5 (wip TSF+rduijsens)
     g.fillStyle = '#f7f7f2';
     g.fillRect(0, 0, w, h);
     g.fillStyle = arrow === 'up' ? '#f2c200' : '#2e8bd8';
