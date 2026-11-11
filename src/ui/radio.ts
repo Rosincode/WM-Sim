@@ -1,0 +1,122 @@
+import * as THREE from 'three';
+
+// Radio in het magazijn: speelt de live stream van een echte zender (internetradio).
+// M (als je erbij staat): uit → PiratenRadio.nl → 100% NL → uit. Verder weg klinkt hij zachter.
+// De voorkant (luidspreker en display) wijst naar de -Z-kant.
+
+const STATIONS = [
+  { name: 'PiratenRadio.nl', url: 'https://stream.piratenradio.nl/listen/piratenradio/prradio', color: '#ffb300' },
+  { name: '100% NL', url: 'https://stream.100p.nl/100pctnl.mp3', color: '#ff6a2b' },
+];
+/** Binnen deze afstand bedien je de radio met M. */
+const NEAR = 2.5;
+const MAX_VOLUME = 0.6;
+
+export function createRadio() {
+  const group = new THREE.Group();
+  const mat = (color: string, roughness = 0.6, metalness = 0) => new THREE.MeshStandardMaterial({ color, roughness, metalness });
+  const add = (geo: THREE.BufferGeometry, material: THREE.Material, x: number, y: number, z: number) => {
+    const m = new THREE.Mesh(geo, material);
+    m.position.set(x, y, z);
+    m.castShadow = true;
+    group.add(m);
+    return m;
+  };
+  const body = mat('#7a2f24', 0.45);
+  const dark = mat('#17181a', 0.8);
+  const chrome = mat('#c9ced3', 0.3, 0.9);
+
+  // Kast, luidspreker, knoppen, handvat en antenne
+  add(new THREE.BoxGeometry(0.34, 0.19, 0.1), body, 0, 0.095, 0);
+  add(new THREE.CylinderGeometry(0.07, 0.07, 0.012, 24), dark, 0.08, 0.09, -0.05).rotation.x = Math.PI / 2;
+  for (const x of [-0.12, -0.05]) add(new THREE.CylinderGeometry(0.016, 0.016, 0.02, 16), chrome, x, 0.05, -0.055).rotation.x = Math.PI / 2;
+  add(new THREE.BoxGeometry(0.24, 0.012, 0.012), chrome, 0, 0.225, 0);
+  for (const x of [-0.12, 0.12]) add(new THREE.BoxGeometry(0.012, 0.04, 0.012), chrome, x, 0.205, 0);
+  const antenna = add(new THREE.CylinderGeometry(0.003, 0.003, 0.36, 6), chrome, -0.2, 0.33, 0.03);
+  antenna.rotation.z = 0.35;
+
+  // Display met de naam van de zender
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 96;
+  const ctx = canvas.getContext('2d')!;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const display = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 0.056), new THREE.MeshBasicMaterial({ map: texture }));
+  display.position.set(-0.085, 0.125, -0.051);
+  display.rotation.y = Math.PI;
+  group.add(display);
+
+  let station = -1; // -1 = uit
+  let failed = false;
+  let distance = Infinity;
+
+  function draw() {
+    const s = STATIONS[station];
+    ctx.fillStyle = s ? '#1d1206' : '#0b0d10';
+    ctx.fillRect(0, 0, 256, 96);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = s ? s.color : '#3a4048';
+    ctx.font = 'bold 34px system-ui, sans-serif';
+    ctx.fillText(s ? s.name : 'UIT', 128, s ? 36 : 48, 236);
+    if (s) {
+      ctx.font = '22px system-ui, sans-serif';
+      ctx.fillText(failed ? 'geen verbinding' : '● LIVE', 128, 72, 236);
+    }
+    texture.needsUpdate = true;
+  }
+  draw();
+
+  // Een gewoon audio-element: de stream is altijd live, er wordt niets gebufferd als de radio uit staat.
+  const audio = new Audio();
+  audio.preload = 'none';
+  audio.addEventListener('error', () => {
+    if (station < 0 || !audio.error) return;
+    failed = true;
+    draw();
+  });
+
+  function tune(i: number) {
+    station = i;
+    failed = false;
+    if (i < 0) {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+    } else {
+      audio.src = STATIONS[i].url;
+      audio.play().catch((err: unknown) => {
+        if (station !== i || (err instanceof DOMException && err.name === 'AbortError')) return; // intussen doorgeschakeld
+        failed = true;
+        draw();
+      });
+    }
+    draw();
+  }
+
+  window.addEventListener('keydown', (e) => {
+    const t = e.target;
+    if (e.code !== 'KeyM' || e.repeat || t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return;
+    if (distance <= NEAR) tune(station + 1 < STATIONS.length ? station + 1 : -1);
+  });
+
+  const world = new THREE.Vector3();
+  return {
+    group,
+    /** Tekst voor de speler die bij de radio staat, anders leeg. */
+    get hint() {
+      if (distance > NEAR) return '';
+      const s = STATIONS[station];
+      const next = STATIONS[station + 1];
+      if (!s) return `<b>M</b>: radio aanzetten (${STATIONS[0].name})`;
+      return `Radio: <b>${s.name}</b>${failed ? ' (geen verbinding)' : ''} · <b>M</b>: ${next ? next.name : 'uitzetten'}`;
+    },
+    /** listener: waar de speler staat; hoe verder weg, hoe zachter de radio. */
+    update(listener: THREE.Vector3) {
+      group.getWorldPosition(world);
+      distance = Math.hypot(listener.x - world.x, listener.z - world.z);
+      if (station >= 0) audio.volume = MAX_VOLUME * THREE.MathUtils.clamp(4 / Math.max(distance, 1), 0.06, 1);
+    },
+  };
+}

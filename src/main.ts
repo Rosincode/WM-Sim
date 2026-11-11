@@ -11,6 +11,8 @@ import { createHandheld } from './ui/handheld';
 import { createTabletApp } from './ui/tabletApp';
 import { createWarehouse, HALL } from './ui/scene/warehouse';
 import { createForklift } from './ui/scene/forklift';
+import { createRadio } from './ui/radio';
+import { POINTS } from './sim/layout';
 import { createExterior } from './ui/scene/exterior';
 import { createCharacter, type HandTarget } from './ui/scene/character';
 import { wms } from './integrations/wms';
@@ -225,6 +227,11 @@ driveHint.style.cssText =
   'position:fixed;left:50%;top:16px;transform:translateX(-50%);max-width:560px;padding:8px 14px;border-radius:8px;background:rgba(0,0,0,.65);color:#fff;font:14px system-ui,sans-serif;line-height:1.4;text-align:center;pointer-events:none;display:none';
 document.body.appendChild(driveHint);
 
+// --- Radio op het bureau naast de pc: M schakelt tussen de live zenders ---
+const radio = createRadio();
+radio.group.position.set(POINTS.terminal.x - 0.55, 0.975, POINTS.terminal.z + 0.08);
+scene.add(radio.group);
+
 const nearForklift = () => player.position.distanceTo(forklift.group.position) < 2.8;
 
 // --- Multiplayer: iedereen speelt samen in één magazijn (?room=naam voor een eigen kamer, ?solo om alleen te spelen) ---
@@ -330,11 +337,13 @@ renderer.setAnimationLoop((now) => {
   multiplayer?.update(dt);
 
   const otherDriver = multiplayer?.forkliftDriver();
-  const hintText = driving
+  radio.update(player.position);
+  const forkliftHint = driving
     ? forklift.hint
     : view.mode !== 'overview' && nearForklift()
       ? otherDriver ? 'De heftruck is bezet' : '<b>R</b>: in de heftruck stappen'
       : '';
+  const hintText = [forkliftHint, radio.hint].filter(Boolean).join('<br>');
   if (driveHint.innerHTML !== hintText) driveHint.innerHTML = hintText;
   driveHint.style.display = hintText ? 'block' : 'none';
   warehouse.update(dt);
