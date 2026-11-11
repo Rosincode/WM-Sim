@@ -103,8 +103,8 @@ export function mountWmsPanel(parent?: HTMLElement) {
       ${
         showForm
           ? `<form>
-              <input name="baseUrl" type="url" placeholder="https://wms.example.com/api" required autocomplete="url">
-              <input name="apiKey" type="password" placeholder="API-sleutel" required autocomplete="off">
+              <input name="baseUrl" type="url" placeholder="https://wms.example.com/t/wm_sim/api" required autocomplete="url">
+              <input name="apiKey" type="password" placeholder="API-sleutel (amk_...)" required autocomplete="off">
               <label class="check"><input name="remember" type="checkbox"> Onthouden op deze pc</label>
               <button type="submit">Verbinden</button>
               <button type="button" class="secondary" data-act="cancel">Annuleren</button>
