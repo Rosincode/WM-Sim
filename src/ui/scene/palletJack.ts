@@ -1,10 +1,18 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import modelUrl from '../assets/palletjack.glb?url';
 import type { Carried, Load, Loose } from './forklift';
 import { paint, type Hall, type RackPallet, type Solid } from './warehouse';
 
 // Pompwagen (handpallettruck). Pakken met R: hij rolt dan voor je uit, de vorken wijzen van je af.
 // Q pompt de vorken omhoog of laat ze zakken. Alleen voor pallets op de vloer: los in de hal of op
 // het onderste niveau van een stelling. Hoger komt alleen de heftruck.
+//
+// Het model (src/ui/assets/palletjack.glb) bestaat uit drie delen, in meters, vorken naar +Z:
+// - frame: chassis en vorken, gaat omhoog bij het pompen;
+// - base: pomp, stuurwiel en de rollen onder de vorkpunten, blijven op de vloer;
+// - handle: de dissel, met zijn draaipunt op de pomp; kantelt naar je toe zolang iemand hem duwt.
+// Lukt het laden niet, dan staat er een eenvoudige pompwagen van blokken.
 
 interface Options {
   hall: Hall;
@@ -25,6 +33,8 @@ export type JackState = {
   /** Vorken omhoog gepompt. */
   up: 0 | 1;
   load: (Load & { from: string; key: string }) | null;
+  /** 1: iemand duwt hem (de dissel staat gekanteld). Ontbreekt bij oudere versies. */
+  h?: 1;
 };
 
 const round = (n: number, f = 100) => Math.round(n * f) / f;
@@ -32,37 +42,79 @@ type Target = { x: number; z: number; rack?: RackPallet; loose?: Loose };
 
 const FORK_Z = 0.5; // midden van de vorken, vanaf het hart van de pompwagen
 const TIP_Z = 1.08; // punt van de vorken
-const GRIP = 1.25; // afstand van de speler tot het hart van de pompwagen
+const GRIP = 1.1; // afstand van de speler tot het hart van de pompwagen
 const REACH = 0.45; // hoe nauwkeurig de vorken onder de pallet moeten zitten
 const LIFT = 0.1; // zo ver komen de vorken omhoog
+/** Draaipunt van de dissel op de pomp (zoals in het model). */
+const PIVOT = new THREE.Vector3(-0.027, 0.48, -0.412);
+/** Waar de handen op de handgreep zitten, ten opzichte van het draaipunt (dissel rechtop). */
+const HAND = { x: 0.11, y: 0.72, z: 0.01 };
+/** Zo ver (rad) kantelt de dissel naar je toe als je duwt. */
+const TILT = 0.45;
+
+const loader = new GLTFLoader();
 
 export function createPalletJack({ hall, bounds, take, place, onStockChange, loose }: Options) {
   const g = new THREE.Group();
-  const red = paint('#d1401f', 0.45, 0.3);
-  const dark = paint('#2b2e32', 0.5, 0.5);
-  const part = (parent: THREE.Object3D, geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, rx = 0, rz = 0) => {
-    const m = new THREE.Mesh(geo, mat);
-    m.position.set(x, y, z);
-    m.rotation.set(rx, 0, rz);
-    m.castShadow = true;
-    m.receiveShadow = true;
-    parent.add(m);
-  };
-  // Vorken (gaan omhoog bij het pompen); laag genoeg om in de openingen van een pallet te schuiven
+  /** Gaat omhoog bij het pompen: chassis en vorken. */
   const forks = new THREE.Group();
-  for (const x of [-0.2, 0.2]) {
-    part(forks, new THREE.BoxGeometry(0.16, 0.05, 1.18), red, x, 0.06, 0.49);
-    part(g, new THREE.CylinderGeometry(0.035, 0.035, 0.1, 12), dark, x, 0.035, 0.95, 0, Math.PI / 2);
+  /** Draait om het draaipunt op de pomp. */
+  const handle = new THREE.Group();
+  handle.position.copy(PIVOT);
+  g.add(forks, handle);
+
+  const shadows = (o: THREE.Object3D) =>
+    o.traverse((m) => {
+      if ((m as THREE.Mesh).isMesh) m.castShadow = m.receiveShadow = true;
+    });
+  loader.load(
+    modelUrl,
+    (gltf) => {
+      const part = (name: string) => {
+        const o = gltf.scene.getObjectByName(name);
+        if (!o) throw new Error(`pompwagen: deel "${name}" ontbreekt in het model`);
+        shadows(o);
+        return o;
+      };
+      forks.add(part('frame'));
+      g.add(part('base'));
+      const h = part('handle');
+      h.position.set(0, 0, 0); // het draaipunt zit al in `handle`
+      handle.add(h);
+    },
+    undefined,
+    (err) => {
+      console.warn('[pompwagen] model niet geladen, eenvoudige vorm in de plaats:', err);
+      simpleShape();
+    },
+  );
+
+  /** Reserve als het model niet laadt: blokken in dezelfde maten. */
+  function simpleShape() {
+    const red = paint('#c9381c', 0.45, 0.3);
+    const dark = paint('#2b2e32', 0.5, 0.5);
+    const part = (parent: THREE.Object3D, geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, rx = 0, rz = 0) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      m.rotation.set(rx, 0, rz);
+      shadows(m);
+      parent.add(m);
+    };
+    for (const x of [-0.2, 0.2]) {
+      part(forks, new THREE.BoxGeometry(0.18, 0.05, 1.08), red, x, 0.085, 0.54);
+      part(g, new THREE.CylinderGeometry(0.03, 0.03, 0.1, 12), dark, x, 0.03, 0.88, 0, Math.PI / 2);
+    }
+    part(forks, new THREE.BoxGeometry(0.6, 0.4, 0.2), red, 0, 0.26, -0.1);
+    part(g, new THREE.CylinderGeometry(0.1, 0.1, 0.16, 16), dark, 0, 0.1, -0.34, 0, Math.PI / 2);
+    part(handle, new THREE.CylinderGeometry(0.018, 0.018, 0.68, 10), red, 0, 0.34, 0);
+    part(handle, new THREE.TorusGeometry(0.1, 0.018, 8, 20), dark, 0, 0.72, 0);
   }
-  part(forks, new THREE.BoxGeometry(0.56, 0.36, 0.2), red, 0, 0.24, -0.2);
-  g.add(forks);
-  // Stuurwielen en dissel met handgreep
-  part(g, new THREE.CylinderGeometry(0.09, 0.09, 0.16, 16), dark, 0, 0.09, -0.3, 0, Math.PI / 2);
-  part(g, new THREE.CylinderGeometry(0.018, 0.018, 1.1, 10), dark, 0, 0.85, -0.52, -0.4);
-  part(g, new THREE.TorusGeometry(0.09, 0.015, 8, 20), dark, 0, 1.38, -0.74, -0.4);
 
   // ---------- Toestand ----------
   let held = false;
+  /** Een andere speler duwt hem. */
+  let remoteHeld = false;
+  let tilt = 0; // 0..1, loopt vloeiend naar wel/niet geduwd
   let up = false;
   let lift = 0; // 0..1, loopt vloeiend naar `up`
   let carried: Carried | null = null;
@@ -186,8 +238,8 @@ export function createPalletJack({ hall, bounds, take, place, onStockChange, loo
     pose.r = g.rotation.y;
     const y = lift * LIFT;
     const list: Solid[] = [
-      { pose, minX: -0.28, maxX: 0.28, minZ: -0.3, maxZ: -0.1, minY: 0, maxY: 0.42 + y },
-      { pose, minX: -0.28, maxX: 0.28, minZ: -0.1, maxZ: TIP_Z, minY: 0, maxY: 0.085 + y },
+      { pose, minX: -0.3, maxX: 0.3, minZ: -0.46, maxZ: 0, minY: 0, maxY: 0.46 + y },
+      { pose, minX: -0.31, maxX: 0.31, minZ: 0, maxZ: TIP_Z, minY: 0, maxY: 0.11 + y },
     ];
     if (carried) {
       const base = carried.mesh.position.y;
@@ -208,12 +260,14 @@ export function createPalletJack({ hall, bounds, take, place, onStockChange, loo
       r: round(t.r, 1000),
       up: up ? 1 : 0,
       load: carried ? { ...carried.load, from: carried.from, key: carried.key } : null,
+      ...(held ? { h: 1 as const } : {}),
     };
   }
 
   function applyState(s: JackState) {
     remote = { x: s.x, z: s.z, r: s.r };
     up = s.up === 1;
+    remoteHeld = s.h === 1;
     if ((carried?.load.id ?? '') !== (s.load?.id ?? '')) {
       detach();
       if (s.load) {
@@ -234,7 +288,7 @@ export function createPalletJack({ hall, bounds, take, place, onStockChange, loo
     /** Plek van de pols op de handgreep (wereld): side 1 = linkerhand, -1 = rechterhand van wie hem duwt. */
     grip(side: 1 | -1, point: THREE.Vector3) {
       g.updateMatrixWorld();
-      return g.localToWorld(point.set(side * 0.12, 1.36, -0.8));
+      return handle.localToWorld(point.set(side * HAND.x, HAND.y, HAND.z));
     },
     get held() {
       return held;
@@ -245,7 +299,10 @@ export function createPalletJack({ hall, bounds, take, place, onStockChange, loo
     /** Pakken (true) of loslaten (false); losgelaten blijft hij staan waar hij is. */
     setHeld(on: boolean) {
       held = on;
-      if (on) remote = null;
+      if (on) {
+        remote = null;
+        remoteHeld = false;
+      }
       hint = '';
     },
     /** Handig bij testen: zet de pompwagen ergens neer. */
@@ -279,6 +336,9 @@ export function createPalletJack({ hall, bounds, take, place, onStockChange, loo
       }
       lift += ((up ? 1 : 0) - lift) * (1 - Math.exp(-dt * 9));
       forks.position.y = lift * LIFT;
+      // dissel: gekanteld naar wie duwt, losgelaten veert hij terug rechtop
+      tilt += ((held || remoteHeld ? 1 : 0) - tilt) * (1 - Math.exp(-dt * 10));
+      handle.rotation.x = -tilt * TILT;
       // de pallet rust op de vorken zodra die de onderkant van het dek raken
       if (carried) carried.mesh.position.y = Math.max(0, lift * LIFT - 0.015);
     },
