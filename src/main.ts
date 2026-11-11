@@ -74,6 +74,21 @@ const composer = new EffectComposer(
 composer.addPass(new RenderPass(scene, camera));
 const gtao = new GTAOPass(scene, camera, window.innerWidth, window.innerHeight);
 gtao.updateGtaoMaterial({ radius: 0.5, distanceExponent: 1.4, thickness: 1.2, scale: 1.15, samples: 12 });
+// Tekstlabels (sprites) horen niet in de diepte/normaal-pass van GTAO: daar worden ze
+// als massieve vlakken getekend en verschijnen ze als zwarte balken in beeld.
+const gtaoRender = gtao.render.bind(gtao);
+gtao.render = (...args: Parameters<GTAOPass['render']>) => {
+  const hidden: THREE.Object3D[] = [];
+  scene.traverseVisible((o) => {
+    if ((o as THREE.Sprite).isSprite) hidden.push(o);
+  });
+  for (const o of hidden) o.visible = false;
+  try {
+    gtaoRender(...args);
+  } finally {
+    for (const o of hidden) o.visible = true;
+  }
+};
 composer.addPass(gtao);
 composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.14, 0.6, 1.8));
 composer.addPass(new OutputPass());
