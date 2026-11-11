@@ -7,10 +7,10 @@ import { createAppFrame } from './wmsApp';
 // - geopend (E bij de pc): groot midden in beeld en te bedienen. Sluit met Esc, E, het kruisje of weglopen.
 // Een iframe kan niet als textuur in WebGL; daarom een HTML-laag bovenop het canvas.
 
-/** Schermresolutie van de pc in CSS-pixels (zelfde verhouding als het beeldvlak: 0,7 × 0,4375 m). */
-const W = 1100;
-const H = 688;
-const SCREEN = { w: 0.7, h: 0.4375 };
+/** Schermresolutie van de pc in CSS-pixels: full HD, zoals een gewone monitor (beeldvlak 0,7 m breed, 16:9). */
+const W = 1920;
+const H = 1080;
+const SCREEN = { w: 0.7, h: 0.7 * (9 / 16) };
 /** Verder weg dan dit (m) tonen we de app niet in de wereld. */
 const MAX_DISTANCE = 14;
 
@@ -19,8 +19,8 @@ const css = `
 .pc-backdrop.open { display: block; }
 .pc-frame { position: fixed; left: 0; top: 0; z-index: 4; display: none; flex-direction: column; width: ${W}px; height: ${H}px;
   transform-origin: 0 0; background: #fff; overflow: hidden; pointer-events: none; font: 13px system-ui, sans-serif; }
-.pc-frame.open { z-index: 51; pointer-events: auto; overflow: visible; box-shadow: 0 0 0 14px #15171a, 0 20px 60px 14px rgba(0,0,0,.6); }
-.pc-bar { display: none; align-items: center; gap: 10px; padding: 4px 10px; background: #25272b; color: #cfd3d6; }
+.pc-frame.open { z-index: 51; pointer-events: auto; overflow: visible; box-shadow: 0 0 0 22px #15171a, 0 30px 90px 22px rgba(0,0,0,.6); }
+.pc-bar { display: none; align-items: center; gap: 10px; padding: 6px 12px; background: #25272b; color: #cfd3d6; font-size: 18px; }
 .pc-frame.open .pc-bar { display: flex; }
 .pc-bar span { flex: 1; }
 .pc-bar button { border: 0; border-radius: 4px; padding: 2px 9px; background: #c62828; color: #fff; font: inherit; cursor: pointer; }
@@ -167,7 +167,7 @@ export function createPcScreen({ camera, display, world }: Options) {
     /** Elke frame aanroepen (na het bijwerken van de camera). */
     update(dt: number) {
       if (open) {
-        const s = Math.min((window.innerWidth * 0.92) / W, (window.innerHeight * 0.84) / H, 1.25);
+        const s = Math.min((window.innerWidth * 0.92) / W, (window.innerHeight * 0.86) / H, 1);
         const x = Math.round((window.innerWidth - W * s) / 2);
         const y = Math.round((window.innerHeight - H * s) / 2);
         setTransform(`translate(${x}px,${y}px) scale(${s.toFixed(4)})`);
