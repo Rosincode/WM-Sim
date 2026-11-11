@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CENTER_V, HEAD, NOSE_V, headOutline, headY, photoUV, taper } from './headShape';
+import { BRIM_Y, CENTER_V, HEAD, NOSE_V, headOutline, headY, photoUV, taper } from './headShape';
 
 // Magazijnmedewerker: lichte, gelede figuur (hesje, helm) met procedurele loopanimatie.
 // Voorkant wijst naar +Z, voeten op y = 0. Geen modelbestanden of skinning: enkele tientallen eenvoudige meshes.
@@ -172,11 +172,11 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   // Hoofd met gezicht, haar en helm
   const head = pivot(torso, 0, 0.62, 0);
   mesh(shapeHead(new THREE.SphereGeometry(HEAD.r, 24, 18), HEAD.r), skin, head, 0, HEAD.y, 0).scale.set(HEAD.sx, HEAD.sy, HEAD.sz);
-  const features = [ball(0.013, skin, head, 0, 0.083, 0.098)]; // neus
+  const features = [ball(0.013, skin, head, 0, 0.092, 0.098)]; // neus
   features[0].scale.set(0.8, 1.3, 1);
   for (const side of [1, -1]) {
-    ball(0.022, skin, head, side * 0.09, 0.088, -0.004).scale.set(0.5, 1.2, 0.9); // oor
-    features.push(ball(0.0105, dark, head, side * 0.036, 0.108, 0.088)); // oog
+    ball(0.022, skin, head, side * 0.082, 0.1, -0.004).scale.set(0.5, 1.3, 0.9); // oor
+    features.push(ball(0.0105, dark, head, side * 0.033, 0.122, 0.088)); // oog
   }
   // Eigen foto als gezicht: een schil over de voorkant van het hoofd, in dezelfde vorm als het hoofd. De foto
   // staat er recht van voren op, zó dat de hoofdvorm uit het fotovenster precies op de omtrek van het hoofd valt:
@@ -200,13 +200,13 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   face.visible = false;
   head.add(face);
   const skinColor = skin.color.clone();
-  const hairCap = mesh(new THREE.SphereGeometry(0.104, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.6), hair, head, 0, 0.102, -0.01);
-  hairCap.scale.set(0.93, 1.1, 1);
+  const hairCap = mesh(new THREE.SphereGeometry(0.104, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.6), hair, head, 0, 0.125, -0.01);
+  hairCap.scale.set(0.86, 1.25, 1);
   hairCap.rotation.x = -0.55;
-  const dome = mesh(new THREE.SphereGeometry(0.118, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), helmet, head, 0, 0.128, 0);
-  dome.scale.set(1, 0.95, 1.1);
-  const brim = mesh(new THREE.CylinderGeometry(0.12, 0.124, 0.012, 20), helmet, head, 0, 0.13, 0.03);
-  brim.scale.z = 1.22;
+  const dome = mesh(new THREE.SphereGeometry(0.118, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), helmet, head, 0, BRIM_Y - 0.002, 0);
+  dome.scale.set(0.92, 0.95, 1.1);
+  const brim = mesh(new THREE.CylinderGeometry(0.12, 0.124, 0.012, 20), helmet, head, 0, BRIM_Y, 0.03);
+  brim.scale.set(0.92, 1, 1.22);
 
   function arm(side: number) {
     const shoulder = pivot(torso, side * 0.218, 0.495, 0);

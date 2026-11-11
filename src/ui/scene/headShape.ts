@@ -2,11 +2,13 @@
 // het fotovenster (facePhoto.ts): de hoofdvorm die je bij het maken van de foto ziet is precies het
 // silhouet van het hoofd van de figuur, zodat ogen en kin op de juiste plek terechtkomen.
 
-/** Het hoofd is een bol (straal r) die is uitgerekt (sx, sy, sz) en op hoogte y boven de nek zit. */
-export const HEAD = { r: 0.1, sx: 0.88, sy: 1.22, sz: 0.98, y: 0.092 };
+/** Het hoofd is een bol (straal r) die langwerpig is uitgerekt (sx, sy, sz) en op hoogte y boven de nek zit. */
+export const HEAD = { r: 0.1, sx: 0.8, sy: 1.4, sz: 0.98, y: 0.105 };
+/** Hoogte (t.o.v. de nek) van de onderrand van de helm: wat daarboven zit is niet te zien. */
+export const BRIM_Y = 0.16;
 
 /** Het hoofd loopt naar de kin smaller toe. g = hoogte op de bol, -1 (kin) .. 1 (kruin); geeft de factor op de breedte. */
-export const taper = (g: number) => 1 - 0.3 * Math.max(0, -g) ** 2;
+export const taper = (g: number) => 1 - 0.36 * Math.max(0, -g) ** 2;
 
 // De foto is een staand beeld (3:4). Daarin staat het hoofd van kruin (TOP_V) tot kin (CHIN_V), gemeten vanaf de bovenrand.
 const TOP_V = 0.06;

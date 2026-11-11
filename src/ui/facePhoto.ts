@@ -1,4 +1,4 @@
-import { EYES, HEAD, headOutline, photoUV } from './scene/headShape';
+import { BRIM_Y, EYES, HEAD, headOutline, photoUV } from './scene/headShape';
 
 // Foto van je eigen hoofd voor op je figuur. De foto wordt met de webcam gemaakt in een hoofdvorm (het silhouet van het hoofd van de figuur),
 // sterk verkleind en alleen in deze browser bewaard (localStorage). Net als je naam gaat hij via de
@@ -79,7 +79,7 @@ export function createFacePicker(initial: string | null) {
   const eyes = [-1, 1]
     .map((d) => `<ellipse cx="${(0.5 + d * EYES.du) * VW}" cy="${EYES.v * VH}" rx="13" ry="8"/>`)
     .join('');
-  const brimV = photoUV(0, 0.13).v; // onderrand van de helm
+  const brimV = photoUV(0, BRIM_Y).v; // onderrand van de helm
   const chinY = photoUV(0, HEAD.y - HEAD.r * HEAD.sy + 0.012).v * VH; // net boven de onderkant van het hoofd
   const guide = document.createElement('div');
   guide.style.cssText = 'position:absolute;inset:0;pointer-events:none';
