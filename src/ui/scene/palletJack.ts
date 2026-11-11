@@ -234,6 +234,11 @@ export function createPalletJack({ hall, bounds, take, place, onStockChange, loo
     getState,
     applyState,
     pump,
+    /** Plek van de pols op de handgreep (wereld): side 1 = linkerhand, -1 = rechterhand van wie hem duwt. */
+    grip(side: 1 | -1, point: THREE.Vector3) {
+      g.updateMatrixWorld();
+      return g.localToWorld(point.set(side * 0.12, 1.36, -0.8));
+    },
     get held() {
       return held;
     },

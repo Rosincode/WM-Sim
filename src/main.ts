@@ -268,7 +268,7 @@ const multiplayer = params.has('solo')
       shared: warehouse.shared,
       carryLabel: warehouse.carryLabel,
       forklift,
-      jack: { getState: jack.getState, applyState: jack.applyState, held: () => jack.held, release: () => jack.setHeld(false) },
+      jack: { getState: jack.getState, applyState: jack.applyState, grip: jack.grip, held: () => jack.held, release: () => jack.setHeld(false) },
       radio,
       airborne: () => view.airborne,
       rider: () => {
@@ -338,6 +338,7 @@ function refreshShadows() {
 let last = performance.now();
 const wheelHand: HandTarget = { point: new THREE.Vector3(), normal: new THREE.Vector3() };
 const toolHand: HandTarget = { point: new THREE.Vector3(), hideHand: true };
+const jackHands: HandTarget[] = [{ point: new THREE.Vector3() }, { point: new THREE.Vector3() }];
 
 renderer.setAnimationLoop((now) => {
   const dt = THREE.MathUtils.clamp((now - last) / 1000, 0, 0.1); // eerste frame kan een tijdstip vóór het laden hebben
@@ -357,8 +358,13 @@ renderer.setAnimationLoop((now) => {
       forklift.steeringGrip(wheelHand.point, wheelHand.normal!);
       leftHand = wheelHand;
       if (handheld.wristWorld(toolHand.point)) rightHand = toolHand;
+    } else if (jack.held) {
+      // Met de pompwagen: beide handen op de handgreep
+      jack.grip(1, jackHands[0].point);
+      jack.grip(-1, jackHands[1].point);
+      [leftHand, rightHand] = jackHands;
     }
-    character.update(dt, { seated: driving, seatHipY: forklift.seat.y - 0.56, carrying: warehouse.carrying() || jack.held, leftHand, rightHand, walk: view.walk, airborne: view.airborne });
+    character.update(dt, { seated: driving, seatHipY: forklift.seat.y - 0.56, carrying: warehouse.carrying(), leftHand, rightHand, walk: view.walk, airborne: view.airborne });
   }
 
   multiplayer?.update(dt);

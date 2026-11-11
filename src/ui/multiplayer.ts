@@ -60,7 +60,7 @@ interface Options {
     readonly forkHeight: number;
   };
   /** De pompwagen: wie hem vasthoudt stuurt de stand mee met zijn positie. */
-  jack: { getState(): JackState; applyState(s: JackState): void; held(): boolean; /** Twee spelers pakten hem tegelijk. */ release(): void };
+  jack: { getState(): JackState; applyState(s: JackState): void; grip(side: 1 | -1, point: THREE.Vector3): unknown; held(): boolean; /** Twee spelers pakten hem tegelijk. */ release(): void };
   /** De radio in de hal: de gekozen zender (-1 = uit) geldt voor alle spelers. */
   radio: { readonly station: number; setStation(i: number): void; onChange(l: () => void): void };
   /** Staat deze speler op de heftruck? Dan zijn plek t.o.v. de truck (y: hoogte boven de vorken), anders null. */
@@ -160,6 +160,8 @@ export function mountMultiplayer(o: Options) {
     scanT: number;
     /** Linkerhand op het stuur, als deze speler rijdt. */
     wheelHand: HandTarget;
+    /** Beide handen op de handgreep van de pompwagen, als deze speler hem vasthoudt. */
+    jackHands: HandTarget[];
     /** Gladgestreken plek op de heftruck, als deze speler erop staat. */
     ride: { x: number; z: number } | null;
   };
@@ -184,6 +186,7 @@ export function mountMultiplayer(o: Options) {
       look: { yaw: 0, pitch: 0 },
       scanT: 0,
       wheelHand: { point: new THREE.Vector3(), normal: new THREE.Vector3() },
+      jackHands: [{ point: new THREE.Vector3() }, { point: new THREE.Vector3() }],
       ride: null,
     };
     avatars.set(peer.id, avatar);
@@ -524,16 +527,22 @@ export function mountMultiplayer(o: Options) {
         a.scanT = Math.max(0, a.scanT - dt);
         const seated = a.pose.d === 1;
         if (seated) o.forklift.steeringGrip(a.wheelHand.point, a.wheelHand.normal!);
+        const pushing = !seated && !!a.pose.pj; // duwt de pompwagen: beide handen op de handgreep
+        if (pushing) {
+          o.jack.grip(1, a.jackHands[0].point);
+          o.jack.grip(-1, a.jackHands[1].point);
+        }
         a.character.update(dt, {
           seated,
           seatHipY: o.seatHipY,
-          carrying: !!a.pose.c || !!a.pose.pj,
+          carrying: !!a.pose.c,
           look: a.look,
           tool: a.pose.t === 1 ? 'scanner' : a.pose.t === 2 ? 'tablet' : undefined,
           scan: a.scanT / 0.4,
           walk,
           airborne: a.pose.j === 1,
-          leftHand: seated ? a.wheelHand : undefined,
+          leftHand: seated ? a.wheelHand : pushing ? a.jackHands[0] : undefined,
+          rightHand: pushing ? a.jackHands[1] : undefined,
         });
         a.tag.set(a.pose.n, a.color);
         a.load.visible = !!a.pose.c && !a.pose.d;
