@@ -92,9 +92,16 @@ export function createRoom(roomName: string) {
     });
     conn = c;
   }
-  connect();
+
+  let started = false;
 
   return {
+    /** Begin met verbinden. Pas aanroepen als de game draait: een blokkerende opstart laat de verbinding verlopen. */
+    start() {
+      if (started) return;
+      started = true;
+      connect();
+    },
     id,
     room,
     peers,

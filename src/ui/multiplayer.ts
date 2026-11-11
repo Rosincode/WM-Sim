@@ -281,6 +281,7 @@ export function mountMultiplayer(o: Options) {
     /** Naam van de speler die nu met de heftruck rijdt, of null. */
     forkliftDriver: () => remoteDriver()?.pose.n ?? null,
     update(dt: number) {
+      room.start(); // pas verbinden als de eerste beelden lopen
       room.update();
       o.shared.setAuthority(room.isHost);
       o.forklift.setRemoteDriven(!o.isDriving() && !!remoteDriver());
