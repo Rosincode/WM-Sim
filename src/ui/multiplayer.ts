@@ -3,6 +3,7 @@ import { createRoom, type Peer } from '../sim/multiplayer/room';
 import type { SharedState } from '../sim/warehouse';
 import { createCharacter, type HandTarget } from './scene/character';
 import type { ForkliftState } from './scene/forklift';
+import type { JackState } from './scene/palletJack';
 import { SKU_COLORS } from './warehouseView';
 
 // Multiplayer: iedereen die de game opent komt in dezelfde kamer en deelt één magazijn.
@@ -34,8 +35,9 @@ type Pose = {
   v?: { x: number; z: number; y?: number };
   /** Los van de grond (springen, vallen) */ j: 0 | 1;
   /** Toetert (als deze speler rijdt) */ k: 0 | 1;
+  /** Stand van de pompwagen, alleen als deze speler hem vasthoudt */ pj?: JackState;
 };
-type StateMsg = { rev: number; w: string; sim: SharedState; fork: ForkliftState };
+type StateMsg = { rev: number; w: string; sim: SharedState; fork: ForkliftState; jack?: JackState };
 
 interface Options {
   scene: THREE.Scene;
@@ -46,7 +48,8 @@ interface Options {
   carryLabel(): string;
   forklift: {
     getState(): ForkliftState;
-    applyState(s: ForkliftState): void;
+    applyState(s: ForkliftState, withLoose?: boolean): void;
+    applyLoose(list: ForkliftState['loose']): void;
     setRemoteDriven(on: boolean): void;
     readonly steer: number;
     setRemoteSteer(v: number): void;
@@ -56,6 +59,8 @@ interface Options {
     readonly group: THREE.Object3D;
     readonly forkHeight: number;
   };
+  /** De pompwagen: wie hem vasthoudt stuurt de stand mee met zijn positie. */
+  jack: { getState(): JackState; applyState(s: JackState): void; held(): boolean; /** Twee spelers pakten hem tegelijk. */ release(): void };
   /** De radio in de hal: de gekozen zender (-1 = uit) geldt voor alle spelers. */
   radio: { readonly station: number; setStation(i: number): void; onChange(l: () => void): void };
   /** Staat deze speler op de heftruck? Dan zijn plek t.o.v. de truck (y: hoogte boven de vorken), anders null. */
@@ -83,6 +88,9 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 function validFork(f: unknown): f is ForkliftState {
   return isObj(f) && [f.x, f.z, f.r, f.h].every((v) => typeof v === 'number' && Number.isFinite(v)) &&
     (f.load === null || isObj(f.load)) && Array.isArray(f.loose) && f.loose.every(isObj);
+}
+function validJack(k: unknown): k is JackState {
+  return isObj(k) && [k.x, k.z, k.r].every((v) => typeof v === 'number' && Number.isFinite(v)) && (k.load === null || isObj(k.load));
 }
 function validState(m: unknown): m is StateMsg {
   if (!isObj(m) || typeof m.rev !== 'number' || typeof m.w !== 'string' || !validFork(m.fork) || !isObj(m.sim)) return false;
@@ -198,14 +206,22 @@ export function mountMultiplayer(o: Options) {
   // De rijpositie van vrachtwagens (t) verandert elke frame en telt niet als wijziging: iedereen rijdt ze zelf.
   const simKey = () => JSON.stringify(o.shared.state(), (k, v) => (k === 't' ? 0 : v));
   // Tijdens het rijden gaat de stand van de heftruck mee met de positie van de bestuurder, niet als wijziging.
-  const forkKey = () => (o.isDriving() || remoteDriver() ? lastForkKey : JSON.stringify(o.forklift.getState()));
-  let lastForkKey = JSON.stringify(o.forklift.getState());
+  const forkNow = () => JSON.stringify({ ...o.forklift.getState(), loose: 0 });
+  const forkKey = () => (o.isDriving() || remoteDriver() ? lastForkKey : forkNow());
+  let lastForkKey = forkNow();
+  // Losse pallets op de vloer gaan altijd als wijziging mee, ook als er iemand rijdt: de pompwagen zet ze ook neer.
+  const looseKey = () => JSON.stringify(o.forklift.getState().loose);
+  let lastLooseKey = looseKey();
+  // Net als de heftruck: wie de pompwagen vasthoudt stuurt de stand mee met zijn positie.
+  const remoteHolder = () => [...avatars.values()].find((a) => a.pose.pj);
+  const jackKey = () => (o.jack.held() || remoteHolder() ? lastJackKey : JSON.stringify(o.jack.getState()));
+  let lastJackKey = JSON.stringify(o.jack.getState());
   let lastSimKey = simKey();
   let lastStateAt = 0;
 
   function sendState() {
     lastStateAt = performance.now();
-    room.send('s', { rev, w: writer, sim: o.shared.state(), fork: o.forklift.getState() } satisfies StateMsg);
+    room.send('s', { rev, w: writer, sim: o.shared.state(), fork: o.forklift.getState(), jack: o.jack.getState() } satisfies StateMsg);
   }
 
   let lastPose = '';
@@ -231,6 +247,7 @@ export function mountMultiplayer(o: Options) {
       k: o.forklift.honking || honked ? 1 : 0,
     };
     if (pose.d) pose.f = o.forklift.getState();
+    if (o.jack.held()) pose.pj = o.jack.getState();
     const on = pose.d ? null : o.rider();
     if (on) pose.v = { x: round(on.x), z: round(on.z), ...(on.y !== undefined && { y: round(on.y) }) };
     const json = JSON.stringify(pose);
@@ -299,8 +316,17 @@ export function mountMultiplayer(o: Options) {
         if (o.isDriving()) {
           if (from.id < room.id) o.leaveForklift(); // tegelijk ingestapt: het laagste id mag blijven
         } else {
-          o.forklift.applyState(data.f);
-          lastForkKey = JSON.stringify(o.forklift.getState());
+          o.forklift.applyState(data.f, false);
+          lastForkKey = forkNow();
+        }
+      }
+      if (validJack(data.pj)) {
+        a.pose.pj = data.pj;
+        if (o.jack.held()) {
+          if (from.id < room.id) o.jack.release(); // tegelijk gepakt: het laagste id mag hem houden
+        } else {
+          o.jack.applyState(data.pj);
+          lastJackKey = JSON.stringify(o.jack.getState());
         }
       }
       if (wasNew) refreshChip();
@@ -310,10 +336,14 @@ export function mountMultiplayer(o: Options) {
       if (newer) {
         o.shared.apply(data.sim);
         if (!o.isDriving() && !remoteDriver()) o.forklift.applyState(data.fork);
+        else o.forklift.applyLoose(data.fork.loose);
+        if (!o.jack.held() && !remoteHolder() && validJack(data.jack)) o.jack.applyState(data.jack);
         rev = data.rev;
         writer = data.w;
         lastSimKey = simKey();
-        lastForkKey = JSON.stringify(o.forklift.getState());
+        lastForkKey = forkNow();
+        lastLooseKey = looseKey();
+        lastJackKey = JSON.stringify(o.jack.getState());
       } else if (older && performance.now() - lastStateAt > 1000) {
         sendState(); // de afzender loopt achter: stuur de actuele wereld terug
       }
@@ -437,6 +467,8 @@ export function mountMultiplayer(o: Options) {
   return {
     /** Naam van de speler die nu met de heftruck rijdt, of null. */
     forkliftDriver: () => remoteDriver()?.pose.n ?? null,
+    /** Naam van de speler die nu de pompwagen vasthoudt, of null. */
+    jackHolder: () => remoteHolder()?.pose.n ?? null,
     update(dt: number) {
       room.start(); // pas verbinden als de eerste beelden lopen
       room.update();
@@ -495,7 +527,7 @@ export function mountMultiplayer(o: Options) {
         a.character.update(dt, {
           seated,
           seatHipY: o.seatHipY,
-          carrying: !!a.pose.c,
+          carrying: !!a.pose.c || !!a.pose.pj,
           look: a.look,
           tool: a.pose.t === 1 ? 'scanner' : a.pose.t === 2 ? 'tablet' : undefined,
           scan: a.scanT / 0.4,
@@ -528,7 +560,11 @@ export function mountMultiplayer(o: Options) {
       // Lokale wijziging aan de gedeelde wereld: nieuwe revisie naar iedereen
       const sim = simKey();
       const fork = forkKey();
-      if (sim !== lastSimKey || fork !== lastForkKey) {
+      const looseNow = looseKey();
+      const jackNow = jackKey();
+      if (sim !== lastSimKey || fork !== lastForkKey || looseNow !== lastLooseKey || jackNow !== lastJackKey) {
+        lastLooseKey = looseNow;
+        lastJackKey = jackNow;
         lastSimKey = sim;
         lastForkKey = fork;
         rev++;

@@ -495,24 +495,6 @@ export function createWarehouse(scene: THREE.Scene) {
   exitSign.rotation.y = Math.PI;
   scene.add(exitSign);
 
-  // Handpallettruck
-  const jack = new THREE.Group();
-  const jackRed = paint('#d1401f', 0.45, 0.3);
-  const part = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, rx = 0) => {
-    const m = new THREE.Mesh(geo, mat);
-    m.position.set(x, y, z);
-    m.rotation.x = rx;
-    m.castShadow = true;
-    jack.add(m);
-  };
-  for (const dx of [-0.2, 0.2]) part(new THREE.BoxGeometry(0.16, 0.05, 1.15), jackRed, dx, 0.09, 0.45);
-  part(new THREE.BoxGeometry(0.56, 0.38, 0.2), jackRed, 0, 0.25, -0.2);
-  part(new THREE.CylinderGeometry(0.018, 0.018, 1.1, 10), darkMetal, 0, 0.85, -0.42, -0.4);
-  part(new THREE.TorusGeometry(0.09, 0.015, 8, 20), darkMetal, 0, 1.38, -0.64, -0.4);
-  jack.position.set(21.5, 0, D / 2 - 3.5);
-  jack.rotation.y = 0.5;
-  scene.add(jack);
-
   // ---------- Voorraad: pallets, dozen en wikkelfolie ----------
   const MAX_PALLETS = 700;
   const MAX_CARTONS = 24000;

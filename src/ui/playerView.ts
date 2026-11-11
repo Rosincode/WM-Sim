@@ -75,7 +75,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     overview:
       '<b>WM-Sim — Overzicht</b><br>Slepen: draaien · Scroll: zoom · Rechts slepen: schuiven<br><b>C</b>: dichtbij (first person)',
     first:
-      '<b>WM-Sim — First person</b><br>Klik: muis vastzetten · Muis: rondkijken · Esc: muis los<br>W/S: lopen · A/D: zijwaarts · ←/→: draaien · Shift: rennen · Spatie: springen<br><b>1</b>: scanner (klik op een label = scannen naar de WMS) · <b>2</b>: tablet met WMS (F: dichtbij en bedienen)<br><b>R</b>: in de heftruck stappen (als je ernaast staat) · op de vorken staan: een ander tilt je op · <b>M</b>: radio (op het bureau bij de pc) · <b>V</b>: third person · <b>C</b>: overzicht',
+      '<b>WM-Sim — First person</b><br>Klik: muis vastzetten · Muis: rondkijken · Esc: muis los<br>W/S: lopen · A/D: zijwaarts · ←/→: draaien · Shift: rennen · Spatie: springen<br><b>1</b>: scanner (klik op een label = scannen naar de WMS) · <b>2</b>: tablet met WMS (F: dichtbij en bedienen)<br><b>R</b>: in de heftruck stappen of de pompwagen pakken (als je ernaast staat) · op de vorken staan: een ander tilt je op · <b>M</b>: radio (op het bureau bij de pc) · <b>V</b>: third person · <b>C</b>: overzicht',
     third:
       '<b>WM-Sim — Third person</b><br>W/S: lopen · A/D: draaien · Shift: rennen · Spatie: springen<br><b>V</b>: first person · <b>C</b>: overzicht',
   };

@@ -11,6 +11,7 @@ import { createHandheld } from './ui/handheld';
 import { createTabletApp } from './ui/tabletApp';
 import { createWarehouse, HALL } from './ui/scene/warehouse';
 import { createForklift } from './ui/scene/forklift';
+import { createPalletJack } from './ui/scene/palletJack';
 import { createRadio } from './ui/radio';
 import { POINTS } from './sim/layout';
 import { createExterior } from './ui/scene/exterior';
@@ -180,7 +181,7 @@ const view = createPlayerView({
   player,
   hud,
   bounds: BOUNDS,
-  solids: [hall.solids, () => forklift.solids()],
+  solids: [hall.solids, () => forklift.solids(), () => jack.solids()],
   initialMode: params.get('view') === 'overview' ? 'overview' : params.get('view') === 'third' ? 'third' : 'first',
   onModeChange: applyMode,
 });
@@ -196,8 +197,12 @@ if (params.get('tool') === '2') handheld.setTool('tablet');
 window.addEventListener('keydown', (e) => {
   const t = e.target;
   if (e.code === 'KeyR' && !e.repeat && !(t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement)) {
+    // R: uitstappen of loslaten; anders pakken wat het dichtst bij is (heftruck of pompwagen)
     if (driving) setDriving(false);
-    else if (nearForklift() && !multiplayer?.forkliftDriver()) setDriving(true);
+    else if (jack.held) jack.setHeld(false);
+    else if (nearJack() && !(nearForklift() && forkliftDistance() < jackDistance())) {
+      if (!multiplayer?.jackHolder()) jack.setHeld(true);
+    } else if (nearForklift() && !multiplayer?.forkliftDriver()) setDriving(true);
   }
   if (e.code === 'KeyP' && !e.repeat && !(e.target instanceof HTMLInputElement)) postFx = !postFx;
 });
@@ -234,7 +239,24 @@ scene.add(radio.group);
 
 if (import.meta.env.DEV) Object.assign((window as unknown as { wmDebug: object }).wmDebug, { radio });
 
-const nearForklift = () => player.position.distanceTo(forklift.group.position) < 2.8;
+const forkliftDistance = () => player.position.distanceTo(forklift.group.position);
+const nearForklift = () => forkliftDistance() < 2.8;
+
+// --- Pompwagen: pakken met R, vorken omhoog/omlaag met Q; voor pallets op de vloer ---
+const jack = createPalletJack({
+  hall,
+  bounds: BOUNDS,
+  take: warehouse.forkliftTake,
+  place: warehouse.forkliftPlace,
+  onStockChange: refreshHall,
+  loose: forklift.loose,
+});
+jack.group.position.set(-13.4, 0, 5.4); // naast het looppad, bij de rolcontainers
+jack.group.rotation.y = Math.PI / 2;
+scene.add(jack.group);
+const jackDistance = () => Math.hypot(player.position.x - jack.group.position.x, player.position.z - jack.group.position.z);
+const nearJack = () => jackDistance() < 2.2 && player.position.y < 1;
+if (import.meta.env.DEV) Object.assign((window as unknown as { wmDebug: object }).wmDebug, { jack });
 
 // --- Multiplayer: iedereen speelt samen in één magazijn (?room=naam voor een eigen kamer, ?solo om alleen te spelen) ---
 const multiplayer = params.has('solo')
@@ -246,6 +268,7 @@ const multiplayer = params.has('solo')
       shared: warehouse.shared,
       carryLabel: warehouse.carryLabel,
       forklift,
+      jack: { getState: jack.getState, applyState: jack.applyState, held: () => jack.held, release: () => jack.setHeld(false) },
       radio,
       airborne: () => view.airborne,
       rider: () => {
@@ -323,6 +346,7 @@ renderer.setAnimationLoop((now) => {
 
   forklift.update(dt, now / 1000);
   view.update(dt);
+  jack.update(dt, player);
   // heupen net boven de zitting; forklift.seat is de plek van het hoofd
   handheld.update(dt, view.moving, driving ? view.look : undefined);
   if (player.visible) {
@@ -334,7 +358,7 @@ renderer.setAnimationLoop((now) => {
       leftHand = wheelHand;
       if (handheld.wristWorld(toolHand.point)) rightHand = toolHand;
     }
-    character.update(dt, { seated: driving, seatHipY: forklift.seat.y - 0.56, carrying: warehouse.carrying(), leftHand, rightHand, walk: view.walk, airborne: view.airborne });
+    character.update(dt, { seated: driving, seatHipY: forklift.seat.y - 0.56, carrying: warehouse.carrying() || jack.held, leftHand, rightHand, walk: view.walk, airborne: view.airborne });
   }
 
   multiplayer?.update(dt);
@@ -346,7 +370,12 @@ renderer.setAnimationLoop((now) => {
     : view.mode !== 'overview' && nearForklift()
       ? otherDriver ? 'De heftruck is bezet' : '<b>R</b>: in de heftruck stappen'
       : '';
-  const hintText = [forkliftHint, radio.hint].filter(Boolean).join('<br>');
+  const jackHint = jack.held
+    ? jack.hint
+    : !driving && view.mode !== 'overview' && nearJack()
+      ? multiplayer?.jackHolder() ? 'De pompwagen is in gebruik' : '<b>R</b>: pompwagen pakken'
+      : '';
+  const hintText = [jackHint || forkliftHint, radio.hint].filter(Boolean).join('<br>');
   if (driveHint.innerHTML !== hintText) driveHint.innerHTML = hintText;
   driveHint.style.display = hintText ? 'block' : 'none';
   warehouse.update(dt);

@@ -5,7 +5,7 @@ import type { Collider, Hall, RackPallet, Slot, Solid } from './warehouse';
 // Rijden: W/S, sturen: A/D, vorken: pijl omhoog/omlaag.
 // Oppakken: steek de vorken onder een pallet en hef. Neerzetten: zak tot de pallet staat.
 
-type Load = { id: string; sku: string; qty: number };
+export type Load = { id: string; sku: string; qty: number };
 
 interface Options {
   hall: Hall;
@@ -19,8 +19,8 @@ interface Options {
 }
 
 /** key: bepaalt hoe de dozen op de pallet gestapeld zijn, zodat hij er bij elke speler hetzelfde uitziet. */
-type Carried = { load: Load; from: string; key: string; mesh: THREE.Group };
-type Loose = Carried & { x: number; z: number; r: number };
+export type Carried = { load: Load; from: string; key: string; mesh: THREE.Group };
+export type Loose = Carried & { x: number; z: number; r: number };
 
 /** Stand van de heftruck zoals spelers die onderling delen (multiplayer). */
 export type ForkliftState = {
@@ -237,8 +237,7 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
       const lift = t.y + 0.1; // vorken komen van onder het dek omhoog
       if (!(prevH <= lift && forkH > lift && prevH > t.y - 0.1)) continue;
       if (t.loose) {
-        loose.splice(loose.indexOf(t.loose), 1);
-        attach(t.loose);
+        attach(takeLoose(t.loose));
         return;
       }
       const p = t.rack!;
@@ -268,13 +267,21 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
     }
     if (hall.inRack(f.x, f.z)) return; // in de stelling alleen op een vrije plek
     if (prevH > 0.07 && forkH <= 0.07) {
-      carriage.remove(c.mesh);
       carried = null;
-      c.mesh.position.set(f.x, 0, f.z);
-      c.mesh.rotation.set(0, g.rotation.y, 0);
-      g.parent?.add(c.mesh);
-      loose.push({ ...c, x: f.x, z: f.z, r: g.rotation.y });
+      dropLoose(c, f.x, f.z, g.rotation.y);
     }
+  }
+
+  // ---------- Losse pallets op de vloer (gedeeld met de pompwagen) ----------
+  function takeLoose(l: Loose): Carried {
+    loose.splice(loose.indexOf(l), 1);
+    return l;
+  }
+  function dropLoose(c: Carried, x: number, z: number, r: number) {
+    g.parent?.add(c.mesh); // haalt hem ook van de vorken af
+    c.mesh.position.set(x, 0, z);
+    c.mesh.rotation.set(0, r, 0);
+    loose.push({ ...c, x, z, r });
   }
 
   // ---------- Botsblokken voor spelers: op de vorken (of de last) staan en opgetild worden ----------
@@ -316,7 +323,8 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
     };
   }
 
-  function applyState(s: ForkliftState) {
+  /** @param withLoose false: de losse pallets op de vloer blijven zoals ze zijn (die komen apart binnen). */
+  function applyState(s: ForkliftState, withLoose = true) {
     remote = { x: s.x, z: s.z, r: s.r, h: s.h };
     if ((carried?.load.id ?? '') !== (s.load?.id ?? '')) {
       if (carried) carriage.remove(carried.mesh);
@@ -326,11 +334,15 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
         attach({ load, from, key, mesh: hall.buildLoad(load.sku, load.qty, key) });
       }
     }
+    if (withLoose) applyLoose(s.loose);
+  }
+
+  function applyLoose(list: ForkliftState['loose']) {
     const sig = (list: { id: string; x: number; z: number }[]) => list.map((l) => `${l.id}@${round(l.x)},${round(l.z)}`).join();
-    if (sig(loose.map((l) => ({ id: l.load.id, x: l.x, z: l.z }))) !== sig(s.loose)) {
+    if (sig(loose.map((l) => ({ id: l.load.id, x: l.x, z: l.z }))) !== sig(list)) {
       for (const l of loose) l.mesh.removeFromParent();
       loose.length = 0;
-      for (const { from, key, x, z, r, ...load } of s.loose) {
+      for (const { from, key, x, z, r, ...load } of list) {
         const mesh = hall.buildLoad(load.sku, load.qty, key);
         mesh.position.set(x, 0, z);
         mesh.rotation.set(0, r, 0);
@@ -435,6 +447,9 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
     },
     getState,
     applyState,
+    applyLoose,
+    /** Losse pallets op de vloer: ook de pompwagen pakt ze op en zet ze neer. */
+    loose: { list: () => loose, take: takeLoose, drop: dropLoose },
     solids,
     /** Stand van de truck waar de blokken van solids() bij horen (steeds hetzelfde object). */
     pose,
