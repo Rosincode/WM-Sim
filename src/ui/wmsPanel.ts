@@ -1,5 +1,6 @@
 import { wms } from '../integrations/wms';
 import { addMissingLocations, hallLocations, locationsCsv, missingLocations, type HallLocation } from './wmsLocations';
+import { forget, loadRemembered, remember } from './wmsRemember';
 
 // Aanmelden bij de WMS-API: de koppeling waarmee de scanner en het magazijn hun handelingen aan de WMS
 // voorleggen. Los van de WMS-app op pc en tablet (die heeft zijn eigen login in het iframe).
@@ -14,6 +15,8 @@ const css = `
 .wms-panel .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
 .wms-panel input { box-sizing: border-box; width: 100%; margin: 4px 0; padding: 6px 8px; border-radius: 4px;
   border: 1px solid #555; background: #222; color: #fff; font: inherit; }
+.wms-panel label.check { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 13px; cursor: pointer; }
+.wms-panel label.check input { width: auto; margin: 0; }
 .wms-panel button { margin-top: 6px; padding: 6px 10px; border: 0; border-radius: 4px; background: #3b6ea5;
   color: #fff; font: inherit; cursor: pointer; }
 .wms-panel button.secondary { background: #444; }
@@ -103,9 +106,10 @@ export function mountWmsPanel(parent?: HTMLElement) {
               <input name="baseUrl" type="url" placeholder="https://wms.example.com/api" required autocomplete="url">
               <input name="username" placeholder="Gebruikersnaam" required autocomplete="username">
               <input name="password" type="password" placeholder="Wachtwoord" required autocomplete="current-password">
+              <label class="check"><input name="remember" type="checkbox"> Onthouden op deze pc</label>
               <button type="submit">Verbinden</button>
               <button type="button" class="secondary" data-act="cancel">Annuleren</button>
-              <div class="hint">Alleen bewaard in dit tabblad (sessionStorage).</div>
+              <div class="hint">Zonder vinkje: alleen in dit tabblad. Met vinkje: versleuteld in deze browser, tot je uitlogt. Niet doen op een gedeelde pc.</div>
             </form>`
           : live
             ? `<button data-act="test">Test verbinding</button> <button class="secondary" data-act="logout">Uitloggen</button>`
@@ -155,6 +159,7 @@ export function mountWmsPanel(parent?: HTMLElement) {
     });
     panel.querySelector('[data-act="logout"]')?.addEventListener('click', () => {
       wms.disconnect();
+      void forget();
       setMessage('Uitgelogd, terug naar mock-modus.', '');
     });
     panel.querySelector('[data-act="test"]')?.addEventListener('click', async (e) => {
@@ -175,14 +180,21 @@ export function mountWmsPanel(parent?: HTMLElement) {
       const form = e.currentTarget as HTMLFormElement;
       const data = new FormData(form);
       form.querySelectorAll('button, input').forEach((el) => ((el as HTMLInputElement).disabled = true));
+      const credentials = {
+        baseUrl: String(data.get('baseUrl')),
+        username: String(data.get('username')),
+        password: String(data.get('password')),
+      };
       try {
-        const count = await wms.connect({
-          baseUrl: String(data.get('baseUrl')),
-          username: String(data.get('username')),
-          password: String(data.get('password')),
-        });
+        const count = await wms.connect(credentials);
         showForm = false;
-        setMessage(`Verbonden: ${count} locaties gevonden.`, 'ok');
+        let note = '';
+        if (data.get('remember')) {
+          note = (await remember(credentials)) ? ' Onthouden op deze pc.' : ' Onthouden lukte niet in deze browser.';
+        } else {
+          void forget();
+        }
+        setMessage(`Verbonden: ${count} locaties gevonden.${note}`, 'ok');
       } catch (err) {
         showForm = true;
         setMessage(err instanceof Error ? err.message : String(err), 'err');
@@ -208,6 +220,18 @@ export function mountWmsPanel(parent?: HTMLElement) {
   });
   wms.onError((msg) => setMessage(msg, 'err'));
   render();
+
+  // Onthouden inloggegevens: bij het starten vanzelf weer verbinden.
+  if (!parent && wms.client.mode !== 'live') {
+    void loadRemembered().then(async (c) => {
+      if (!c || wms.client.mode === 'live') return;
+      try {
+        await wms.connect(c);
+      } catch (err) {
+        setMessage(`Automatisch verbinden mislukt: ${err instanceof Error ? err.message : String(err)}`, 'err');
+      }
+    });
+  }
 }
 
 function escapeHtml(s: string) {
