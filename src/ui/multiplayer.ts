@@ -33,6 +33,7 @@ type Pose = {
   /** Staat op de heftruck: plek t.o.v. de truck; y = hoogte boven de vorken als hij op de vorken of de last staat */
   v?: { x: number; z: number; y?: number };
   /** Los van de grond (springen, vallen) */ j: 0 | 1;
+  /** Toetert (als deze speler rijdt) */ k: 0 | 1;
 };
 type StateMsg = { rev: number; w: string; sim: SharedState; fork: ForkliftState };
 
@@ -49,6 +50,8 @@ interface Options {
     setRemoteDriven(on: boolean): void;
     readonly steer: number;
     setRemoteSteer(v: number): void;
+    readonly honking: boolean;
+    setRemoteHorn(volume: number): void;
     steeringGrip(point: THREE.Vector3, normal: THREE.Vector3): void;
     readonly group: THREE.Object3D;
     readonly forkHeight: number;
@@ -166,7 +169,7 @@ export function mountMultiplayer(o: Options) {
     const avatar: Avatar = {
       character, tag, load, color,
       target: new THREE.Vector3(),
-      pose: { n: '', x: 0, y: 0, z: 0, r: 0, d: 0, c: '', p: 0, ly: 0, t: 0, sc: 0, w: 0, j: 0 },
+      pose: { n: '', x: 0, y: 0, z: 0, r: 0, d: 0, c: '', p: 0, ly: 0, t: 0, sc: 0, w: 0, j: 0, k: 0 },
       placed: false,
       look: { yaw: 0, pitch: 0 },
       scanT: 0,
@@ -219,6 +222,7 @@ export function mountMultiplayer(o: Options) {
       sc: o.scans(),
       w: o.isDriving() ? round(o.forklift.steer, 10) : 0,
       j: o.airborne() ? 1 : 0,
+      k: o.forklift.honking ? 1 : 0,
     };
     if (pose.d) pose.f = o.forklift.getState();
     const on = pose.d ? null : o.rider();
@@ -253,6 +257,7 @@ export function mountMultiplayer(o: Options) {
         sc: num(data.sc),
         w: THREE.MathUtils.clamp(num(data.w), -1, 1),
         j: data.j === 1 ? 1 : 0,
+        k: data.k === 1 && data.d === 1 ? 1 : 0,
       };
       if (isObj(data.v) && data.d !== 1) {
         const { x, z, y } = data.v;
@@ -410,6 +415,9 @@ export function mountMultiplayer(o: Options) {
       const driver = remoteDriver();
       o.forklift.setRemoteDriven(!o.isDriving() && !!driver);
       o.forklift.setRemoteSteer(driver ? driver.pose.w : 0);
+      // Toeter van de andere bestuurder: zachter naarmate de truck verder weg is
+      const hornDist = o.player.position.distanceTo(o.forklift.group.position);
+      o.forklift.setRemoteHorn(driver?.pose.k ? Math.max(0.15, Math.min(1, 8 / Math.max(hornDist, 1))) : 0);
 
       // Figuren van de andere spelers soepel naar hun laatste positie bewegen
       const k = 1 - Math.exp(-dt * 12);

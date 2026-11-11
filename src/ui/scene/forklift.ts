@@ -146,8 +146,55 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
     keys.add(e.code);
   });
   window.addEventListener('keyup', (e) => keys.delete(e.code));
-  window.addEventListener('blur', () => keys.clear());
+  window.addEventListener('blur', () => {
+    keys.clear();
+    setHorn(0);
+  });
   const down = (code: string) => (keys.has(code) ? 1 : 0);
+
+  // ---------- Toeter (H ingedrukt houden); klinkt ook bij andere spelers ----------
+  let audio: AudioContext | null = null;
+  let horn: { gain: GainNode; oscs: OscillatorNode[] } | null = null;
+  let hornVolume = 0;
+  /** Volume (0..1) van de toeter van een speler die op afstand rijdt. */
+  let remoteHorn = 0;
+  function setHorn(volume: number) {
+    if (volume === hornVolume) return;
+    hornVolume = volume;
+    try {
+      if (volume <= 0) {
+        if (!horn || !audio) return;
+        const { gain, oscs } = horn;
+        horn = null;
+        gain.gain.setTargetAtTime(0, audio.currentTime, 0.02);
+        for (const o of oscs) o.stop(audio.currentTime + 0.15);
+        return;
+      }
+      const ctx = (audio ??= new AudioContext());
+      if (ctx.state === 'suspended') void ctx.resume();
+      if (!horn) {
+        const gain = ctx.createGain();
+        gain.gain.value = 0;
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 2200;
+        filter.connect(gain).connect(ctx.destination);
+        // Twee tonen vlak bij elkaar geven het schelle geluid van een elektrische claxon
+        const oscs = [415, 520].map((freq) => {
+          const o = ctx.createOscillator();
+          o.type = 'sawtooth';
+          o.frequency.value = freq;
+          o.connect(filter);
+          o.start();
+          return o;
+        });
+        horn = { gain, oscs };
+      }
+      horn.gain.gain.setTargetAtTime(0.12 * Math.min(1, volume), ctx.currentTime, 0.015);
+    } catch {
+      horn = null; // geen geluid beschikbaar: stil doorgaan
+    }
+  }
 
   const fork = new THREE.Vector3();
   const forward = new THREE.Vector3();
@@ -359,6 +406,14 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
     get driving() {
       return driving;
     },
+    /** Toetert de bestuurder (deze speler) nu? */
+    get honking() {
+      return driving && keys.has('KeyH');
+    },
+    /** Toeter van de speler die op afstand rijdt: volume 0..1 (0 = uit). */
+    setRemoteHorn(volume: number) {
+      remoteHorn = THREE.MathUtils.clamp(volume, 0, 1);
+    },
     get hint() {
       return hint;
     },
@@ -389,6 +444,7 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
     },
     update(dt: number, time: number) {
       if (dt <= 0) return;
+      setHorn(driving ? down('KeyH') : remoteHorn);
       if (remote && !driving) return followRemote(dt, time, remote);
 
       // Rijden

@@ -81,7 +81,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   };
 
   const drivingText =
-    '<b>WM-Sim — Heftruck</b><br>W/S: rijden · A/D: sturen · <b>↑/↓</b>: vorken heffen/zakken · Muis: rondkijken<br><b>1</b>: scanner · <b>2</b>: tablet (F: dichtbij) in je rechterhand<br>Oppakken: vorken onder de pallet en heffen · Neerzetten: zakken<br><b>R</b>: uitstappen · <b>V</b>: first/third person · <b>C</b>: overzicht';
+    '<b>WM-Sim — Heftruck</b><br>W/S: rijden · A/D: sturen · <b>↑/↓</b>: vorken heffen/zakken · <b>H</b>: toeteren · Muis: rondkijken<br><b>1</b>: scanner · <b>2</b>: tablet (F: dichtbij) in je rechterhand<br>Oppakken: vorken onder de pallet en heffen · Neerzetten: zakken<br><b>R</b>: uitstappen · <b>V</b>: first/third person · <b>C</b>: overzicht';
   const refreshHud = () => (hud.innerHTML = (vehicle && mode !== 'overview' ? drivingText : hudText[mode]) + processKeys);
 
   function setMode(m: ViewMode) {
