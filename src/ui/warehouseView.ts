@@ -133,37 +133,43 @@ export function createWarehouseView(
   pc.group.position.set(POINTS.terminal.x, 0, POINTS.terminal.z);
   root.add(pc.group);
 
-  const labels = {
-    laneIn: label(), laneOut: label(), terminal: label(), truckIn: label(4.5), truckOut: label(4.5),
-  };
-  labels.laneIn.sprite.position.set(POINTS.laneIn.x, 2.2, POINTS.laneIn.z);
-  labels.laneOut.sprite.position.set(POINTS.laneOut.x, 2.2, POINTS.laneOut.z);
+  const labels = { terminal: label(), truckIn: label(4.5), truckOut: label(4.5) };
   labels.terminal.sprite.position.set(POINTS.terminal.x, 2.2, POINTS.terminal.z);
-  labels.truckIn.sprite.position.set(-17.5, 4.3, POINTS.truckIn.z);
-  labels.truckOut.sprite.position.set(-17.5, 4.3, POINTS.truckOut.z);
   Object.values(labels).forEach((l) => root.add(l.sprite));
+  // Baanlabels verschijnen alleen als er iets staat (of als je er een order moet klaarzetten).
+  const laneLabels = DOCKS.map((d) => {
+    const pair = { in: label(3.4), out: label(3.4) };
+    pair.in.sprite.position.set(d.laneIn.x, 2.1, d.laneIn.z);
+    pair.out.sprite.position.set(d.laneOut.x, 2.1, d.laneOut.z);
+    root.add(pair.in.sprite, pair.out.sprite);
+    return pair;
+  });
 
   // --- Vrachtwagens ---
   const trucks = { in: truckMesh('in'), out: truckMesh('out') };
-  trucks.in.position.z = POINTS.truckIn.z;
-  trucks.out.position.z = POINTS.truckOut.z;
   root.add(trucks.in, trucks.out);
 
-  // --- Pallets in de banen ---
-  const laneInMeshes = Array.from({ length: LANE_SLOTS }, (_, i) => {
-    const p = pallet();
-    const s = laneSlot(POINTS.laneIn, i);
-    p.position.set(s.x, 0, s.z);
-    root.add(p);
-    return p;
-  });
-  const laneOutMeshes = Array.from({ length: LANE_SLOTS }, (_, i) => {
-    const t = tote();
-    const s = laneSlot(POINTS.laneOut, i);
-    t.position.set(s.x, 0, s.z);
-    root.add(t);
-    return t;
-  });
+  // --- Pallets en rolcontainers in de banen ---
+  const laneInMeshes = DOCKS.map((d) =>
+    Array.from({ length: LANE_SLOTS }, (_, i) => {
+      const p = pallet();
+      const s = laneSlot(d.laneIn, i);
+      p.position.set(s.x, 0, s.z);
+      p.visible = false;
+      root.add(p);
+      return p;
+    }),
+  );
+  const laneOutMeshes = DOCKS.map((d) =>
+    Array.from({ length: LANE_SLOTS }, (_, i) => {
+      const t = tote();
+      const s = laneSlot(d.laneOut, i);
+      t.position.set(s.x, 0, s.z);
+      t.visible = false;
+      root.add(t);
+      return t;
+    }),
+  );
 
   // --- Voorraad in de stellingen: één pallet per locatie, kleur per artikel ---
   const stockMeshes = new Map<string, THREE.Group>();
@@ -215,23 +221,24 @@ export function createWarehouseView(
   function update(dt: number) {
     time += dt;
 
-    placeTruck(trucks.in, sim.trucks.in);
-    placeTruck(trucks.out, sim.trucks.out);
-    labels.truckIn.set(truckText(sim.trucks.in));
-    labels.truckOut.set(truckText(sim.trucks.out));
+    placeTruck(trucks.in, labels.truckIn, sim.trucks.in);
+    placeTruck(trucks.out, labels.truckOut, sim.trucks.out);
 
-    const inCount = sim.laneIn.filter(Boolean).length;
-    const outCount = sim.laneOut.filter(Boolean).length;
-    labels.laneIn.set(`Inslag ${inCount}/${LANE_SLOTS}`);
-    labels.laneOut.set(`Uitgaand ${outCount}/${LANE_SLOTS}`);
     const open = sim.orders.filter((o) => o.status === 'open').length;
     labels.terminal.set(`PC · ${open} open order${open === 1 ? '' : 's'}`);
 
-    sim.laneIn.forEach((p, i) => {
-      laneInMeshes[i].visible = !!p;
-      if (p) setPalletColor(laneInMeshes[i], skuColor(p.sku));
+    const staging = sim.carry?.kind === 'order' && sim.order(sim.carry.orderId)?.status === 'picked';
+    DOCKS.forEach((d, i) => {
+      const inCount = sim.laneIn[i].filter(Boolean).length;
+      const outCount = sim.laneOut[i].filter(Boolean).length;
+      laneLabels[i].in.set(inCount ? `${d.inId} · ${inCount}/${LANE_SLOTS}` : '');
+      laneLabels[i].out.set(outCount || (staging && i === sim.outDock) ? `${d.outId} · ${outCount}/${LANE_SLOTS}` : '');
+      sim.laneIn[i].forEach((p, k) => {
+        laneInMeshes[i][k].visible = !!p;
+        if (p) setPalletColor(laneInMeshes[i][k], skuColor(p.sku));
+      });
+      sim.laneOut[i].forEach((id, k) => (laneOutMeshes[i][k].visible = !!id));
     });
-    sim.laneOut.forEach((id, i) => (laneOutMeshes[i].visible = !!id));
 
     // Voorraad: per locatie de grootste voorraadregel tonen
     const top = new Map<string, { sku: string; qty: number }>();
