@@ -14,6 +14,8 @@ interface Options {
   /** Wortel waartegen de laser wordt geraycast (de scène). */
   world: THREE.Object3D;
   scanTargets: ScanTarget[];
+  /** F met de tablet in de hand: de WMS-app openen. Zonder deze optie haalt F de tablet dichterbij. */
+  onOpenApp?: () => void;
 }
 
 const TABS = ['Voorraad', 'Orders', 'Locaties'] as const;
@@ -49,7 +51,7 @@ function forearm(from: THREE.Vector3, to: THREE.Vector3, sleeve: THREE.Material,
   return g;
 }
 
-export function createHandheld({ camera, canvas, world, scanTargets }: Options) {
+export function createHandheld({ camera, canvas, world, scanTargets, onOpenApp }: Options) {
   const root = new THREE.Group();
   camera.add(root);
 
@@ -262,7 +264,7 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
     g.textAlign = 'right';
     g.fillStyle = '#7a8594';
     g.font = '20px Arial';
-    g.fillText('Q: tabblad · F: dichterbij', w - 32, 131);
+    g.fillText(onOpenApp ? 'Q: tabblad · F: WMS-app' : 'Q: tabblad · F: dichterbij', w - 32, 131);
     g.textAlign = 'left';
 
     const shelves = data.locations.filter((l) => l.type !== 'dock');
@@ -457,7 +459,10 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
     if (e.code === 'Digit1' || e.code === 'Numpad1') setTool('scanner');
     if (e.code === 'Digit2' || e.code === 'Numpad2') setTool('tablet');
     if (tool !== 'tablet') return;
-    if (e.code === 'KeyF') focus = !focus;
+    if (e.code === 'KeyF') {
+      if (onOpenApp) onOpenApp();
+      else focus = !focus;
+    }
     if (e.code === 'KeyQ') {
       tab = (tab + 1) % TABS.length; // E is de actietoets van de processim
       drawTablet();

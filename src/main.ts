@@ -9,6 +9,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { startWmsBridge, wms } from './integrations/wms';
 import { createPlayerView, type ViewMode } from './ui/playerView';
 import { createHandheld } from './ui/handheld';
+import { createTabletApp } from './ui/tabletApp';
 import { createWarehouse, HALL } from './ui/scene/warehouse';
 import { createForklift } from './ui/scene/forklift';
 import { createCharacter } from './ui/scene/character';
@@ -87,7 +88,15 @@ hud.style.cssText =
   'position:fixed;left:16px;top:16px;padding:10px 14px;border-radius:8px;background:rgba(0,0,0,.6);color:#fff;font:14px system-ui,sans-serif;line-height:1.5;pointer-events:none';
 document.body.appendChild(hud);
 
-const handheld = createHandheld({ camera, canvas: renderer.domElement, world: scene, scanTargets: hall.scanTargets });
+const tabletApp = createTabletApp(); // de echte WMS-app op de tablet (F)
+const handheld = createHandheld({
+  camera,
+  canvas: renderer.domElement,
+  world: scene,
+  scanTargets: hall.scanTargets,
+  onOpenApp: tabletApp.toggle,
+});
+handheld.onToolChange(tabletApp.close);
 
 let driving = false;
 
