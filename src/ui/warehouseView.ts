@@ -180,8 +180,11 @@ export function createWarehouseView(
   );
 
   // --- Voorraad in de stellingen: één pallet per locatie, kleur per artikel ---
+  // Alleen als de hal de voorraad niet zelf tekent (rackStock): anders zijn het honderden onzichtbare
+  // pallets die elke frame voor niets worden bijgewerkt.
+  const showRackStock = opts.rackStock !== false;
   const stockMeshes = new Map<string, THREE.Group>();
-  for (const l of shelfLocations()) {
+  for (const l of showRackStock ? shelfLocations() : []) {
     const p = pallet();
     p.position.set(l.x, LEVEL_Y[l.level] + 0.04, l.z);
     p.visible = false;
@@ -249,15 +252,17 @@ export function createWarehouseView(
     });
 
     // Voorraad: per locatie de grootste voorraadregel tonen
-    const top = new Map<string, { sku: string; qty: number }>();
-    for (const s of sim.stockList()) {
-      const cur = top.get(s.locationId);
-      if (!cur || s.qty > cur.qty) top.set(s.locationId, s);
-    }
-    for (const [id, mesh] of stockMeshes) {
-      const s = top.get(id);
-      mesh.visible = !!s && opts.rackStock !== false;
-      if (s) setPalletColor(mesh, skuColor(s.sku));
+    if (showRackStock) {
+      const top = new Map<string, { sku: string; qty: number }>();
+      for (const s of sim.stockList()) {
+        const cur = top.get(s.locationId);
+        if (!cur || s.qty > cur.qty) top.set(s.locationId, s);
+      }
+      for (const [id, mesh] of stockMeshes) {
+        const s = top.get(id);
+        mesh.visible = !!s;
+        if (s) setPalletColor(mesh, skuColor(s.sku));
+      }
     }
 
     // Gedragen object voor de speler
