@@ -1,12 +1,17 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { Item } from '../../shared/contract';
+<<<<<<< HEAD
 import { DOCKS, HALL as FLOOR, LANE_LENGTH, ROW_Z, SECTION_X as BAY_X } from '../../sim/layout';
+=======
+import { DOCK_Z, HALL as LAYOUT, ROW_Z, SECTION_X } from '../../sim/layout';
+>>>>>>> 30faee5 (wip TSF+rduijsens)
 import * as tex from './textures';
 
 // Het magazijngebouw: vloer, wanden, dak, docks, stellingen, pallets en verlichting.
 // Alleen weergave: de voorraad komt binnen via setStock().
 
+<<<<<<< HEAD
 // Plattegrond (maten, docks, stellingrijen) komt uit src/sim/layout.ts.
 export const HALL = { ...FLOOR, h: 8.5 };
 const LEVEL_Y = [0, 2, 4];
@@ -16,6 +21,15 @@ const RACK_MIN_X = FRAME_X[0];
 const RACK_MAX_X = FRAME_X[FRAME_X.length - 1];
 const RACK_MID_X = (RACK_MIN_X + RACK_MAX_X) / 2;
 const RACK_LEN = RACK_MAX_X - RACK_MIN_X;
+=======
+// De maten komen uit de sim-layout, zodat hal en processen altijd gelijk lopen.
+export const HALL = { w: LAYOUT.w, d: LAYOUT.d, h: 9 };
+const BAY_X = SECTION_X;
+const LEVEL_Y = [0, 2, 4];
+/** Eerste en laatste staander van een stellingrij. */
+const RACK_X0 = BAY_X[0] - 2;
+const RACK_X1 = BAY_X[BAY_X.length - 1] + 2;
+>>>>>>> 30faee5 (wip TSF+rduijsens)
 const PALLET_H = 0.144;
 /** Personeelsdeur / nooduitgang in de zuidgevel (ook de entree aan de buitenkant). */
 export const EXIT_X = 20.5;
@@ -152,6 +166,7 @@ export function createWarehouse(scene: THREE.Scene) {
   }
   const YELLOW = '#e3b505';
   for (const z of ROW_Z) {
+<<<<<<< HEAD
     marking(RACK_MID_X, z - 0.85, RACK_LEN + 1.4, 0.1, YELLOW);
     marking(RACK_MID_X, z + 0.85, RACK_LEN + 1.4, 0.1, YELLOW);
   }
@@ -178,6 +193,18 @@ export function createWarehouse(scene: THREE.Scene) {
       marking(p.x + len / 2 + 0.55, p.z, 1.9, 0.5, color, tex.floorText(code.replace('DOCK-', ''))).rotation.z = Math.PI / 2;
     }
   }
+=======
+    marking((RACK_X0 + RACK_X1) / 2, z - 0.85, RACK_X1 - RACK_X0 + 1.4, 0.1, YELLOW);
+    marking((RACK_X0 + RACK_X1) / 2, z + 0.85, RACK_X1 - RACK_X0 + 1.4, 0.1, YELLOW);
+  }
+  // Looppad langs de dockzone
+  const WALK_X = RACK_X0 - 4.5;
+  marking(WALK_X, 0, 1.4, D - 6, '#2f7a4c');
+  marking(WALK_X - 0.75, 0, 0.1, D - 6, '#e9e9e2');
+  marking(WALK_X + 0.75, 0, 0.1, D - 6, '#e9e9e2');
+  const walkIcon = tex.walkwayIcon();
+  for (let z = -D / 2 + 9; z < D / 2 - 6; z += 12.5) marking(WALK_X, z, 0.9, 0.9, '#ffffff', walkIcon).rotation.z = Math.PI / 2;
+>>>>>>> 30faee5 (wip TSF+rduijsens)
 
   // ---------- Wanden ----------
   const panelTex = tex.wallPanel();
@@ -208,8 +235,13 @@ export function createWarehouse(scene: THREE.Scene) {
   const columns = new Batch();
   const columnWraps = new Batch();
   const columnSpots: [number, number][] = [];
+<<<<<<< HEAD
   for (let x = -W / 2; x <= W / 2; x += 7) columnSpots.push([x, -D / 2 + 0.17], [x, D / 2 - 0.17]);
   for (const z of ROW_Z) columnSpots.push([-W / 2 + 0.17, z], [W / 2 - 0.17, z]); // tussen de dockdeuren
+=======
+  for (let x = -W / 2; x <= W / 2; x += 5) columnSpots.push([x, -D / 2 + 0.17], [x, D / 2 - 0.17]);
+  for (let z = Math.ceil((-D / 2 + 2) / 5) * 5; z < D / 2 - 2; z += 5) columnSpots.push([-W / 2 + 0.17, z], [W / 2 - 0.17, z]);
+>>>>>>> 30faee5 (wip TSF+rduijsens)
   for (const [x, z] of columnSpots) {
     columns.add(x, H / 2, z, 0.26, H, 0.26);
     columnWraps.add(x, 0.6, z, 0.3, 1.2, 0.3);
@@ -228,6 +260,7 @@ export function createWarehouse(scene: THREE.Scene) {
   roof.add(deck);
 
   const rafters = new Batch();
+<<<<<<< HEAD
   for (let x = -W / 2; x <= W / 2; x += 7) rafters.add(x, H - 0.3, 0, 0.2, 0.6, D);
   for (let z = -D / 2 + 1; z <= D / 2 - 1; z += 2.7) rafters.add(0, H - 0.08, z, W, 0.16, 0.08);
   roof.add(rafters.build(UNIT_BOX, steelGrey, false));
@@ -236,6 +269,15 @@ export function createWarehouse(scene: THREE.Scene) {
   const LIGHT_X = [-21, -7, 7, 21];
   for (const x of [-17.5, -3.5, 10.5, 24.5])
     for (const z of [-21, -7, 7, 21]) {
+=======
+  for (let x = -W / 2; x <= W / 2; x += 5) rafters.add(x, H - 0.3, 0, 0.2, 0.6, D);
+  for (let z = -D / 2 + 1; z <= D / 2 - 1; z += 2.8) rafters.add(0, H - 0.08, z, W, 0.16, 0.08);
+  roof.add(rafters.build(UNIT_BOX, steelGrey, false));
+
+  const skylightMat = glow(1.7, 1.95, 2.3);
+  for (let x = -W / 2 + 7.5; x < W / 2 - 2; x += 10)
+    for (let z = -D / 2 + 8; z < D / 2 - 4; z += 13) {
+>>>>>>> 30faee5 (wip TSF+rduijsens)
       const s = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 7), skylightMat);
       s.rotation.x = Math.PI / 2;
       s.position.set(x, H - 0.01, z);
@@ -245,7 +287,11 @@ export function createWarehouse(scene: THREE.Scene) {
   // Sprinklerleidingen
   const pipes = new Batch();
   pipes.add(W / 2 - 2, H - 0.85, 0, 0.06, D - 0.6, 0.06, Math.PI / 2, 0, 0);
+<<<<<<< HEAD
   for (const z of ROW_Z) pipes.add(-1, H - 0.8, z, 0.03, W - 2.4, 0.03, 0, 0, Math.PI / 2);
+=======
+  for (let z = -D / 2 + 2.5; z <= D / 2 - 2.5; z += 5) pipes.add(-1, H - 0.8, z, 0.03, W - 2.4, 0.03, 0, 0, Math.PI / 2);
+>>>>>>> 30faee5 (wip TSF+rduijsens)
   roof.add(pipes.build(UNIT_CYL, red, false));
 
   // High-bay ledarmaturen
@@ -253,8 +299,14 @@ export function createWarehouse(scene: THREE.Scene) {
   const lamps = new Batch();
   const wires = new Batch();
   const LAMP_Y = 7;
+<<<<<<< HEAD
   for (const x of LIGHT_X)
     for (const { z } of DOCKS) { // boven elk gangpad
+=======
+  const AISLE_Z = [ROW_Z[0] - 2.5, ...ROW_Z.map((z) => z + 2.5)]; // boven elk gangpad
+  for (let x = -W / 2 + 5; x < W / 2 - 2; x += 9)
+    for (const z of AISLE_Z) {
+>>>>>>> 30faee5 (wip TSF+rduijsens)
       housings.add(x, LAMP_Y, z, 1.25, 0.07, 0.32);
       lamps.add(x, LAMP_Y - 0.04, z, 1.15, 0.012, 0.24);
       for (const dx of [-0.5, 0.5]) wires.add(x + dx, (H + LAMP_Y) / 2, z, 0.008, H - LAMP_Y, 0.008);
@@ -271,14 +323,24 @@ export function createWarehouse(scene: THREE.Scene) {
   key.position.set(8, 60, 10);
   key.castShadow = true;
   key.shadow.mapSize.set(4096, 4096);
+<<<<<<< HEAD
   Object.assign(key.shadow.camera, { left: -62, right: 62, top: 62, bottom: -62, near: 5, far: 130 });
+=======
+  Object.assign(key.shadow.camera, { left: -W / 2 - 3, right: W / 2 + 3, top: D / 2 + 3, bottom: -D / 2 - 3, near: 5, far: 60 });
+>>>>>>> 30faee5 (wip TSF+rduijsens)
   key.shadow.bias = -0.0004;
   key.shadow.normalBias = 0.03;
   key.shadow.radius = 4;
   scene.add(key);
+<<<<<<< HEAD
   for (const x of [-18, 0, 18])
     for (const z of [-21, -7, 7, 21]) {
       const p = new THREE.PointLight('#fff4e2', 46, 28, 2);
+=======
+  for (const x of [-W / 3, 0, W / 3])
+    for (const z of [-D / 3, 0, D / 3]) {
+      const p = new THREE.PointLight('#fff4e2', 55, 34, 2);
+>>>>>>> 30faee5 (wip TSF+rduijsens)
       p.position.set(x, LAMP_Y - 0.4, z);
       scene.add(p);
     }
@@ -348,6 +410,10 @@ export function createWarehouse(scene: THREE.Scene) {
   const endGuards = new Batch();
   const decks = new Batch();
   const POST_H = 5.6;
+<<<<<<< HEAD
+=======
+  const FRAME_X = [RACK_X0, ...BAY_X.map((x) => x + 2)];
+>>>>>>> 30faee5 (wip TSF+rduijsens)
   const labelGeo = new THREE.PlaneGeometry(0.34, 0.1275);
   const signGeo = new THREE.PlaneGeometry(0.7, 0.35);
 
@@ -386,6 +452,7 @@ export function createWarehouse(scene: THREE.Scene) {
     });
     // Kopbescherming en rij-aanduiding
     const rowSign = new THREE.MeshStandardMaterial({ map: tex.sign(`R${r + 1}`, '#17346b', '#ffffff'), roughness: 0.5 });
+<<<<<<< HEAD
     for (const [x, ry] of [[RACK_MIN_X - 0.36, -Math.PI / 2], [RACK_MAX_X + 0.36, Math.PI / 2]] as const) {
       endGuards.add(x, 0.22, z0, 0.12, 0.44, 1.4);
       const s = new THREE.Mesh(signGeo, rowSign);
@@ -394,6 +461,16 @@ export function createWarehouse(scene: THREE.Scene) {
       scene.add(s);
     }
     colliders.push({ minX: RACK_MIN_X - 0.45, maxX: RACK_MAX_X + 0.45, minZ: z0 - 0.62, maxZ: z0 + 0.62 });
+=======
+    for (const [x, ry] of [[RACK_X0 - 0.36, -Math.PI / 2], [RACK_X1 + 0.36, Math.PI / 2]] as const) {
+      endGuards.add(x, 0.22, z0, 0.12, 0.44, 1.4);
+      const s = new THREE.Mesh(signGeo, rowSign);
+      s.position.set(ry < 0 ? RACK_X0 - 0.05 : RACK_X1 + 0.05, 2.7, z0);
+      s.rotation.y = ry;
+      scene.add(s);
+    }
+    colliders.push({ minX: RACK_X0 - 0.45, maxX: RACK_X1 + 0.45, minZ: z0 - 0.62, maxZ: z0 + 0.62 });
+>>>>>>> 30faee5 (wip TSF+rduijsens)
   });
   const deckTexture = tex.wireDeck();
   deckTexture.repeat.set(6, 2);
@@ -414,17 +491,32 @@ export function createWarehouse(scene: THREE.Scene) {
   const palletGeo = palletGeometry();
   const stacks = new Batch();
   const r0 = tex.rng(7);
+<<<<<<< HEAD
   const STACK_Z = D / 2 - 1.2;
   [[23.5, 9], [25.1, 12], [26.7, 6]].forEach(([x, n]) => {
     for (let i = 0; i < n; i++) stacks.add(x + (r0() - 0.5) * 0.04, i * PALLET_H, STACK_Z + (r0() - 0.5) * 0.04, 1, 1, 1, 0, (r0() - 0.5) * 0.06, 0);
   });
   scene.add(stacks.build(palletGeo, woodMat));
   colliders.push({ minX: 22.8, maxX: 27.4, minZ: STACK_Z - 0.6, maxZ: STACK_Z + 0.6 });
+=======
+  // Vrije zone aan de oostkant (achter de stellingen)
+  const EAST = W / 2 - 5;
+  [[EAST - 1.6, 9], [EAST, 12], [EAST + 1.6, 6]].forEach(([x, n]) => {
+    for (let i = 0; i < n; i++) stacks.add(x + (r0() - 0.5) * 0.04, i * PALLET_H, 8 + (r0() - 0.5) * 0.04, 1, 1, 1, 0, (r0() - 0.5) * 0.06, 0);
+  });
+  scene.add(stacks.build(palletGeo, woodMat));
+  colliders.push({ minX: EAST - 2.3, maxX: EAST + 2.3, minZ: 7.4, maxZ: 8.6 });
+>>>>>>> 30faee5 (wip TSF+rduijsens)
 
   // Paktafel met dozen
   const TX = 24.5; // midden van de paktafel
   const TZ = -D / 2 + 1.5;
   const table = new Batch();
+<<<<<<< HEAD
+=======
+  const TX = EAST;
+  const TZ = -8;
+>>>>>>> 30faee5 (wip TSF+rduijsens)
   table.add(TX, 0.9, TZ, 2.2, 0.05, 0.9);
   const legs = new Batch();
   for (const dx of [-1, 1]) for (const dz of [-0.38, 0.38]) legs.add(TX + dx, 0.44, TZ + dz, 0.05, 0.88, 0.05);
@@ -439,16 +531,27 @@ export function createWarehouse(scene: THREE.Scene) {
 
   // Brandblussers en nooduitgang
   const extinguishers = new Batch();
+<<<<<<< HEAD
   for (const [x, z] of [[-14, -D / 2 + 0.4], [14, -D / 2 + 0.4], [-14, D / 2 - 0.4], [0, D / 2 - 0.4], [W / 2 - 0.4, -10], [W / 2 - 0.4, 10]]) extinguishers.add(x, 1.0, z, 0.075, 0.5, 0.075);
   scene.add(extinguishers.build(UNIT_CYL, red));
   const exitDoor = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.1, 0.06), paint('#5d6b63', 0.5, 0.3));
   exitDoor.position.set(EXIT_X, 1.05, D / 2 - 0.04);
+=======
+  for (const [x, z] of [[-10, -D / 2 + 0.4], [10, -D / 2 + 0.4], [0, D / 2 - 0.4], [W / 2 - 0.4, 5]]) extinguishers.add(x, 1.0, z, 0.075, 0.5, 0.075);
+  scene.add(extinguishers.build(UNIT_CYL, red));
+  const exitDoor = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.1, 0.06), paint('#5d6b63', 0.5, 0.3));
+  exitDoor.position.set(W / 2 - 6, 1.05, D / 2 - 0.04);
+>>>>>>> 30faee5 (wip TSF+rduijsens)
   scene.add(exitDoor);
   const exitSign = new THREE.Mesh(
     new THREE.PlaneGeometry(0.6, 0.3),
     new THREE.MeshBasicMaterial({ map: tex.sign('EXIT', '#0c8a3e', '#ffffff') }),
   );
+<<<<<<< HEAD
   exitSign.position.set(EXIT_X, 2.45, D / 2 - 0.06);
+=======
+  exitSign.position.set(W / 2 - 6, 2.45, D / 2 - 0.06);
+>>>>>>> 30faee5 (wip TSF+rduijsens)
   exitSign.rotation.y = Math.PI;
   scene.add(exitSign);
 
@@ -466,13 +569,22 @@ export function createWarehouse(scene: THREE.Scene) {
   part(new THREE.BoxGeometry(0.56, 0.38, 0.2), jackRed, 0, 0.25, -0.2);
   part(new THREE.CylinderGeometry(0.018, 0.018, 1.1, 10), darkMetal, 0, 0.85, -0.42, -0.4);
   part(new THREE.TorusGeometry(0.09, 0.015, 8, 20), darkMetal, 0, 1.38, -0.64, -0.4);
+<<<<<<< HEAD
   jack.position.set(21.5, 0, D / 2 - 3.5);
+=======
+  jack.position.set(EAST - 1, 0, 3);
+>>>>>>> 30faee5 (wip TSF+rduijsens)
   jack.rotation.y = 0.5;
   scene.add(jack);
 
   // ---------- Voorraad: pallets, dozen en wikkelfolie ----------
+<<<<<<< HEAD
   const MAX_PALLETS = 700;
   const MAX_CARTONS = 24000;
+=======
+  const MAX_PALLETS = ROW_Z.length * BAY_X.length * 9;
+  const MAX_CARTONS = MAX_PALLETS * 24;
+>>>>>>> 30faee5 (wip TSF+rduijsens)
   const pallets = new THREE.InstancedMesh(palletGeo, woodMat, MAX_PALLETS);
   const cartons = new THREE.InstancedMesh(UNIT_BOX, cartonMats, MAX_CARTONS);
   const wraps = new THREE.InstancedMesh(UNIT_BOX, wrapMat, MAX_PALLETS);
@@ -664,7 +776,11 @@ export function createWarehouse(scene: THREE.Scene) {
   }
 
   /** Staat dit punt binnen een stellingrij (dan kun je daar niet los op de vloer neerzetten)? */
+<<<<<<< HEAD
   const inRack = (x: number, z: number) => x > RACK_MIN_X - 0.2 && x < RACK_MAX_X + 0.2 && ROW_Z.some((z0) => Math.abs(z - z0) < 0.75);
+=======
+  const inRack = (x: number, z: number) => x > RACK_X0 - 0.2 && x < RACK_X1 + 0.2 && ROW_Z.some((z0) => Math.abs(z - z0) < 0.75);
+>>>>>>> 30faee5 (wip TSF+rduijsens)
 
   return {
     roof,
@@ -677,6 +793,8 @@ export function createWarehouse(scene: THREE.Scene) {
     inRack,
     buildLoad,
     perPallet: PER_PALLET,
+    /** Startplek van de heftruck: voor de stellingen, in het middelste gangpad. */
+    forkliftSpawn: { x: RACK_X0 - 3.5, z: ROW_Z[Math.floor(ROW_Z.length / 2)] + 2.5 },
   };
 }
 

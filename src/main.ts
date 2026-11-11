@@ -153,7 +153,7 @@ const forklift = createForklift({
   place: warehouse.forkliftPlace,
   onStockChange: refreshHall,
 });
-forklift.group.position.set(-10, 0, 3.5);
+forklift.group.position.set(hall.forkliftSpawn.x, 0, hall.forkliftSpawn.z);
 forklift.group.rotation.y = Math.PI / 2;
 scene.add(forklift.group, forklift.marker);
 if (import.meta.env.DEV) Object.assign(window, { wmDebug: { forklift, hall, setDriving: (on: boolean) => setDriving(on) } });
