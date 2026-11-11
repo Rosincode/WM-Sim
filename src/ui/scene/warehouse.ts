@@ -531,8 +531,9 @@ export function createWarehouse(scene: THREE.Scene) {
     [0.3, 0.24, 0.5],
     [0.4, 0.4, 0.33],
   ];
-  const PER_PALLET = 20; // stuks per volle pallet
   const SLOTS_PER_LOCATION = 3;
+  /** Hoe vaak een doos gehalveerd mag worden om een grote voorraad toch op 3 pallets te krijgen. */
+  const MAX_SHRINK = 3;
   const m4 = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const euler = new THREE.Euler();
@@ -542,44 +543,73 @@ export function createWarehouse(scene: THREE.Scene) {
 
   type Carton = { x: number; y: number; z: number; sx: number; sy: number; sz: number; ry: number; r: number; g: number; b: number };
 
-  /** Hoogte van een pallet met lading (bovenkant van de bovenste laag dozen). */
-  function loadHeight(sku: string, qty: number) {
-    const ch = CARTON_SIZES[Math.floor(tex.rng(tex.hashString(sku))() * CARTON_SIZES.length)][1];
-    const maxLayers = Math.floor(1.45 / ch);
-    return PALLET_H + Math.max(1, Math.round((Math.min(qty, PER_PALLET) / PER_PALLET) * maxLayers)) * ch;
-  }
-
-  /** Opbouw van één pallet (in palletcoördinaten). Doosmaat en kleur horen bij het artikel. */
-  function loadLayout(sku: string, qty: number, jitterKey: string) {
-    const r = tex.rng(tex.hashString(sku));
-    const j = tex.rng(tex.hashString(jitterKey));
-    const [cw, ch, cd] = CARTON_SIZES[Math.floor(r() * CARTON_SIZES.length)];
-    const shade = 0.78 + r() * 0.22;
-    const warm = r() * 0.08;
-    const wrapped = r() < 0.55;
+  /**
+   * Stapelpatroon van een artikel: 1 doos = 1 stuk uit de WMS. De doosmaat hoort bij het artikel;
+   * met `shrink` wordt hij per stap gehalveerd (meer stuks per pallet).
+   */
+  function stacking(sku: string, shrink: number) {
+    const [w, h, d] = CARTON_SIZES[Math.floor(tex.rng(tex.hashString(sku))() * CARTON_SIZES.length)];
+    const f = 0.5 ** shrink;
+    const [cw, ch, cd] = [w * f, h * f, d * f];
     const nx = Math.round(1.2 / cw);
     const nz = Math.round(1.0 / cd);
     const maxLayers = Math.floor(1.45 / ch);
-    const layers = Math.max(1, Math.round((Math.min(qty, PER_PALLET) / PER_PALLET) * maxLayers));
+    return { cw, ch, cd, nx, nz, maxLayers, perLayer: nx * nz, capacity: nx * nz * maxLayers };
+  }
+
+  /** Doosmaat voor een pallet met `qty` stuks: de gewone maat, of kleiner als ze er anders niet op passen. */
+  function stackingFor(sku: string, qty: number) {
+    let s = stacking(sku, 0);
+    for (let k = 1; k <= MAX_SHRINK && s.capacity < qty; k++) s = stacking(sku, k);
+    return s;
+  }
+
+  /** Stuks per pallet voor een hele locatie: zo groot dat de voorraad op de 3 palletplekken past. */
+  function perPalletAt(sku: string, total: number) {
+    let s = stacking(sku, 0);
+    for (let k = 1; k <= MAX_SHRINK && s.capacity * SLOTS_PER_LOCATION < total; k++) s = stacking(sku, k);
+    return s.capacity;
+  }
+
+  /** Hoogte van een pallet met lading (bovenkant van de bovenste laag dozen). */
+  function loadHeight(sku: string, qty: number) {
+    const s = stackingFor(sku, qty);
+    return PALLET_H + Math.min(s.maxLayers, Math.max(1, Math.ceil(qty / s.perLayer))) * s.ch;
+  }
+
+  /** Opbouw van één pallet (in palletcoördinaten): precies `qty` dozen. Doosmaat en kleur horen bij het artikel. */
+  function loadLayout(sku: string, qty: number, jitterKey: string) {
+    const r = tex.rng(tex.hashString(sku));
+    r(); // eerste trekking is de doosmaat (zie stacking)
+    const j = tex.rng(tex.hashString(jitterKey));
+    const { cw, ch, cd, nx, nz, maxLayers, perLayer } = stackingFor(sku, qty);
+    const shade = 0.78 + r() * 0.22;
+    const warm = r() * 0.08;
+    const wrapped = r() < 0.55;
+    const count = Math.min(Math.max(0, Math.floor(qty)), perLayer * maxLayers);
+    const layers = Math.max(1, Math.ceil(count / perLayer));
     const cartons: Carton[] = [];
-    for (let l = 0; l < layers; l++)
-      for (let ix = 0; ix < nx; ix++)
-        for (let iz = 0; iz < nz; iz++) {
-          if (l === layers - 1 && layers < maxLayers && l > 0 && j() < 0.3) continue; // aangebroken laag
-          const v = shade * (0.94 + j() * 0.06);
-          cartons.push({
-            x: (ix - (nx - 1) / 2) * cw + (j() - 0.5) * 0.012,
-            y: PALLET_H + (l + 0.5) * ch,
-            z: (iz - (nz - 1) / 2) * cd + (j() - 0.5) * 0.012,
-            sx: cw - 0.008,
-            sy: ch - 0.003,
-            sz: cd - 0.008,
-            ry: (j() - 0.5) * 0.03,
-            r: v + warm,
-            g: v,
-            b: v - warm,
-          });
-        }
+    for (let l = 0; l < layers; l++) {
+      // aangebroken bovenlaag: de dozen die er nog zijn staan aan één kant tegen elkaar aan
+      const inLayer = Math.min(perLayer, count - l * perLayer);
+      for (let k = 0; k < inLayer; k++) {
+        const ix = Math.floor(k / nz);
+        const iz = k % nz;
+        const v = shade * (0.94 + j() * 0.06);
+        cartons.push({
+          x: (ix - (nx - 1) / 2) * cw + (j() - 0.5) * 0.012,
+          y: PALLET_H + (l + 0.5) * ch,
+          z: (iz - (nz - 1) / 2) * cd + (j() - 0.5) * 0.012,
+          sx: cw - 0.008,
+          sy: ch - 0.003,
+          sz: cd - 0.008,
+          ry: (j() - 0.5) * 0.03,
+          r: v + warm,
+          g: v,
+          b: v - warm,
+        });
+      }
+    }
     const wrap = wrapped ? { y: PALLET_H + (layers * ch) / 2, sx: nx * cw + 0.02, sy: layers * ch + 0.006, sz: nz * cd + 0.02 } : null;
     return { cartons, wrap };
   }
@@ -640,11 +670,13 @@ export function createWarehouse(scene: THREE.Scene) {
     for (const [id, { qty, sku }] of perLoc) {
       const slots = slotsFor(id);
       if (!slots) continue;
-      const count = Math.min(slots.length, Math.ceil(qty / PER_PALLET));
+      // 1 doos = 1 stuk: volle pallets vooraan, de buitenste pallet heeft de rest
+      const perPallet = perPalletAt(sku, qty);
+      const count = Math.min(slots.length, Math.ceil(qty / perPallet));
       palletCount.set(id, count);
       for (let i = 0; i < count && np < MAX_PALLETS; i++) {
         const [sx, sy, sz] = slots[i];
-        const onPallet = Math.min(PER_PALLET, qty - i * PER_PALLET);
+        const onPallet = i === count - 1 ? qty - i * perPallet : perPallet;
         const key = `${id}:${i}`;
         const r = tex.rng(tex.hashString(key));
         const px = sx + (r() - 0.5) * 0.06;
@@ -716,7 +748,6 @@ export function createWarehouse(scene: THREE.Scene) {
     nearestFreeSlot,
     inRack,
     buildLoad,
-    perPallet: PER_PALLET,
   };
 }
 
