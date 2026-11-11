@@ -393,41 +393,79 @@ function barcode(g: CanvasRenderingContext2D, x: number, y: number, w: number, h
   }
 }
 
+const LABEL_BG = '#f7f7f2';
+
+/** Tekent één locatielabel in een vlak van 512 × 192 (schaal en plaats zet de aanroeper). */
+function drawLocationLabel(g: CanvasRenderingContext2D, id: string, arrow: 'up' | 'down') {
+  const w = 512;
+  const h = 192;
+  g.fillStyle = LABEL_BG;
+  g.fillRect(0, 0, w, h);
+  g.fillStyle = arrow === 'up' ? '#f2c200' : '#2e8bd8';
+  g.fillRect(0, 0, 92, h);
+  g.fillStyle = '#111';
+  g.beginPath();
+  if (arrow === 'up') {
+    g.moveTo(46, 30);
+    g.lineTo(80, 96);
+    g.lineTo(58, 96);
+    g.lineTo(58, 162);
+    g.lineTo(34, 162);
+    g.lineTo(34, 96);
+    g.lineTo(12, 96);
+  } else {
+    g.moveTo(46, 162);
+    g.lineTo(80, 96);
+    g.lineTo(58, 96);
+    g.lineTo(58, 30);
+    g.lineTo(34, 30);
+    g.lineTo(34, 96);
+    g.lineTo(12, 96);
+  }
+  g.fill();
+  g.font = 'bold 74px Arial';
+  g.textBaseline = 'top';
+  g.fillText(id, 110, 14, 390);
+  barcode(g, 110, 104, 380, 70, hashString(id));
+}
+
 /** Locatielabel voor op de stellingligger. */
 export function locationLabel(id: string, arrow: 'up' | 'down', scale = 1) {
   return canvasTexture(512 * scale, 192 * scale, (g) => {
-    const w = 512;
-    const h = 192;
-    g.scale(scale, scale); // kleinere textuur, zelfde tekening (er hangen honderden labels)
-    g.fillStyle = '#f7f7f2';
-    g.fillRect(0, 0, w, h);
-    g.fillStyle = arrow === 'up' ? '#f2c200' : '#2e8bd8';
-    g.fillRect(0, 0, 92, h);
-    g.fillStyle = '#111';
-    g.beginPath();
-    if (arrow === 'up') {
-      g.moveTo(46, 30);
-      g.lineTo(80, 96);
-      g.lineTo(58, 96);
-      g.lineTo(58, 162);
-      g.lineTo(34, 162);
-      g.lineTo(34, 96);
-      g.lineTo(12, 96);
-    } else {
-      g.moveTo(46, 162);
-      g.lineTo(80, 96);
-      g.lineTo(58, 96);
-      g.lineTo(58, 30);
-      g.lineTo(34, 30);
-      g.lineTo(34, 96);
-      g.lineTo(12, 96);
-    }
-    g.fill();
-    g.font = 'bold 74px Arial';
-    g.textBaseline = 'top';
-    g.fillText(id, 110, 14, 390);
-    barcode(g, 110, 104, 380, 70, hashString(id));
+    g.scale(scale, scale); // kleinere textuur, zelfde tekening
+    drawLocationLabel(g, id, arrow);
   });
+}
+
+/**
+ * Alle stellinglabels samen op één textuur (er hangen honderden labels: zo is het één materiaal en één
+ * tekenopdracht in plaats van honderden). `rects[i]` is het uv-vlak [u0, v0, u1, v1] van label i.
+ */
+export function locationLabelAtlas(labels: { id: string; arrow: 'up' | 'down' }[]) {
+  const COLS = 16;
+  const PAD = 4; // rand in de achtergrondkleur, zodat buurlabels op afstand niet in elkaar overlopen
+  const TW = 248;
+  const TH = 96;
+  const CW = TW + PAD * 2;
+  const CH = TH + PAD * 2;
+  const W = COLS * CW;
+  const H = Math.max(1, Math.ceil(labels.length / COLS)) * CH;
+  const rects: [number, number, number, number][] = [];
+  const texture = canvasTexture(W, H, (g) => {
+    g.fillStyle = LABEL_BG;
+    g.fillRect(0, 0, W, H);
+    labels.forEach(({ id, arrow }, i) => {
+      const x = (i % COLS) * CW + PAD;
+      const y = Math.floor(i / COLS) * CH + PAD;
+      g.save();
+      g.translate(x, y);
+      g.scale(TW / 512, TH / 192);
+      drawLocationLabel(g, id, arrow);
+      g.restore();
+      rects.push([x / W, 1 - (y + TH) / H, (x + TW) / W, 1 - y / H]);
+    });
+  });
+  return { texture, rects };
 }
 
 /** Bord met grote tekst (gangpad, dock, veiligheid). */

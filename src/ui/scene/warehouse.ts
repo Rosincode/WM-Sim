@@ -348,8 +348,10 @@ export function createWarehouse(scene: THREE.Scene) {
   const endGuards = new Batch();
   const decks = new Batch();
   const POST_H = 5.6;
-  const labelGeo = new THREE.PlaneGeometry(0.34, 0.1275);
   const signGeo = new THREE.PlaneGeometry(0.7, 0.35);
+  // Locatielabels: honderden stuks, daarom samen in één mesh met één textuur (zie tex.locationLabelAtlas).
+  const rackLabels: { id: string; arrow: 'up' | 'down' }[] = [];
+  const rackLabelSpots: { index: number; position: THREE.Vector3; back: boolean }[] = [];
 
   ROW_Z.forEach((z0, r) => {
     for (const fx of FRAME_X) {
@@ -374,13 +376,11 @@ export function createWarehouse(scene: THREE.Scene) {
         [`${base}-3`, bx, LEVEL_Y[2] - 0.065, 'up'],
       ];
       for (const [id, x, y, arrow] of spots) {
-        const mat = new THREE.MeshStandardMaterial({ map: tex.locationLabel(id, arrow, 0.5), roughness: 0.6 });
+        const index = rackLabels.push({ id, arrow }) - 1;
         for (const side of [1, -1]) {
-          const label = new THREE.Mesh(labelGeo, mat);
-          label.position.set(x, y, z0 + side * 0.5265);
-          if (side < 0) label.rotation.y = Math.PI;
-          scene.add(label);
-          scanTargets.push({ code: id, position: label.position.clone() });
+          const position = new THREE.Vector3(x, y, z0 + side * 0.5265);
+          rackLabelSpots.push({ index, position, back: side < 0 });
+          scanTargets.push({ code: id, position });
         }
       }
     });
@@ -395,6 +395,22 @@ export function createWarehouse(scene: THREE.Scene) {
     }
     colliders.push({ minX: RACK_MIN_X - 0.45, maxX: RACK_MAX_X + 0.45, minZ: z0 - 0.62, maxZ: z0 + 0.62 });
   });
+  const labelAtlas = tex.locationLabelAtlas(rackLabels);
+  const labelMesh = new THREE.Mesh(
+    mergeGeometries(
+      rackLabelSpots.map(({ index, position, back }) => {
+        const geo = new THREE.PlaneGeometry(0.34, 0.1275);
+        const [u0, v0, u1, v1] = labelAtlas.rects[index];
+        const uv = geo.attributes.uv;
+        for (let i = 0; i < uv.count; i++) uv.setXY(i, u0 + uv.getX(i) * (u1 - u0), v0 + uv.getY(i) * (v1 - v0));
+        if (back) geo.rotateY(Math.PI);
+        return geo.translate(position.x, position.y, position.z);
+      }),
+    ),
+    new THREE.MeshStandardMaterial({ map: labelAtlas.texture, roughness: 0.6 }),
+  );
+  scene.add(labelMesh);
+
   const deckTexture = tex.wireDeck();
   deckTexture.repeat.set(6, 2);
   scene.add(
