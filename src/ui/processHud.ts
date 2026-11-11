@@ -128,9 +128,10 @@ export function createProcessHud(sim: Warehouse) {
   let lastTask = '';
   let stockRefresh = 0;
 
-  function update(dt: number, pos: { x: number; z: number }) {
+  /** actionLabel: vervangt de sim-actie onder E (bijv. bij de pc). */
+  function update(dt: number, pos: { x: number; z: number }, actionLabel?: string) {
     const obj = sim.objective();
-    const it = sim.interactionAt(pos);
+    const it = actionLabel ? { label: actionLabel, enabled: true } : sim.interactionAt(pos);
     const c = sim.carry;
     const carrying =
       c?.kind === 'pallet'
@@ -140,7 +141,7 @@ export function createProcessHud(sim: Warehouse) {
           : 'Handen vrij';
     const html = `
       <div class="goal">${esc(obj?.text ?? 'Wachten op werk…')}</div>
-      <div class="act ${it?.enabled ? '' : 'off'}"><kbd>E</kbd>${esc(it?.label ?? 'Loop naar een vrachtwagen, baan, terminal of stelling')}</div>
+      <div class="act ${it?.enabled ? '' : 'off'}"><kbd>E</kbd>${esc(it?.label ?? 'Loop naar een vrachtwagen, baan, pc of stelling')}</div>
       <div class="msg">${esc(carrying)}</div>
       ${sim.messages.slice(-3).map((m) => `<div class="msg ${m.kind}">${esc(m.text)}</div>`).join('')}`;
     if (html !== lastTask) {

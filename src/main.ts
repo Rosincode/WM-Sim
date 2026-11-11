@@ -7,15 +7,13 @@ import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { startWmsBridge, wms } from './integrations/wms';
-import { mountWmsPanel } from './ui/wmsPanel';
 import { createPlayerView, type ViewMode } from './ui/playerView';
 import { createHandheld } from './ui/handheld';
 import { createWarehouse, HALL } from './ui/scene/warehouse';
 import { createForklift } from './ui/scene/forklift';
 import { mountWarehouse } from './ui/warehouse';
 
-startWmsBridge();
-mountWmsPanel();
+startWmsBridge(); // aanmelden bij het WMS gebeurt op de pc in het magazijn (src/ui/pcScreen.ts)
 
 const params = new URLSearchParams(location.search);
 
@@ -203,7 +201,7 @@ async function refreshWms() {
     lastSnapshot = snapshot;
     handheld.setData({ mode: client.mode, locations, stock, orders });
   } catch {
-    // de fout staat al in het WMS-paneel; de weergave houdt de laatste stand
+    // de fout staat al in het API-log; de weergave houdt de laatste stand
   }
 }
 void refreshWms();

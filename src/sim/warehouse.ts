@@ -432,7 +432,7 @@ export function createWarehouse() {
     if (to?.status === 'waiting') return { point: POINTS.truckOut, text: `Meld ${to.id} aan bij ${DOCK_OUT}` };
     if (to?.status === 'checkedIn' && laneOut.some((id) => id))
       return { point: POINTS.laneOut, text: 'Pak een klaargezette order op om in te laden' };
-    if (orders.some((x) => x.status === 'open')) return { point: POINTS.terminal, text: 'Start een order bij de orderterminal' };
+    if (orders.some((x) => x.status === 'open')) return { point: POINTS.terminal, text: 'Start een order op de pc' };
     if (to?.status === 'checkedIn' && to.loaded.length) return { point: POINTS.truckOut, text: `Meld ${to.id} uit` };
     return null;
   }

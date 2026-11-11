@@ -1,11 +1,16 @@
 import type * as THREE from 'three';
 import { wms } from '../integrations/wms';
+import { POINTS, dist } from '../sim/layout';
 import { createWarehouse } from '../sim/warehouse';
+import { createPcScreen } from './pcScreen';
 import { createProcessHud } from './processHud';
 import { createWarehouseView } from './warehouseView';
 
 // Koppelt de magazijn-sim aan de 3D-scène, de HUD en het toetsenbord.
-// Toetsen: E = scannen / actie, L = API-log, I = voorraad & orders.
+// Toetsen: E = scannen / actie (bij de pc: pc gebruiken), L = API-log, I = voorraad & orders.
+
+/** Binnen deze afstand van de pc opent E het pc-scherm; verder weglopen sluit het. */
+const PC_RADIUS = 2;
 
 export function mountWarehouse({
   scene,
@@ -22,11 +27,30 @@ export function mountWarehouse({
   const hud = createProcessHud(sim);
 
   const pos = () => ({ x: player.position.x, z: player.position.z });
+  const nearPc = () => dist(pos(), POINTS.terminal) <= PC_RADIUS;
+
+  // De pc: aanmelden bij het WMS + de orderacties van de sim (start picken / testorder).
+  const pcOrderAction = () => {
+    const it = sim.interactionAt(POINTS.terminal);
+    return it && it.point === POINTS.terminal ? it : null;
+  };
+  const pc = createPcScreen({
+    orderAction: pcOrderAction,
+    runOrderAction: () => pcOrderAction() && sim.interact(POINTS.terminal),
+    orders: () =>
+      sim.orders
+        .filter((o) => o.status !== 'shipped')
+        .map((o) => ({ id: o.id, status: o.status, lines: o.lines.map((l) => `${l.qty}× ${l.sku}`).join(', ') })),
+  });
 
   window.addEventListener('keydown', (e) => {
     const t = e.target;
     if (e.repeat || t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return;
-    if (e.code === 'KeyE') sim.interact(pos());
+    if (e.code === 'KeyE') {
+      if (pc.isOpen) pc.close();
+      else if (nearPc()) pc.open();
+      else sim.interact(pos());
+    }
     if (e.code === 'KeyL') hud.setTab('log');
     if (e.code === 'KeyI') hud.setTab('stock');
   });
@@ -45,6 +69,14 @@ export function mountWarehouse({
   wms.onError((msg) => hud.addError(msg));
   void syncFromWms();
 
+  function pcHost() {
+    try {
+      return new URL(wms.connectedUrl ?? '').host;
+    } catch {
+      return wms.connectedUrl ?? '';
+    }
+  }
+
   return {
     stockList: () => sim.stockList(),
     /** Voor de heftruck: hele pallets van en naar stellinglocaties. */
@@ -53,7 +85,19 @@ export function mountWarehouse({
     update(dt: number) {
       sim.update(dt);
       view.update(dt);
-      hud.update(dt, pos());
+
+      const near = nearPc();
+      if (pc.isOpen && !near) pc.close();
+      pc.update();
+      hud.update(dt, pos(), near ? (pc.isOpen ? 'Pc verlaten' : 'Pc gebruiken: aanmelden en orders') : undefined);
+
+      const live = wms.client.mode === 'live';
+      const open = sim.orders.filter((o) => o.status === 'open').length;
+      view.setPcScreen({
+        loggedIn: live,
+        subtitle: live ? pcHost() : 'Mock-modus (geen WMS)',
+        lines: [`${open} open order${open === 1 ? '' : 's'}`],
+      });
     },
   };
 }
