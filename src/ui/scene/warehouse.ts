@@ -510,11 +510,11 @@ export function createWarehouse(scene: THREE.Scene) {
     m.castShadow = true;
     m.receiveShadow = true;
   }
-  // Palletstickers: op de lading, aan beide gangpadkanten. Oranje = verplaatst en nog niet geboekt.
-  const STICKER_Y = PALLET_H + 0.125;
-  const STICKER_Z = 0.517; // net buiten de dozen en de wikkelfolie
-  const STICKER_X = 0.617;
-  const stickerGeo = new THREE.PlaneGeometry(0.26, 0.17);
+  // Palletstickers: op de pallet zelf, op de middelste klos, aan beide gangpadkanten. Oranje = verplaatst en nog niet geboekt.
+  const STICKER_Y = PALLET_H / 2;
+  const STICKER_Z = 0.503; // net voor de klossen
+  const STICKER_X = 0.603;
+  const stickerGeo = new THREE.PlaneGeometry(0.2, 0.13);
   const stickerMat = new THREE.MeshStandardMaterial({ map: tex.palletSticker(), roughness: 0.6 });
   const stickers = new THREE.InstancedMesh(stickerGeo, stickerMat, MAX_PALLETS * 2);
   stickers.setColorAt(0, new THREE.Color(1, 1, 1));

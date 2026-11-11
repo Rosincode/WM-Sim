@@ -36,12 +36,12 @@ function pallet(color = '#a5784a') {
   base.position.y = 0.06;
   const load = box(0.9, 0.7, 0.9, color);
   load.position.y = 0.47;
-  // Palletsticker aan beide lange kanten; alleen zichtbaar als de pallet er een heeft
+  // Palletsticker op de pallet zelf, in het midden van beide lange kanten; alleen zichtbaar als de pallet er een heeft
   stickerMat ??= new THREE.MeshStandardMaterial({ map: palletSticker(), roughness: 0.6 });
   const sticker = new THREE.Group();
   for (const side of [1, -1]) {
-    const s = new THREE.Mesh(new THREE.PlaneGeometry(0.26, 0.17), stickerMat);
-    s.position.set(0, 0.3, side * 0.456);
+    const s = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.11), stickerMat);
+    s.position.set(0, 0.06, side * 0.503);
     s.rotation.y = side > 0 ? 0 : Math.PI;
     sticker.add(s);
   }
