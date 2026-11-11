@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import type { Solid } from './scene/warehouse';
 
 /** Camera-modi: overzicht (orbit), first person (dichtbij, standaard) en third person. */
 export type ViewMode = 'overview' | 'first' | 'third';
@@ -12,8 +13,8 @@ interface Options {
   hud: HTMLElement;
   /** Loopbaar gebied (x/z-grenzen). */
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
-  /** Obstakels (stellingen e.d.) waar de speler niet doorheen loopt. */
-  colliders?: { minX: number; maxX: number; minZ: number; maxZ: number }[];
+  /** Bronnen van blokken (stellingen, pallets, heftruck) waar de speler tegenaan loopt, op staat of onderdoor loopt. */
+  solids?: (() => Solid[])[];
   initialMode?: ViewMode;
   onModeChange?: (mode: ViewMode) => void;
 }
@@ -28,8 +29,11 @@ const JUMP_SPEED = 7.5;
 const MOUSE_SENS = 0.0022;
 const MAX_PITCH = Math.PI / 2 - 0.05;
 const PLAYER_RADIUS = 0.42;
+const PLAYER_HEIGHT = 1.8;
+const STEP = 0.35; // zo hoog stap je zonder springen ergens op (pallet, vorken)
+const FOOT = 0.2; // zo ver mogen je voeten over een rand steken
 
-export function createPlayerView({ camera, canvas, controls, player, hud, bounds, colliders = [], initialMode = 'overview', onModeChange }: Options) {
+export function createPlayerView({ camera, canvas, controls, player, hud, bounds, solids = [], initialMode = 'overview', onModeChange }: Options) {
   let mode: ViewMode = 'overview';
   let closeMode: Exclude<ViewMode, 'overview'> = 'first'; // laatst gebruikte dichtbij-modus
   let pitch = 0;
@@ -40,6 +44,25 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   let vehicle: Vehicle | null = null;
   let lookYaw = 0; // rondkijken vanaf de stoel
   const seatWorld = new THREE.Vector3();
+  /** Waar de speler op staat als dat kan bewegen (heftruck): plek in het assenstelsel daarvan. */
+  let ride: { pose: NonNullable<Solid['pose']>; x: number; z: number; r: number; lift: boolean } | null = null;
+  let lx = 0;
+  let lz = 0;
+  /** Zet een punt om naar het assenstelsel van een blok (resultaat in lx, lz). */
+  function toLocal(s: Solid, x: number, z: number) {
+    if (!s.pose) {
+      lx = x;
+      lz = z;
+      return;
+    }
+    const dx = x - s.pose.x;
+    const dz = z - s.pose.z;
+    const c = Math.cos(s.pose.r);
+    const n = Math.sin(s.pose.r);
+    lx = dx * c - dz * n;
+    lz = dx * n + dz * c;
+  }
+  const inside = (s: Solid, margin: number) => lx > s.minX - margin && lx < s.maxX + margin && lz > s.minZ - margin && lz < s.maxZ + margin;
 
   const keys = new Set<string>();
   const forward = new THREE.Vector3();
@@ -51,7 +74,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     overview:
       '<b>WM-Sim — Overzicht</b><br>Slepen: draaien · Scroll: zoom · Rechts slepen: schuiven<br><b>C</b>: dichtbij (first person)',
     first:
-      '<b>WM-Sim — First person</b><br>Klik: muis vastzetten · Muis: rondkijken · Esc: muis los<br>W/S: lopen · A/D: zijwaarts · ←/→: draaien · Shift: rennen · Spatie: springen<br><b>1</b>: scanner (klik op een label = scannen naar de WMS) · <b>2</b>: tablet met WMS (F: dichtbij en bedienen)<br><b>R</b>: in de heftruck stappen (als je ernaast staat) · <b>V</b>: third person · <b>C</b>: overzicht',
+      '<b>WM-Sim — First person</b><br>Klik: muis vastzetten · Muis: rondkijken · Esc: muis los<br>W/S: lopen · A/D: zijwaarts · ←/→: draaien · Shift: rennen · Spatie: springen<br><b>1</b>: scanner (klik op een label = scannen naar de WMS) · <b>2</b>: tablet met WMS (F: dichtbij en bedienen)<br><b>R</b>: in de heftruck stappen (als je ernaast staat) · op de vorken staan: een ander tilt je op · <b>V</b>: third person · <b>C</b>: overzicht',
     third:
       '<b>WM-Sim — Third person</b><br>W/S: lopen · A/D: draaien · Shift: rennen · Spatie: springen<br><b>V</b>: first person · <b>C</b>: overzicht',
   };
@@ -120,6 +143,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
       player.position.set(seatWorld.x, 0.5, seatWorld.z);
       player.rotation.y = o.rotation.y;
       moving = 0;
+      ride = null;
       if (mode === 'overview') {
         controls.update();
       } else if (mode === 'first') {
@@ -139,8 +163,18 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
       moving = 0;
       return;
     }
-    const startX = player.position.x;
-    const startZ = player.position.z;
+    const p = player.position;
+    // Sta je op iets dat beweegt (de vorken van de heftruck), dan ga je mee
+    if (ride) {
+      const { pose } = ride;
+      const c = Math.cos(pose.r);
+      const n = Math.sin(pose.r);
+      p.x = pose.x + ride.x * c + ride.z * n;
+      p.z = pose.z - ride.x * n + ride.z * c;
+      player.rotation.y += pose.r - ride.r;
+    }
+    const startX = p.x;
+    const startZ = p.z;
 
     const speed = down('ShiftLeft', 'ShiftRight') ? 9 : 5;
     const turn = mode === 'first' ? down('ArrowLeft') : down('KeyA', 'ArrowLeft');
@@ -158,27 +192,75 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     player.position.x = THREE.MathUtils.clamp(player.position.x, bounds.minX, bounds.maxX);
     player.position.z = THREE.MathUtils.clamp(player.position.z, bounds.minZ, bounds.maxZ);
 
-    // Niet door obstakels lopen: langs de kortste kant terugduwen
-    for (const c of colliders) {
-      const p = player.position;
-      const overlapX = Math.min(p.x - (c.minX - PLAYER_RADIUS), c.maxX + PLAYER_RADIUS - p.x);
-      const overlapZ = Math.min(p.z - (c.minZ - PLAYER_RADIUS), c.maxZ + PLAYER_RADIUS - p.z);
-      if (overlapX <= 0 || overlapZ <= 0) continue;
-      if (overlapX < overlapZ) p.x = p.x < (c.minX + c.maxX) / 2 ? c.minX - PLAYER_RADIUS : c.maxX + PLAYER_RADIUS;
-      else p.z = p.z < (c.minZ + c.maxZ) / 2 ? c.minZ - PLAYER_RADIUS : c.maxZ + PLAYER_RADIUS;
-    }
-    const walked = Math.hypot(player.position.x - startX, player.position.z - startZ) / Math.max(dt, 1e-4);
-    moving += (Math.min(1, walked / 5) - moving) * (1 - Math.exp(-dt * 10));
+    const all = solids.map((source) => source());
 
-    // Springen: zwaartekracht tot de vloer
+    // Hoogte: zwaartekracht, je hoofd stoten, en de ondergrond (vloer, pallet, vorken, stellingniveau)
+    const prevFeet = p.y;
+    let feet = prevFeet;
     if (!grounded) {
       velY -= GRAVITY * dt;
-      player.position.y += velY * dt;
-      if (player.position.y <= 0) {
-        player.position.y = 0;
+      feet += velY * dt;
+    }
+    let ground = 0;
+    let on: Solid | null = null;
+    for (const list of all)
+      for (const s of list) {
+        toLocal(s, p.x, p.z);
+        if (velY > 0 && s.minY >= prevFeet + PLAYER_HEIGHT - 0.05 && s.minY < feet + PLAYER_HEIGHT && inside(s, PLAYER_RADIUS)) {
+          feet = s.minY - PLAYER_HEIGHT;
+          velY = 0;
+        }
+        if (s.maxY > ground && s.maxY <= prevFeet + STEP && inside(s, FOOT)) {
+          ground = s.maxY;
+          on = s;
+        }
+      }
+    if (grounded) {
+      if (ground >= feet - STEP) {
+        feet = ground; // op- of afstapje, of de ondergrond beweegt (vorken)
+      } else {
+        velY = 0; // van een rand af: vallen
+        grounded = false;
+      }
+    } else if (feet <= ground) {
+      feet = ground;
+      if (velY <= 0) {
         velY = 0;
         grounded = true;
       }
+    }
+    p.y = feet;
+
+    // Niet door obstakels lopen: langs de kortste kant terugduwen. Alleen wat op jouw hoogte zit telt.
+    for (const list of all)
+      for (const s of list) {
+        if (s.maxY <= feet + STEP || s.minY >= feet + PLAYER_HEIGHT - 0.02) continue;
+        toLocal(s, p.x, p.z);
+        const overlapX = Math.min(lx - (s.minX - PLAYER_RADIUS), s.maxX + PLAYER_RADIUS - lx);
+        const overlapZ = Math.min(lz - (s.minZ - PLAYER_RADIUS), s.maxZ + PLAYER_RADIUS - lz);
+        if (overlapX <= 0 || overlapZ <= 0) continue;
+        if (overlapX < overlapZ) lx = lx < (s.minX + s.maxX) / 2 ? s.minX - PLAYER_RADIUS : s.maxX + PLAYER_RADIUS;
+        else lz = lz < (s.minZ + s.maxZ) / 2 ? s.minZ - PLAYER_RADIUS : s.maxZ + PLAYER_RADIUS;
+        if (s.pose) {
+          const c = Math.cos(s.pose.r);
+          const n = Math.sin(s.pose.r);
+          p.x = s.pose.x + lx * c + lz * n;
+          p.z = s.pose.z - lx * n + lz * c;
+        } else {
+          p.x = lx;
+          p.z = lz;
+        }
+      }
+    const walked = Math.hypot(p.x - startX, p.z - startZ) / Math.max(dt, 1e-4);
+    moving += (Math.min(1, walked / 5) - moving) * (1 - Math.exp(-dt * 10));
+
+    // Onthouden waar je op staat, zodat je in het volgende beeld meebeweegt
+    const stoodOn = on as Solid | null;
+    if (grounded && stoodOn?.pose) {
+      toLocal(stoodOn, p.x, p.z);
+      ride = { pose: stoodOn.pose, x: lx, z: lz, r: stoodOn.pose.r, lift: !!stoodOn.lift };
+    } else {
+      ride = null;
     }
 
     if (mode === 'first') {
@@ -201,6 +283,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     player.position.y = 0;
     velY = 0;
     grounded = true;
+    ride = null;
     refreshHud();
     onModeChange?.(mode);
   }
@@ -211,6 +294,8 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     setVehicle,
     get mode() { return mode; },
     get moving() { return moving; },
+    /** Het bewegende voorwerp waar de speler op staat (heftruck), met zijn plek daarop; anders null. */
+    get standingOn() { return ride; },
     /** Kijkrichting: omhoog/omlaag, en vanaf de stoel van een voertuig ook opzij. */
     get look() { return { yaw: lookYaw, pitch }; },
   };

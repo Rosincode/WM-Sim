@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Collider, Hall, RackPallet, Slot } from './warehouse';
+import type { Collider, Hall, RackPallet, Slot, Solid } from './warehouse';
 
 // Bestuurbare heftruck (elektrische contragewichttruck). Voorkant wijst naar +Z.
 // Rijden: W/S, sturen: A/D, vorken: pijl omhoog/omlaag.
@@ -218,6 +218,27 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
     }
   }
 
+  // ---------- Botsblokken voor spelers: op de vorken (of de last) staan en opgetild worden ----------
+  /** Stand van de truck; de blokken hieronder staan in het assenstelsel van de truck. */
+  const pose = { x: 0, z: 0, r: 0 };
+  const loadTop = (c: Carried) => hall.loadHeight(c.load.sku, c.load.qty);
+  function solids(): Solid[] {
+    pose.x = g.position.x;
+    pose.z = g.position.z;
+    pose.r = g.rotation.y;
+    const list: Solid[] = [
+      { pose, minX: -0.58, maxX: 0.58, minZ: -1.28, maxZ: 0.62, minY: 0, maxY: 1.2 }, // chassis
+      { pose, minX: -0.55, maxX: 0.55, minZ: -1.0, maxZ: 0.7, minY: 2.2, maxY: 2.28 }, // dak van de kooi
+      { pose, minX: -0.48, maxX: 0.48, minZ: 0.92, maxZ: 1.11, minY: 0, maxY: Math.max(2.55, forkH + 1.1) }, // mast en vorkenbord
+      { pose, lift: true, minX: -0.42, maxX: 0.42, minZ: 1.11, maxZ: 2.22, minY: forkH - 0.03, maxY: forkH + 0.0225 }, // vorken
+    ];
+    if (carried)
+      list.push({ pose, lift: true, minX: -0.6, maxX: 0.6, minZ: FORK_Z - 0.5, maxZ: FORK_Z + 0.5, minY: forkH + 0.025, maxY: forkH + 0.025 + loadTop(carried) });
+    for (const l of loose)
+      list.push({ pose: { x: l.x, z: l.z, r: l.r }, minX: -0.6, maxX: 0.6, minZ: -0.5, maxZ: 0.5, minY: 0, maxY: loadTop(l) });
+    return list;
+  }
+
   // ---------- Multiplayer: stand delen met en overnemen van andere spelers ----------
   /** Doelstand als een andere speler rijdt (of de truck heeft geparkeerd); de truck beweegt er soepel naartoe. */
   let remote: { x: number; z: number; r: number; h: number } | null = null;
@@ -347,6 +368,13 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
     },
     getState,
     applyState,
+    solids,
+    /** Stand van de truck waar de blokken van solids() bij horen (steeds hetzelfde object). */
+    pose,
+    /** Hoogte van de vorken. */
+    get forkHeight() {
+      return forkH;
+    },
     /** Rijdt een andere speler op dit moment met de truck? (zwaailamp) */
     setRemoteDriven(on: boolean) {
       remoteDriven = on;

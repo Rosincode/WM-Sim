@@ -21,9 +21,19 @@ const PALLET_H = 0.144;
 export const EXIT_X = 20.5;
 
 export type Collider = { minX: number; maxX: number; minZ: number; maxZ: number };
+/**
+ * Massief blok waar de speler tegenaan loopt, op kan staan of onderdoor kan lopen.
+ * Met `pose` staan de maten in het eigen assenstelsel van een (bewegend) voorwerp, zoals de heftruck.
+ */
+export type Solid = {
+  minX: number; maxX: number; minZ: number; maxZ: number; minY: number; maxY: number;
+  pose?: { x: number; z: number; r: number };
+  /** Beweegt mee met de vorken van de heftruck. */
+  lift?: boolean;
+};
 export type ScanTarget = { code: string; position: THREE.Vector3 };
 /** Een pallet zoals hij nu in de stelling staat. `last` = de buitenste van zijn locatie (die pak je als eerste). */
-export type RackPallet = { locId: string; index: number; last: boolean; x: number; y: number; z: number; qty: number; sku: string };
+export type RackPallet = { locId: string; index: number; last: boolean; x: number; y: number; z: number; qty: number; sku: string; /** Bovenkant van de lading. */ top: number };
 export type Slot = { locId: string; x: number; y: number; z: number };
 
 export const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
@@ -77,7 +87,10 @@ function palletGeometry() {
 
 export function createWarehouse(scene: THREE.Scene) {
   const { w: W, d: D, h: H } = HALL;
-  const colliders: Collider[] = [];
+  const colliders: Collider[] = []; // voor de heftruck: die rijdt nergens onderdoor
+  const fixedSolids: Solid[] = []; // voor de speler: met hoogte, zie Solid
+  const solid = (x: number, z: number, w: number, d: number, minY: number, maxY: number) =>
+    fixedSolids.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2, minY, maxY });
   const scanTargets: ScanTarget[] = [];
   const roof = new THREE.Group(); // verborgen in overzicht-modus
   scene.add(roof);
@@ -371,11 +384,13 @@ export function createWarehouse(scene: THREE.Scene) {
         braces.add(fx, y, z0, 0.035, 0.035, 0.94);
         if (y + 1.6 < POST_H) braces.add(fx, y + 0.8, z0, 0.035, 0.035, 1.84, (k % 2 ? 1 : -1) * Math.atan2(1.6, 0.94), 0, 0);
       }
+      solid(fx, z0, 0.09, 1.07, 0, POST_H); // staanders met schoren: daar kun je niet tussendoor
     }
     BAY_X.forEach((bx, s) => {
       for (const y of [LEVEL_Y[1], LEVEL_Y[2]]) {
         for (const dz of [-0.5, 0.5]) beams.add(bx, y - 0.065, z0 + dz, 3.91, 0.13, 0.05);
         decks.add(bx, y + 0.004, z0, 3.9, 0.006, 0.95);
+        solid(bx, z0, 3.91, 1.05, y - 0.13, y + 0.007); // liggers met roosterdek: je loopt eronderdoor of staat erop
       }
       const base = `R${r + 1}-${String(s + 1).padStart(2, '0')}`;
       const spots: [string, number, number, 'up' | 'down'][] = [
@@ -396,6 +411,7 @@ export function createWarehouse(scene: THREE.Scene) {
     const rowSign = new THREE.MeshStandardMaterial({ map: tex.sign(`R${r + 1}`, '#17346b', '#ffffff'), roughness: 0.5 });
     for (const [x, ry] of [[RACK_MIN_X - 0.36, -Math.PI / 2], [RACK_MAX_X + 0.36, Math.PI / 2]] as const) {
       endGuards.add(x, 0.22, z0, 0.12, 0.44, 1.4);
+      solid(x, z0, 0.12, 1.4, 0, 0.44);
       const s = new THREE.Mesh(signGeo, rowSign);
       s.position.set(ry < 0 ? RACK_MIN_X - 0.05 : RACK_MAX_X + 0.05, 2.7, z0);
       s.rotation.y = ry;
@@ -440,6 +456,7 @@ export function createWarehouse(scene: THREE.Scene) {
   const r0 = tex.rng(7);
   const STACK_Z = D / 2 - 1.2;
   [[23.5, 9], [25.1, 12], [26.7, 6]].forEach(([x, n]) => {
+    solid(x, STACK_Z, 1.2, 1.0, 0, n * PALLET_H);
     for (let i = 0; i < n; i++) stacks.add(x + (r0() - 0.5) * 0.04, i * PALLET_H, STACK_Z + (r0() - 0.5) * 0.04, 1, 1, 1, 0, (r0() - 0.5) * 0.06, 0);
   });
   scene.add(stacks.build(palletGeo, woodMat));
@@ -460,6 +477,8 @@ export function createWarehouse(scene: THREE.Scene) {
   tableBoxes.add(TX + 0.65, 0.2, TZ + 0.7, 0.6, 0.4, 0.5, 0, 0.1, 0);
   scene.add(table.build(UNIT_BOX, woodMat), legs.build(UNIT_BOX, steelGrey), tableBoxes.build(UNIT_BOX, cartonMats));
   colliders.push({ minX: TX - 1.2, maxX: TX + 1.2, minZ: TZ - 0.55, maxZ: TZ + 1.0 });
+  solid(TX, TZ, 2.2, 0.9, 0, 0.925);
+  solid(TX + 0.65, TZ + 0.7, 0.6, 0.5, 0, 0.4);
 
   // Brandblussers en nooduitgang
   const extinguishers = new Batch();
@@ -541,6 +560,13 @@ export function createWarehouse(scene: THREE.Scene) {
 
   type Carton = { x: number; y: number; z: number; sx: number; sy: number; sz: number; ry: number; r: number; g: number; b: number };
 
+  /** Hoogte van een pallet met lading (bovenkant van de bovenste laag dozen). */
+  function loadHeight(sku: string, qty: number) {
+    const ch = CARTON_SIZES[Math.floor(tex.rng(tex.hashString(sku))() * CARTON_SIZES.length)][1];
+    const maxLayers = Math.floor(1.45 / ch);
+    return PALLET_H + Math.max(1, Math.round((Math.min(qty, PER_PALLET) / PER_PALLET) * maxLayers)) * ch;
+  }
+
   /** Opbouw van één pallet (in palletcoördinaten). Doosmaat en kleur horen bij het artikel. */
   function loadLayout(sku: string, qty: number, jitterKey: string) {
     const r = tex.rng(tex.hashString(sku));
@@ -604,6 +630,7 @@ export function createWarehouse(scene: THREE.Scene) {
 
   let stockSignature = '';
   let rackPallets: RackPallet[] = [];
+  let solids: Solid[] = fixedSolids;
   const palletCount = new Map<string, number>();
 
   /** Tekent de voorraad: per locatie 1-3 pallets, de laatste pallet bevat de rest. */
@@ -642,7 +669,7 @@ export function createWarehouse(scene: THREE.Scene) {
         const pz = sz + (r() - 0.5) * 0.05;
         q.setFromEuler(euler.set(0, (r() - 0.5) * 0.05, 0));
         pallets.setMatrixAt(np++, m4.compose(pos.set(px, sy, pz), q, scl.set(1, 1, 1)));
-        rackPallets.push({ locId: id, index: i, last: i === count - 1, x: px, y: sy, z: pz, qty: onPallet, sku });
+        rackPallets.push({ locId: id, index: i, last: i === count - 1, x: px, y: sy, z: pz, qty: onPallet, sku, top: sy + loadHeight(sku, onPallet) });
 
         const { cartons: list, wrap } = loadLayout(sku, onPallet, key);
         for (const c of list) {
@@ -657,6 +684,10 @@ export function createWarehouse(scene: THREE.Scene) {
         }
       }
     }
+    solids = [
+      ...fixedSolids,
+      ...rackPallets.map((p) => ({ minX: p.x - 0.6, maxX: p.x + 0.6, minZ: p.z - 0.5, maxZ: p.z + 0.5, minY: p.y, maxY: p.top })),
+    ];
     pallets.count = np;
     cartons.count = nc;
     wraps.count = nw;
@@ -693,6 +724,9 @@ export function createWarehouse(scene: THREE.Scene) {
   return {
     roof,
     colliders,
+    /** Alles waar de speler tegenaan loopt of op kan staan: stellingen, pallets in de stellingen en vaste aankleding. */
+    solids: () => solids,
+    loadHeight,
     scanTargets,
     setStock,
     /** De pallets die nu in de stellingen staan. */

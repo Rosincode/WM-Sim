@@ -30,6 +30,8 @@ type Pose = {
   /** In de hand: 0 niets, 1 scanner, 2 tablet */ t: 0 | 1 | 2;
   /** Aantal keer gescand (teller) */ sc: number;
   /** Stuuruitslag -1..1, als deze speler rijdt */ w: number;
+  /** Staat op de heftruck: plek t.o.v. de truck; y = hoogte boven de vorken als hij op de vorken of de last staat */
+  v?: { x: number; z: number; y?: number };
 };
 type StateMsg = { rev: number; w: string; sim: SharedState; fork: ForkliftState };
 
@@ -47,7 +49,11 @@ interface Options {
     readonly steer: number;
     setRemoteSteer(v: number): void;
     steeringGrip(point: THREE.Vector3, normal: THREE.Vector3): void;
+    readonly group: THREE.Object3D;
+    readonly forkHeight: number;
   };
+  /** Staat deze speler op de heftruck? Dan zijn plek t.o.v. de truck (y: hoogte boven de vorken), anders null. */
+  rider(): { x: number; z: number; y?: number } | null;
   /** Kijkrichting van deze speler (first person), anders nul. */
   look(): { yaw: number; pitch: number };
   /** Wat deze speler in de hand heeft: 0 niets, 1 scanner, 2 tablet. */
@@ -138,6 +144,8 @@ export function mountMultiplayer(o: Options) {
     scanT: number;
     /** Linkerhand op het stuur, als deze speler rijdt. */
     wheelHand: HandTarget;
+    /** Gladgestreken plek op de heftruck, als deze speler erop staat. */
+    ride: { x: number; z: number } | null;
   };
   const avatars = new Map<string, Avatar>();
 
@@ -160,6 +168,7 @@ export function mountMultiplayer(o: Options) {
       look: { yaw: 0, pitch: 0 },
       scanT: 0,
       wheelHand: { point: new THREE.Vector3(), normal: new THREE.Vector3() },
+      ride: null,
     };
     avatars.set(peer.id, avatar);
     return avatar;
@@ -208,6 +217,8 @@ export function mountMultiplayer(o: Options) {
       w: o.isDriving() ? round(o.forklift.steer, 10) : 0,
     };
     if (pose.d) pose.f = o.forklift.getState();
+    const on = pose.d ? null : o.rider();
+    if (on) pose.v = { x: round(on.x), z: round(on.z), ...(on.y !== undefined && { y: round(on.y) }) };
     const json = JSON.stringify(pose);
     const now = performance.now();
     if (!force && json === lastPose && now - lastPoseAt < HEARTBEAT_MS) return;
@@ -238,6 +249,11 @@ export function mountMultiplayer(o: Options) {
         sc: num(data.sc),
         w: THREE.MathUtils.clamp(num(data.w), -1, 1),
       };
+      if (isObj(data.v) && data.d !== 1) {
+        const { x, z, y } = data.v;
+        a.pose.v = { x: THREE.MathUtils.clamp(num(x), -4, 4), z: THREE.MathUtils.clamp(num(z), -4, 4) };
+        if (typeof y === 'number' && Number.isFinite(y)) a.pose.v.y = THREE.MathUtils.clamp(y, -1, 3);
+      }
       if (!wasNew && a.pose.sc !== prevScans) a.scanT = 0.4; // heeft net gescand: laser tonen
       a.target.set(a.pose.x, a.pose.y, a.pose.z);
       if (a.pose.d && validFork(data.f)) {
@@ -398,7 +414,26 @@ export function mountMultiplayer(o: Options) {
           g.position.copy(a.target);
           g.rotation.y = a.pose.r;
           a.placed = true;
+          a.ride = null;
+        } else if (a.pose.v) {
+          // Staat op de heftruck: aan de truck vastmaken zoals die hier te zien is, zodat hij niet achterblijft
+          const v = a.pose.v;
+          const f = o.forklift.group;
+          const c = Math.cos(f.rotation.y);
+          const n = Math.sin(f.rotation.y);
+          if (!a.ride) {
+            const dx = g.position.x - f.position.x;
+            const dz = g.position.z - f.position.z;
+            a.ride = { x: dx * c - dz * n, z: dx * n + dz * c };
+          }
+          a.ride.x += (v.x - a.ride.x) * k;
+          a.ride.z += (v.z - a.ride.z) * k;
+          g.position.x = f.position.x + a.ride.x * c + a.ride.z * n;
+          g.position.z = f.position.z - a.ride.x * n + a.ride.z * c;
+          g.position.y += ((v.y !== undefined ? o.forklift.forkHeight + v.y : a.target.y) - g.position.y) * (v.y !== undefined ? Math.min(1, k * 3) : k);
+          g.rotation.y += Math.atan2(Math.sin(a.pose.r - g.rotation.y), Math.cos(a.pose.r - g.rotation.y)) * k;
         } else {
+          a.ride = null;
           g.position.lerp(a.target, k);
           g.rotation.y += Math.atan2(Math.sin(a.pose.r - g.rotation.y), Math.cos(a.pose.r - g.rotation.y)) * k;
         }

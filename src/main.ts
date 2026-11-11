@@ -178,7 +178,7 @@ const view = createPlayerView({
   player,
   hud,
   bounds: BOUNDS,
-  colliders: hall.colliders,
+  solids: [hall.solids, () => forklift.solids()],
   initialMode: params.get('view') === 'overview' ? 'overview' : params.get('view') === 'third' ? 'third' : 'first',
   onModeChange: applyMode,
 });
@@ -237,6 +237,11 @@ const multiplayer = params.has('solo')
       shared: warehouse.shared,
       carryLabel: warehouse.carryLabel,
       forklift,
+      rider: () => {
+        const on = view.standingOn;
+        if (!on || on.pose !== forklift.pose) return null;
+        return { x: on.x, z: on.z, y: on.lift ? player.position.y - forklift.forkHeight : undefined };
+      },
       seatHipY: forklift.seat.y - 0.56,
       isDriving: () => driving,
       look: () => (view.mode === 'first' ? view.look : { yaw: 0, pitch: 0 }),
