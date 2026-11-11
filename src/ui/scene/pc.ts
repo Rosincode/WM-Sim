@@ -1,10 +1,6 @@
 import * as THREE from 'three';
 
-// Werkplek met pc (bureau, monitor, toetsenbord, muis, kast). Het beeldscherm is een canvas-textuur
-// met een vaste uitnodiging. De voorkant (waar je staat) is de -Z-kant.
-
-const SCREEN_W = 512;
-const SCREEN_H = 288; // 16:9, net als een gewone monitor
+// Werkplek met pc (bureau, monitor, toetsenbord, muis, kast). De voorkant (waar je staat) is de -Z-kant.
 
 export function createPcMesh() {
   const group = new THREE.Group();
@@ -35,16 +31,8 @@ export function createPcMesh() {
   add(0.05, 0.22, 0.04, 0, 1.09, 0.24, plastic);
   add(0.74, 0.434, 0.035, 0, 1.4, 0.21, plastic);
 
-  const canvas = document.createElement('canvas');
-  canvas.width = SCREEN_W;
-  canvas.height = SCREEN_H;
-  const ctx = canvas.getContext('2d')!;
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  const screen = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.7, 0.7 * (SCREEN_H / SCREEN_W)),
-    new THREE.MeshBasicMaterial({ map: texture, toneMapped: false }),
-  );
+  // Beeldvlak (16:9): zelf donker; de echte WMS-app ligt er als HTML-laag overheen (src/ui/pcScreen.ts).
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.7 * (9 / 16)), new THREE.MeshBasicMaterial({ color: '#0b0d10' }));
   screen.position.set(0, 1.4, 0.19);
   screen.rotation.y = Math.PI; // beeld naar de -Z-kant
   group.add(screen);
@@ -52,19 +40,6 @@ export function createPcMesh() {
   // Toetsenbord en muis
   add(0.42, 0.02, 0.14, -0.05, 0.985, -0.14, plastic);
   add(0.06, 0.025, 0.1, 0.3, 0.9875, -0.14, plastic);
-
-  // Beeld in de 3D-wereld: alleen een uitnodiging; de echte WMS-app opent met E (src/ui/pcScreen.ts).
-  ctx.fillStyle = '#10243a';
-  ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-  ctx.fillStyle = '#fff';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.font = 'bold 64px system-ui, sans-serif';
-  ctx.fillText('WMS', SCREEN_W / 2, SCREEN_H / 2 - 30);
-  ctx.fillStyle = '#80deea';
-  ctx.font = 'bold 26px system-ui, sans-serif';
-  ctx.fillText('Druk op E om de pc te gebruiken', SCREEN_W / 2, SCREEN_H / 2 + 50, SCREEN_W - 36);
-  texture.needsUpdate = true;
 
   return { group, screen };
 }

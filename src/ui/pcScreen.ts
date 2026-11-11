@@ -12,7 +12,7 @@ const W = 1920;
 const H = 1080;
 const SCREEN = { w: 0.7, h: 0.7 * (9 / 16) };
 /** Verder weg dan dit (m) tonen we de app niet in de wereld. */
-const MAX_DISTANCE = 14;
+const MAX_DISTANCE = 40;
 
 const css = `
 .pc-backdrop { position: fixed; inset: 0; z-index: 50; display: none; background: rgba(0,0,0,.5); }
