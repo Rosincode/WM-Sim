@@ -25,6 +25,13 @@ export interface CharacterState {
   tool?: 'scanner' | 'tablet';
   /** 0..1: is aan het scannen (arm richt, laser aan). */
   scan?: number;
+  /**
+   * Eigen loopsnelheid (m/s, negatief = achteruit). Zonder deze waarde volgt de snelheid uit de verplaatsing;
+   * geef hem mee als de figuur ook door iets anders beweegt (opgetild of meegenomen door de heftruck).
+   */
+  walk?: number;
+  /** Is de figuur los van de grond (springen, vallen)? Zonder deze waarde: zodra hij boven de vloer is. */
+  airborne?: boolean;
 }
 
 export interface HandTarget {
@@ -265,7 +272,9 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
     time += dt;
     const p = group.position;
     let raw = 0;
-    if (hasPrev && dt > 0 && !state.seated) {
+    if (state.walk !== undefined) {
+      raw = state.seated ? 0 : THREE.MathUtils.clamp(state.walk, -10, 10);
+    } else if (hasPrev && dt > 0 && !state.seated) {
       const dx = p.x - prev.x;
       const dz = p.z - prev.z;
       const along = dx * Math.sin(group.rotation.y) + dz * Math.cos(group.rotation.y);
@@ -277,7 +286,7 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
     speed = ease(speed, raw, dt, 10);
     seat = ease(seat, state.seated ? 1 : 0, dt, 8);
     carry = ease(carry, state.carrying && !state.seated ? 1 : 0, dt, 8);
-    air = ease(air, !state.seated && p.y > 0.02 ? 1 : 0, dt, 14);
+    air = ease(air, !state.seated && (state.airborne ?? p.y > 0.02) ? 1 : 0, dt, 14);
 
     const abs = Math.abs(speed);
     const gait = THREE.MathUtils.smoothstep(abs, 0.15, 1.2) * (1 - seat); // 0 = staan, 1 = lopen

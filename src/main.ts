@@ -237,6 +237,7 @@ const multiplayer = params.has('solo')
       shared: warehouse.shared,
       carryLabel: warehouse.carryLabel,
       forklift,
+      airborne: () => view.airborne,
       rider: () => {
         const on = view.standingOn;
         if (!on || on.pose !== forklift.pose) return null;
@@ -323,7 +324,7 @@ renderer.setAnimationLoop((now) => {
       leftHand = wheelHand;
       if (handheld.wristWorld(toolHand.point)) rightHand = toolHand;
     }
-    character.update(dt, { seated: driving, seatHipY: forklift.seat.y - 0.56, carrying: warehouse.carrying(), leftHand, rightHand });
+    character.update(dt, { seated: driving, seatHipY: forklift.seat.y - 0.56, carrying: warehouse.carrying(), leftHand, rightHand, walk: view.walk, airborne: view.airborne });
   }
 
   multiplayer?.update(dt);

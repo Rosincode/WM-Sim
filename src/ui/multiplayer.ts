@@ -32,6 +32,7 @@ type Pose = {
   /** Stuuruitslag -1..1, als deze speler rijdt */ w: number;
   /** Staat op de heftruck: plek t.o.v. de truck; y = hoogte boven de vorken als hij op de vorken of de last staat */
   v?: { x: number; z: number; y?: number };
+  /** Los van de grond (springen, vallen) */ j: 0 | 1;
 };
 type StateMsg = { rev: number; w: string; sim: SharedState; fork: ForkliftState };
 
@@ -54,6 +55,8 @@ interface Options {
   };
   /** Staat deze speler op de heftruck? Dan zijn plek t.o.v. de truck (y: hoogte boven de vorken), anders null. */
   rider(): { x: number; z: number; y?: number } | null;
+  /** Is deze speler los van de grond (springen, vallen)? */
+  airborne(): boolean;
   /** Kijkrichting van deze speler (first person), anders nul. */
   look(): { yaw: number; pitch: number };
   /** Wat deze speler in de hand heeft: 0 niets, 1 scanner, 2 tablet. */
@@ -163,7 +166,7 @@ export function mountMultiplayer(o: Options) {
     const avatar: Avatar = {
       character, tag, load, color,
       target: new THREE.Vector3(),
-      pose: { n: '', x: 0, y: 0, z: 0, r: 0, d: 0, c: '', p: 0, ly: 0, t: 0, sc: 0, w: 0 },
+      pose: { n: '', x: 0, y: 0, z: 0, r: 0, d: 0, c: '', p: 0, ly: 0, t: 0, sc: 0, w: 0, j: 0 },
       placed: false,
       look: { yaw: 0, pitch: 0 },
       scanT: 0,
@@ -215,6 +218,7 @@ export function mountMultiplayer(o: Options) {
       t: o.tool(),
       sc: o.scans(),
       w: o.isDriving() ? round(o.forklift.steer, 10) : 0,
+      j: o.airborne() ? 1 : 0,
     };
     if (pose.d) pose.f = o.forklift.getState();
     const on = pose.d ? null : o.rider();
@@ -248,6 +252,7 @@ export function mountMultiplayer(o: Options) {
         t: data.t === 1 || data.t === 2 ? data.t : 0,
         sc: num(data.sc),
         w: THREE.MathUtils.clamp(num(data.w), -1, 1),
+        j: data.j === 1 ? 1 : 0,
       };
       if (isObj(data.v) && data.d !== 1) {
         const { x, z, y } = data.v;
@@ -410,6 +415,7 @@ export function mountMultiplayer(o: Options) {
       const k = 1 - Math.exp(-dt * 12);
       for (const a of avatars.values()) {
         const g = a.character.group;
+        let walk: number | undefined; // eigen loopsnelheid; alleen nodig als de heftruck de speler meeneemt
         if (!a.placed || g.position.distanceTo(a.target) > 8) {
           g.position.copy(a.target);
           g.rotation.y = a.pose.r;
@@ -426,8 +432,13 @@ export function mountMultiplayer(o: Options) {
             const dz = g.position.z - f.position.z;
             a.ride = { x: dx * c - dz * n, z: dx * n + dz * c };
           }
-          a.ride.x += (v.x - a.ride.x) * k;
-          a.ride.z += (v.z - a.ride.z) * k;
+          const mx = (v.x - a.ride.x) * k;
+          const mz = (v.z - a.ride.z) * k;
+          a.ride.x += mx;
+          a.ride.z += mz;
+          // Alleen wat hij zelf over de truck loopt telt als lopen; staat hij stil, dan blijft hij staan.
+          const along = (mx * c + mz * n) * Math.sin(g.rotation.y) + (-mx * n + mz * c) * Math.cos(g.rotation.y);
+          walk = (Math.hypot(mx, mz) / Math.max(dt, 1e-4)) * (along < -1e-5 ? -1 : 1);
           g.position.x = f.position.x + a.ride.x * c + a.ride.z * n;
           g.position.z = f.position.z - a.ride.x * n + a.ride.z * c;
           g.position.y += ((v.y !== undefined ? o.forklift.forkHeight + v.y : a.target.y) - g.position.y) * (v.y !== undefined ? Math.min(1, k * 3) : k);
@@ -450,6 +461,8 @@ export function mountMultiplayer(o: Options) {
           look: a.look,
           tool: a.pose.t === 1 ? 'scanner' : a.pose.t === 2 ? 'tablet' : undefined,
           scan: a.scanT / 0.4,
+          walk,
+          airborne: a.pose.j === 1,
           leftHand: seated ? a.wheelHand : undefined,
         });
         a.tag.set(a.pose.n, a.color);

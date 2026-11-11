@@ -40,6 +40,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   let velY = 0;
   let grounded = true;
   let moving = 0; // 0..1, voor de loopbeweging van wat je vasthoudt
+  let walk = 0; // eigen loopsnelheid (m/s, negatief = achteruit), zonder het meebewegen met de heftruck
   /** Voertuig waarin de speler zit (heftruck); de speler en camera volgen het dan. */
   let vehicle: Vehicle | null = null;
   let lookYaw = 0; // rondkijken vanaf de stoel
@@ -143,6 +144,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
       player.position.set(seatWorld.x, 0.5, seatWorld.z);
       player.rotation.y = o.rotation.y;
       moving = 0;
+      walk = 0;
       ride = null;
       if (mode === 'overview') {
         controls.update();
@@ -161,6 +163,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     if (mode === 'overview') {
       controls.update();
       moving = 0;
+      walk = 0;
       return;
     }
     const p = player.position;
@@ -255,6 +258,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
         }
       }
     const walked = Math.hypot(p.x - startX, p.z - startZ) / Math.max(dt, 1e-4);
+    walk = (p.x - startX) * forward.x + (p.z - startZ) * forward.z < -1e-5 ? -walked : walked;
     moving += (Math.min(1, walked / 5) - moving) * (1 - Math.exp(-dt * 10));
 
     // Onthouden waar je op staat, zodat je in het volgende beeld meebeweegt
@@ -297,6 +301,10 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     setVehicle,
     get mode() { return mode; },
     get moving() { return moving; },
+    /** Eigen loopsnelheid (m/s, negatief = achteruit): staat de speler stil op rijdende of stijgende vorken, dan is dit nul. */
+    get walk() { return walk; },
+    /** Los van de grond (springen of vallen)? Op de vorken of in een stelling staan telt als grond. */
+    get airborne() { return !grounded && !vehicle; },
     /** Het bewegende voorwerp waar de speler op staat (heftruck), met zijn plek daarop; anders null. */
     get standingOn() { return ride; },
     /** Kijkrichting: omhoog/omlaag, en vanaf de stoel van een voertuig ook opzij. */
