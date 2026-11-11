@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Item, Location, Order } from '../shared/contract';
 import type { ScanTarget } from './scene/warehouse';
 
-// Wat de speler in first person vasthoudt: 1 = handscanner, 2 = tablet met WMS-overzicht.
+// Wat de speler in first person vasthoudt: 1 = handscanner, 2 = tablet (het scherm is de echte WMS-app, zie tabletApp.ts).
 // Alleen weergave: leest de WMS-gegevens die via setData() binnenkomen.
 
 export type Tool = 'scanner' | 'tablet';
@@ -16,7 +16,6 @@ interface Options {
   scanTargets: ScanTarget[];
 }
 
-const TABS = ['Voorraad', 'Orders', 'Locaties'] as const;
 /** Afmetingen van het tabletscherm in meters. */
 export const TABLET_SCREEN = { w: 0.2368, h: 0.148 };
 const SCAN_RANGE = 8;
@@ -130,8 +129,7 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
   // ---------- Tablet ----------
   const tabletRig = new THREE.Group();
   root.add(tabletRig);
-  const tabScreen = screen(1280, 800);
-  const tabletDisplay = mesh(new THREE.PlaneGeometry(TABLET_SCREEN.w, TABLET_SCREEN.h), new THREE.MeshBasicMaterial({ map: tabScreen.texture, fog: false }), 0, 0, 0.0065);
+  const tabletDisplay = mesh(new THREE.PlaneGeometry(TABLET_SCREEN.w, TABLET_SCREEN.h), new THREE.MeshBasicMaterial({ color: '#0b0d10', fog: false }), 0, 0, 0.0065);
   {
     const box = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
     tabletRig.add(mesh(box(0.272, 0.182, 0.012), shell));
@@ -161,7 +159,6 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
   // ---------- Toestand ----------
   let tool: Tool = 'scanner';
   let active = false;
-  let tab = 0;
   let focus = false;
   let data: WmsSnapshot = { mode: 'mock', locations: [], stock: [], orders: [] };
   let lastScan: { code: string | null; time: string } | null = null;
@@ -238,161 +235,6 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
         g.fillText(`${s.qty} st`, w - 20, y);
         g.textAlign = 'left';
       });
-    }
-    texture.needsUpdate = true;
-  }
-
-  function drawTablet() {
-    const { g, w, h, texture } = tabScreen;
-    g.textBaseline = 'middle';
-    g.textAlign = 'left';
-    g.fillStyle = '#f2f4f7';
-    g.fillRect(0, 0, w, h);
-    g.fillStyle = '#17346b';
-    g.fillRect(0, 0, w, 84);
-    g.fillStyle = '#fff';
-    g.font = 'bold 36px Arial';
-    g.fillText('WM-Sim · Warehouse Management', 32, 43);
-    const live = data.mode === 'live';
-    g.fillStyle = live ? '#2e9e57' : '#e0a100';
-    g.beginPath();
-    g.roundRect(w - 330, 22, 170, 40, 20);
-    g.fill();
-    g.fillStyle = '#fff';
-    g.font = 'bold 22px Arial';
-    g.textAlign = 'center';
-    g.fillText(live ? 'LIVE' : 'MOCK-MODUS', w - 245, 43);
-    g.textAlign = 'right';
-    g.font = '28px Arial';
-    g.fillText(clock(), w - 32, 43);
-
-    // tabbladen
-    TABS.forEach((name, i) => {
-      const x = 32 + i * 220;
-      g.fillStyle = i === tab ? '#17346b' : '#dfe4ea';
-      g.beginPath();
-      g.roundRect(x, 104, 204, 52, 10);
-      g.fill();
-      g.fillStyle = i === tab ? '#fff' : '#39424e';
-      g.font = 'bold 26px Arial';
-      g.textAlign = 'center';
-      g.fillText(name, x + 102, 131);
-    });
-    g.textAlign = 'right';
-    g.fillStyle = '#7a8594';
-    g.font = '20px Arial';
-    g.fillText('Q: tabblad · F: dichterbij', w - 32, 131);
-    g.textAlign = 'left';
-
-    const shelves = data.locations.filter((l) => l.type !== 'dock');
-    const filled = new Set(data.stock.map((s) => s.locationId));
-
-    const header = (cols: [string, number][], y: number) => {
-      g.fillStyle = '#e3e8ef';
-      g.fillRect(32, y - 24, 780, 48);
-      g.fillStyle = '#39424e';
-      g.font = 'bold 24px Arial';
-      cols.forEach(([t, x]) => g.fillText(t, x, y));
-    };
-    const card = (x: number, y: number, title: string, value: string) => {
-      g.fillStyle = '#fff';
-      g.beginPath();
-      g.roundRect(x, y, 370, 120, 12);
-      g.fill();
-      g.fillStyle = '#4d5866';
-      g.font = 'bold 24px Arial';
-      g.fillText(title, x + 22, y + 34);
-      g.fillStyle = '#17346b';
-      g.font = 'bold 48px Arial';
-      g.fillText(value, x + 22, y + 82);
-    };
-
-    if (tab === 0) {
-      header([['Locatie', 52], ['Artikel', 300], ['Aantal', 620]], 204);
-      const rows = [...data.stock].sort((a, b) => a.locationId.localeCompare(b.locationId) || a.sku.localeCompare(b.sku));
-      rows.slice(0, 10).forEach((s, i) => {
-        const y = 260 + i * 50;
-        if (i % 2) {
-          g.fillStyle = '#e3e8ef';
-          g.fillRect(32, y - 25, 780, 50);
-        }
-        g.fillStyle = '#0b1016';
-        g.font = 'bold 30px Arial';
-        g.fillText(s.locationId, 52, y);
-        g.fillText(s.sku, 300, y);
-        g.fillText(String(s.qty), 620, y);
-      });
-      if (rows.length > 10) {
-        g.fillStyle = '#4d5866';
-        g.font = 'bold 24px Arial';
-        g.fillText(`+ ${rows.length - 10} regels meer`, 52, 260 + 10 * 50);
-      }
-      if (rows.length === 0) {
-        g.fillStyle = '#7a8594';
-        g.font = '26px Arial';
-        g.fillText('Geen voorraad.', 52, 256);
-      }
-      card(860, 180, 'Totaal stuks', String(data.stock.reduce((n, s) => n + s.qty, 0)));
-      card(860, 320, 'Artikelen', String(new Set(data.stock.map((s) => s.sku)).size));
-      card(860, 460, 'Bezette locaties', `${shelves.filter((l) => filled.has(l.id)).length} / ${shelves.length}`);
-      card(860, 600, 'Open orders', String(data.orders.length));
-    } else if (tab === 1) {
-      header([['Order', 52], ['Regels', 260], ['Status', 620]], 204);
-      data.orders.slice(0, 10).forEach((o, i) => {
-        const y = 260 + i * 50;
-        g.fillStyle = '#0b1016';
-        g.font = 'bold 28px Arial';
-        g.fillText(o.id, 52, y);
-        g.fillText(o.lines.map((l) => `${l.qty}× ${l.sku}`).join(', '), 260, y, 340);
-        g.fillStyle = o.status === 'picking' ? '#c77700' : '#17346b';
-        g.font = 'bold 28px Arial';
-        g.fillText(o.status === 'picking' ? 'Wordt gepickt' : 'Open', 620, y);
-      });
-      if (data.orders.length === 0) {
-        g.fillStyle = '#7a8594';
-        g.font = '26px Arial';
-        g.fillText('Geen open orders.', 52, 256);
-      }
-      card(860, 180, 'Open orders', String(data.orders.length));
-      card(860, 320, 'In behandeling', String(data.orders.filter((o) => o.status === 'picking').length));
-    } else {
-      // plattegrond: per stellingrij de vakken per niveau, gekleurd naar voorraad
-      const qtyAt = new Map<string, number>();
-      for (const s of data.stock) qtyAt.set(s.locationId, (qtyAt.get(s.locationId) ?? 0) + s.qty);
-      const rows = new Map<string, Location[]>();
-      for (const l of shelves) {
-        const key = l.id.split('-')[0];
-        rows.set(key, [...(rows.get(key) ?? []), l]);
-      }
-      let y = 190;
-      for (const [name, locs] of [...rows].slice(0, 5)) {
-        g.fillStyle = '#17346b';
-        g.font = 'bold 30px Arial';
-        g.fillText(name, 40, y + 56);
-        const bays = [...new Set(locs.map((l) => l.id.split('-')[1]))].sort();
-        const levels = [...new Set(locs.map((l) => l.id.split('-')[2]))].sort().reverse();
-        const cw = Math.min(150, 1080 / Math.max(1, bays.length));
-        const ch = 108 / Math.max(1, levels.length);
-        bays.forEach((b, bi) =>
-          levels.forEach((lv, li) => {
-            const q = qtyAt.get(`${name}-${b}-${lv}`) ?? 0;
-            g.fillStyle = q === 0 ? '#dfe4ea' : q < 20 ? '#9cc5f0' : q < 40 ? '#4f8fd6' : '#1f5fae';
-            g.beginPath();
-            g.roundRect(120 + bi * cw, y + li * ch, cw - 8, ch - 6, 6);
-            g.fill();
-            g.fillStyle = q === 0 ? '#8b95a3' : '#fff';
-            g.font = '20px Arial';
-            g.textAlign = 'center';
-            g.fillText(q === 0 ? `${b}-${lv}` : `${b}-${lv} · ${q}`, 120 + bi * cw + (cw - 8) / 2, y + li * ch + (ch - 6) / 2);
-            g.textAlign = 'left';
-          }),
-        );
-        y += 136;
-      }
-      g.fillStyle = '#7a8594';
-      g.font = '22px Arial';
-      const docks = data.locations.filter((l) => l.type === 'dock');
-      g.fillText(docks.map((d) => `${d.id}: ${qtyAt.get(d.id) ?? 0} st`).join('   ·   '), 40, 760);
     }
     texture.needsUpdate = true;
   }
@@ -488,10 +330,6 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
     if (e.code === 'Digit2' || e.code === 'Numpad2') setTool('tablet');
     if (tool !== 'tablet') return;
     if (e.code === 'KeyF') focus = !focus;
-    if (e.code === 'KeyQ') {
-      tab = (tab + 1) % TABS.length; // E is de actietoets van de processim
-      drawTablet();
-    }
   });
 
   const listeners: ((t: Tool) => void)[] = [];
@@ -503,11 +341,9 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
   }
 
   drawScanner();
-  drawTablet();
   setInterval(() => {
     // klokje bijwerken
     drawScanner();
-    drawTablet();
   }, 20000);
 
   const tabletPos = new THREE.Vector3();
@@ -563,7 +399,6 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
     setData(d: WmsSnapshot) {
       data = d;
       drawScanner();
-      drawTablet();
     },
     /**
      * @param moving 0..1: hoe hard de speler loopt (voor de loopbeweging).
@@ -602,11 +437,10 @@ export function createHandheld({ camera, canvas, world, scanTargets }: Options) 
       laserMat.opacity = Math.min(1, scanTimer / 0.12);
       windowMat.color.setRGB(scanTimer > 0 ? 5 : 0.23, 0.03, 0.03);
 
-      // tablet: laag voor de borst, met F dichterbij om te lezen
-      tabletPos.set(bobX + 0.2 * seatK, focus ? 0 : -0.135, focus ? -0.175 : -0.38);
+      // tablet: recht naar je toe (het iframe ligt er plat overheen), met F dichterbij om te bedienen
+      tabletPos.set(bobX + 0.2 * seatK, focus ? 0 : -0.075, focus ? -0.175 : -0.3);
       tabletPos.y += bobY - (1 - raise.tablet) * 0.45;
       tabletRig.position.lerp(tabletPos, 1 - Math.exp(-dt * 14));
-      tabletRig.rotation.x += ((focus ? 0 : -0.42) - tabletRig.rotation.x) * k;
       tabletRig.rotation.y = -0.3 * seatK; // in één hand rechts: scherm naar je toe gedraaid
     },
   };
