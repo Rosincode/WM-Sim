@@ -157,11 +157,7 @@ const forklift = createForklift({
   place: warehouse.forkliftPlace,
   onStockChange: refreshHall,
 });
-<<<<<<< HEAD
 forklift.group.position.set(-14, 0, 2.5); // voor de stellingen, in het middelste gangpad
-=======
-forklift.group.position.set(-12.6, 0, 2.5);
->>>>>>> 3e53fb1 (wip TSF+krosink)
 forklift.group.rotation.y = Math.PI / 2;
 scene.add(forklift.group, forklift.marker);
 if (import.meta.env.DEV) Object.assign(window, { wmDebug: { forklift, hall, setDriving: (on: boolean) => setDriving(on) } });
