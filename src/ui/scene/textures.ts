@@ -471,8 +471,8 @@ export function grass() {
       const r = rng(81);
       g.fillStyle = '#5f8f4a';
       g.fillRect(0, 0, w, h);
-      blotches(g, w, h, r, 30, 'rgba(40,80,30,A)', 0.35);
-      blotches(g, w, h, r, 24, 'rgba(150,170,90,A)', 0.25);
+      // Alleen fijne sprietjes, geen grote vlekken: die stoppen op de tegelrand
+      // en maken het herhaalpatroon zichtbaar als losse blokken.
       for (let i = 0; i < 9000; i++) {
         g.fillStyle = `rgba(${r() < 0.5 ? '30,70,25' : '140,175,95'},${0.1 + r() * 0.2})`;
         g.fillRect(r() * w, r() * h, 1 + r() * 2, 2 + r() * 4);
