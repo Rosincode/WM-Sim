@@ -353,7 +353,7 @@ export function createWarehouse() {
     if (section) {
       push(
         target
-          ? { label: `Scan ${section.id.slice(0, -2)}: verkeerde locatie`, point: section, enabled: true, run: () => wrongScan(section.id.slice(0, -2), target) }
+          ? { label: `Scan ${section.id.slice(0, -2)}: verkeerde locatie`, point: section, enabled: true, run: () => wrongScan(section.id, target) }
           : { label: `Scan ${section.id.slice(0, -2)}: voorraad bekijken`, point: section, enabled: true, run: () => infoScan(section.id) },
         1.8,
       );
