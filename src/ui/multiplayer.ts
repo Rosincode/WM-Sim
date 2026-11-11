@@ -264,11 +264,12 @@ export function mountMultiplayer(o: Options) {
       ? `● Samen spelen · ${others.length + 1} speler${others.length ? 's' : ''}`
       : room.status === 'connecting' ? '○ Verbinden met andere spelers…' : '○ Geen verbinding · je speelt alleen';
     const names = `Jij: ${name}${others.length ? ` · ${others.join(', ')}` : ''}${online && room.isHost && others.length ? ' · jij bent host' : ''}`;
-    if (title + names === chipText) return;
-    chipText = title + names;
+    if (title + names + room.links === chipText) return;
+    chipText = title + names + room.links;
     chipTitle.textContent = title;
     chipTitle.style.color = online ? '#a5d6a7' : '#ffcc80';
     chipNames.textContent = names;
+    chip.title = `Klik om je naam te wijzigen (zichtbaar voor andere spelers) · kamer "${room.room}" · verbindingen ${room.links}`;
   }
   refreshChip();
 
