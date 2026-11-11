@@ -181,7 +181,7 @@ Leg op ongeveer 25 willekeurige stellinglocaties een voorraad van tussen de 5 en
 ## 5. Toegang en techniek
 
 - **API-gebruiker:** maak één gebruiker voor de game, met lees- en schrijfrechten op alle bovenstaande entiteiten en acties.
-- **CORS:** niet nodig. De game praat via een eigen server-proxy met de WMS, dus niet direct vanuit de browser.
+- **CORS en inloggen:** zie [instructie 02](02-toegang-basic-auth-cors.md). De game roept de WMS rechtstreeks vanuit de browser aan.
 - **Terug te melden:**
   1. de basis-URL van de API;
   2. hoe je inlogt (Basic auth, token of OAuth);

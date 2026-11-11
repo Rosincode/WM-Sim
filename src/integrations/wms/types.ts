@@ -1,0 +1,26 @@
+import type { Item, Location, Order } from '../../shared/contract';
+
+export type WmsCredentials = { baseUrl: string; username: string; password: string };
+
+export type OrderLine = { sku: string; qty: number };
+
+/** Eén interface voor zowel de echte WMS als de mock. */
+export interface WmsClient {
+  readonly mode: 'live' | 'mock';
+  getLocations(): Promise<Location[]>;
+  getStock(): Promise<Item[]>;
+  getOpenOrders(): Promise<Order[]>;
+  registerGoodsReceived(p: { sku: string; qty: number; dockId: string }): Promise<void>;
+  confirmPutaway(p: { sku: string; qty: number; fromLocationId: string; toLocationId: string }): Promise<void>;
+  createOrder(lines: OrderLine[], orderId?: string): Promise<string>;
+  startPicking(orderId: string): Promise<void>;
+  confirmPick(orderId: string): Promise<void>;
+}
+
+export class WmsError extends Error {
+  readonly status?: number;
+  constructor(message: string, status?: number) {
+    super(message);
+    this.status = status;
+  }
+}

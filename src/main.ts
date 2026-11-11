@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { startWmsBridge } from './integrations/wms';
+import { mountWmsPanel } from './ui/wmsPanel';
+
+startWmsBridge();
+mountWmsPanel();
 
 // Tijdelijke placeholder-scène: wordt vervangen door src/ui zodra die er is.
 
@@ -120,6 +125,7 @@ setMode('overview');
 
 const keys = new Set<string>();
 window.addEventListener('keydown', (e) => {
+  if (e.target instanceof HTMLInputElement) return; // typen in formulier ≠ besturing
   if (e.code === 'KeyC' && !e.repeat) setMode(mode === 'overview' ? 'third' : 'overview');
   keys.add(e.code);
 });
