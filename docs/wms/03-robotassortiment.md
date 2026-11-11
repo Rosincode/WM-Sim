@@ -32,7 +32,7 @@ De velden `sku` en `description` blijven zoals ze zijn.
 | `huisdier` | Robothuisdier |
 | `vermaak` | Vermaakrobot |
 
-Gebruik de waarden letterlijk. De game kleurt de dozen op basis van deze waarde.
+Gebruik de waarden letterlijk.
 
 ## 3. Seed-data artikelen (vervangt 4.2 uit instructie 01)
 
@@ -48,11 +48,7 @@ De `sku`-codes blijven hetzelfde. Alleen de omschrijving verandert en de categor
 
 De beginvoorraad uit 4.3 van instructie 01 blijft gelijk.
 
-## 4. Uitlezen (GET)
-
-De game gaat `item` uitlezen, inclusief `category`. Daarvoor volstaat het standaard GET-endpoint, zie het formaat in [instructie 02](02-toegang-basic-auth-cors.md), hoofdstuk 5. Er is geen nieuw endpoint nodig.
-
-## 5. Nog niet bouwen
+## 4. Nog niet bouwen
 
 Deze punten komen in een latere instructie. Bouw ze nu nog **niet**:
 
@@ -66,4 +62,3 @@ Deze punten komen in een latere instructie. Bouw ze nu nog **niet**:
 ## Terug te melden
 
 - Bevestiging dat `item` het veld `category` heeft en dat de vijf artikelen zijn bijgewerkt.
-- Een voorbeeld van het antwoord van `GET {basis-URL}/item`.
