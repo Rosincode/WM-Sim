@@ -120,8 +120,12 @@ export function createWarehouse(scene: THREE.Scene) {
   // Vloermarkering (versleten verf)
   const wornAlpha = tex.wornPaintAlpha();
   const paintMats = new Map<string, THREE.MeshStandardMaterial>();
+  // Alle vlakken met hetzelfde materiaal gaan samen in één mesh (zie verderop): ruim honderd losse
+  // vlakjes zouden anders elk een eigen tekenopdracht zijn.
+  const paintGeos = new Map<THREE.MeshStandardMaterial, THREE.BufferGeometry[]>();
   let paintLayer = 0;
-  function marking(x: number, z: number, w: number, d: number, color: string, map?: THREE.Texture) {
+  /** @param turn draaiing om de verticale as (rad), voor tekst en pictogrammen. */
+  function marking(x: number, z: number, w: number, d: number, color: string, map?: THREE.Texture, turn = 0) {
     const key = color + (map ? map.id : '');
     let mat = paintMats.get(key);
     if (!mat) {
@@ -143,12 +147,10 @@ export function createWarehouse(scene: THREE.Scene) {
       const uv = geo.attributes.uv;
       for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * (w / 2) + x * 0.37, uv.getY(i) * (d / 2) + z * 0.37);
     }
-    const m = new THREE.Mesh(geo, mat);
-    m.rotation.x = -Math.PI / 2;
-    m.position.set(x, 0.003 + (paintLayer++ % 5) * 0.0004, z);
-    m.receiveShadow = true;
-    scene.add(m);
-    return m;
+    geo.rotateZ(turn).rotateX(-Math.PI / 2).translate(x, 0.003 + (paintLayer++ % 5) * 0.0004, z);
+    const list = paintGeos.get(mat) ?? [];
+    list.push(geo);
+    paintGeos.set(mat, list);
   }
   const YELLOW = '#e3b505';
   for (const z of ROW_Z) {
@@ -161,7 +163,7 @@ export function createWarehouse(scene: THREE.Scene) {
   marking(WALK_X - 0.75, 0, 0.1, D - 4, '#e9e9e2');
   marking(WALK_X + 0.75, 0, 0.1, D - 4, '#e9e9e2');
   const walkIcon = tex.walkwayIcon();
-  for (const z of [-20, -10, 0, 10, 20]) marking(WALK_X, z, 0.9, 0.9, '#ffffff', walkIcon).rotation.z = Math.PI / 2;
+  for (const z of [-20, -10, 0, 10, 20]) marking(WALK_X, z, 0.9, 0.9, '#ffffff', walkIcon, Math.PI / 2);
   // Per dock: een inslagbaan (blauw) en een uitslagbaan (groen), met de locatiecode op de vloer
   for (const d of DOCKS) {
     const lanes = [
@@ -175,8 +177,14 @@ export function createWarehouse(scene: THREE.Scene) {
       marking(p.x - len / 2, p.z, 0.1, 1.6, color);
       marking(p.x + len / 2, p.z, 0.1, 1.6, color);
       // leesbaar als je vanaf de stellingen naar het dock loopt
-      marking(p.x + len / 2 + 0.4, p.z, 1.8, 0.45, color, tex.floorText(code.replace('DOCK-', ''))).rotation.z = Math.PI / 2;
+      marking(p.x + len / 2 + 0.4, p.z, 1.8, 0.45, color, tex.floorText(code.replace('DOCK-', '')), Math.PI / 2);
     }
+  }
+  for (const [mat, geos] of paintGeos) {
+    const m = new THREE.Mesh(mergeGeometries(geos), mat);
+    m.receiveShadow = true;
+    m.renderOrder = -1; // vloerverf ligt onder alle andere doorzichtige dingen (folie, markeringen)
+    scene.add(m);
   }
 
   // ---------- Wanden ----------

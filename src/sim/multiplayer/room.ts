@@ -26,6 +26,8 @@ export function createRoom(roomName: string) {
   const room = roomName.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 32) || 'main';
   const base = `${PREFIX}/${room}`;
   const peers = new Map<string, Peer>();
+  /** Spelers die zich hebben afgemeld. */
+  const departed = new Set<string>();
   const handlers: Handler[] = [];
   const leaveHandlers: ((peer: Peer) => void)[] = [];
 
@@ -52,7 +54,13 @@ export function createRoom(roomName: string) {
     if (!topic.startsWith(`${base}/`)) return;
     const [kind, from] = topic.slice(base.length + 1).split('/');
     if (!kind || !from || from === id) return;
-    if (kind === 'bye') return drop(from);
+    // Een id wordt nooit hergebruikt (elke keer laden geeft een nieuw id). Berichten van een vertrokken
+    // speler die via een tragere broker nog nadruppelen, mogen hem dus niet opnieuw laten verschijnen.
+    if (departed.has(from)) return;
+    if (kind === 'bye') {
+      departed.add(from);
+      return drop(from);
+    }
     if (kind === 'gone') {
       // Eén van de verbindingen van die speler viel weg; hoor je daarna niets meer, dan is hij echt weg.
       const peer = peers.get(from);

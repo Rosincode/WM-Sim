@@ -220,7 +220,8 @@ export function mountMultiplayer(o: Options) {
   room.on((kind, from, data) => {
     if (kind === 'hi') {
       // Nieuwe speler: laat direct zien waar je staat; de host stuurt de wereld mee.
-      sendPose(true);
+      // Een tabblad op de achtergrond speelt niet mee (de game staat daar stil): geen figuur laten zien.
+      if (!document.hidden) sendPose(true);
       if (room.isHost) sendState();
     } else if (kind === 'p' && isObj(data)) {
       const a = avatars.get(from.id) ?? addAvatar(from);
