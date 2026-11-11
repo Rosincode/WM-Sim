@@ -208,6 +208,10 @@ export function mountMultiplayer(o: Options) {
 
   let lastPose = '';
   let lastPoseAt = 0;
+  /** Sinds het vorige bericht getoeterd: ook een korte tik op de toeter gaat zo mee naar de anderen. */
+  let honked = false;
+  /** Tot wanneer de toeter van de andere bestuurder minstens doorklinkt. */
+  let hornUntil = 0;
   function sendPose(force = false) {
     const p = o.player.position;
     const look = o.look();
@@ -222,7 +226,7 @@ export function mountMultiplayer(o: Options) {
       sc: o.scans(),
       w: o.isDriving() ? round(o.forklift.steer, 10) : 0,
       j: o.airborne() ? 1 : 0,
-      k: o.forklift.honking ? 1 : 0,
+      k: o.forklift.honking || honked ? 1 : 0,
     };
     if (pose.d) pose.f = o.forklift.getState();
     const on = pose.d ? null : o.rider();
@@ -233,6 +237,7 @@ export function mountMultiplayer(o: Options) {
     if (room.congested && !force) return;
     lastPose = json;
     lastPoseAt = now;
+    honked = false;
     room.send('p', pose);
   }
 
@@ -265,6 +270,7 @@ export function mountMultiplayer(o: Options) {
         if (typeof y === 'number' && Number.isFinite(y)) a.pose.v.y = THREE.MathUtils.clamp(y, -1, 3);
       }
       if (!wasNew && a.pose.sc !== prevScans) a.scanT = 0.4; // heeft net gescand: laser tonen
+      if (a.pose.k) hornUntil = performance.now() + 250;
       a.target.set(a.pose.x, a.pose.y, a.pose.z);
       if (a.pose.d && validFork(data.f)) {
         if (o.isDriving()) {
@@ -417,7 +423,8 @@ export function mountMultiplayer(o: Options) {
       o.forklift.setRemoteSteer(driver ? driver.pose.w : 0);
       // Toeter van de andere bestuurder: zachter naarmate de truck verder weg is
       const hornDist = o.player.position.distanceTo(o.forklift.group.position);
-      o.forklift.setRemoteHorn(driver?.pose.k ? Math.max(0.15, Math.min(1, 8 / Math.max(hornDist, 1))) : 0);
+      if (o.forklift.honking) honked = true;
+      o.forklift.setRemoteHorn(driver && (driver.pose.k || performance.now() < hornUntil) ? Math.max(0.15, Math.min(1, 8 / Math.max(hornDist, 1))) : 0);
 
       // Figuren van de andere spelers soepel naar hun laatste positie bewegen
       const k = 1 - Math.exp(-dt * 12);

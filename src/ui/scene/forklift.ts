@@ -158,6 +158,18 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
   let hornVolume = 0;
   /** Volume (0..1) van de toeter van een speler die op afstand rijdt. */
   let remoteHorn = 0;
+  // De browser laat pas geluid toe na een klik of toets van de speler zelf. Zet het geluid dan alvast aan,
+  // zodat ook wie nog niet zelf getoeterd heeft de toeter van een ander hoort.
+  const unlockAudio = () => {
+    try {
+      audio ??= new AudioContext();
+      if (audio.state === 'suspended') void audio.resume();
+    } catch {
+      // geen geluid beschikbaar
+    }
+  };
+  window.addEventListener('pointerdown', unlockAudio);
+  window.addEventListener('keydown', unlockAudio);
   function setHorn(volume: number) {
     if (volume === hornVolume) return;
     hornVolume = volume;
