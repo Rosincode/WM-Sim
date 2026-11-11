@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { createRoom, type Peer } from '../sim/multiplayer/room';
 import type { SharedState } from '../sim/warehouse';
+import { CHAT_MAX, createChat } from './chat';
+import { menu } from './menu';
 import { createCharacter, type HandTarget } from './scene/character';
 import type { ForkliftState } from './scene/forklift';
 import type { JackState } from './scene/palletJack';
@@ -11,6 +13,7 @@ import { SKU_COLORS } from './warehouseView';
 // - De gedeelde wereld (voorraad, orders, banen, vrachtwagens, heftruck) gaat als geheel over de lijn
 //   zodra iemand er iets aan verandert. De hoogste revisie wint; bij gelijke stand beslist het speler-id.
 // - Eén speler is host (wie het langst binnen is): alleen daar ontstaan nieuwe vrachtwagens en orders.
+// - Chat: Enter (of T) opent het chatvenster; een bericht staat daar én als wolkje boven wie het zegt.
 // WMS-acties blijven lokaal: wie een handeling doet, meldt die zelf bij zijn WMS.
 
 const TICK_MS = 100;
@@ -135,6 +138,89 @@ function nameTag() {
   };
 }
 
+/** Tekstwolkje boven een speler die iets zegt in de chat; verdwijnt vanzelf weer. */
+function speechBubble() {
+  const W = 512;
+  const H = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d')!;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true });
+  const sprite = new THREE.Sprite(material);
+  sprite.center.set(0.5, 0); // onderkant (de punt van het wolkje) op de plek van de sprite
+  sprite.scale.set(2.4, 1.2, 1);
+  sprite.renderOrder = 11;
+  sprite.visible = false;
+  let left = 0;
+  return {
+    sprite,
+    say(text: string) {
+      ctx.clearRect(0, 0, W, H);
+      ctx.font = 'bold 30px system-ui, sans-serif';
+      // Afbreken op woorden; te lange woorden op letters
+      const lines: string[] = [];
+      let line = '';
+      const fits = (s: string) => ctx.measureText(s).width <= W - 60;
+      for (let word of text.split(/\s+/).filter(Boolean)) {
+        if (line && fits(`${line} ${word}`)) {
+          line += ` ${word}`;
+          continue;
+        }
+        if (line) lines.push(line);
+        while (!fits(word)) {
+          let n = word.length - 1;
+          while (n > 1 && !fits(word.slice(0, n))) n--;
+          lines.push(word.slice(0, n));
+          word = word.slice(n);
+        }
+        line = word;
+      }
+      if (line) lines.push(line);
+      if (lines.length > 4) {
+        lines.length = 4;
+        lines[3] = `${lines[3].slice(0, -1)}…`;
+      }
+      const lineH = 38;
+      const w = Math.max(80, ...lines.map((l) => ctx.measureText(l).width)) + 44;
+      const h = lines.length * lineH + 24;
+      const tail = 20;
+      const x = (W - w) / 2;
+      const y = H - tail - h - 2;
+      ctx.fillStyle = 'rgba(255,255,255,.96)';
+      ctx.strokeStyle = 'rgba(0,0,0,.55)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, 18);
+      ctx.moveTo(W / 2 - 14, y + h - 1);
+      ctx.lineTo(W / 2, y + h + tail);
+      ctx.lineTo(W / 2 + 14, y + h - 1);
+      ctx.stroke();
+      ctx.fill();
+      ctx.fillStyle = '#14181c';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      lines.forEach((l, i) => ctx.fillText(l, W / 2, y + 12 + lineH * (i + 0.5) + 1));
+      texture.needsUpdate = true;
+      left = Math.min(10, 4 + text.length * 0.06);
+      sprite.visible = true;
+    },
+    update(dt: number) {
+      if (left <= 0) return;
+      left -= dt;
+      material.opacity = Math.min(1, Math.max(0, left / 0.4));
+      if (left <= 0) sprite.visible = false;
+    },
+  };
+}
+
+/** Elke speler een eigen kleur (hesje, naambordje, naam in de chat), zodat je elkaar uit elkaar houdt. */
+const peerColor = (id: string) => VEST_COLORS[(parseInt(id.slice(0, 4), 16) || 0) % VEST_COLORS.length];
+// De broker is publiek: stuurtekens eruit en de lengte begrenzen.
+const cleanChat = (v: unknown) => String(v ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, CHAT_MAX);
+
 export function mountMultiplayer(o: Options) {
   const room = createRoom(o.room);
   let stored = '';
@@ -149,6 +235,7 @@ export function mountMultiplayer(o: Options) {
   type Avatar = {
     character: ReturnType<typeof createCharacter>;
     tag: ReturnType<typeof nameTag>;
+    bubble: ReturnType<typeof speechBubble>;
     load: THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>;
     color: string;
     target: THREE.Vector3;
@@ -168,18 +255,19 @@ export function mountMultiplayer(o: Options) {
   const avatars = new Map<string, Avatar>();
 
   function addAvatar(peer: Peer): Avatar {
-    // Elke speler een eigen kleur hesje, zodat je elkaar uit elkaar houdt.
-    const color = VEST_COLORS[(parseInt(peer.id.slice(0, 4), 16) || 0) % VEST_COLORS.length];
+    const color = peerColor(peer.id);
     const character = createCharacter(undefined, { vest: color });
     const tag = nameTag();
     tag.sprite.position.y = 2.2;
+    const bubble = speechBubble();
+    bubble.sprite.position.y = 2.42; // net boven het naambordje
     const load = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ roughness: 0.8 }));
     load.castShadow = true;
     load.visible = false;
-    character.group.add(tag.sprite, load);
+    character.group.add(tag.sprite, bubble.sprite, load);
     o.scene.add(character.group);
     const avatar: Avatar = {
-      character, tag, load, color,
+      character, tag, bubble, load, color,
       target: new THREE.Vector3(),
       pose: { n: '', x: 0, y: 0, z: 0, r: 0, d: 0, c: '', p: 0, ly: 0, t: 0, sc: 0, w: 0, j: 0, k: 0 },
       placed: false,
@@ -202,6 +290,25 @@ export function mountMultiplayer(o: Options) {
   });
 
   const remoteDriver = () => [...avatars.values()].find((a) => a.pose.d === 1);
+
+  // ---------- Chat ----------
+  // Een bericht staat in het chatvenster en als wolkje boven wie het zegt. Net als de rest gaat het over
+  // de publieke broker: iedereen in de kamer leest mee.
+  const ownBubble = speechBubble();
+  ownBubble.sprite.position.y = 2.2; // boven je eigen figuur (te zien in third person en overzicht)
+  o.player.add(ownBubble.sprite);
+  const chat = createChat({
+    onSend(raw) {
+      const text = cleanChat(raw);
+      if (!text) return;
+      chat.add(name, '#ffd54f', text);
+      ownBubble.say(text);
+      if (room.status === 'online') room.send('c', { n: name, m: text });
+      else chat.system('Geen verbinding: andere spelers zien dit bericht niet.');
+    },
+  });
+  /** Laatste chatbericht per speler, tegen een stortvloed aan berichten. */
+  const lastChatAt = new Map<string, number>();
 
   // ---------- Gedeelde wereld ----------
   let rev = 0;
@@ -333,6 +440,14 @@ export function mountMultiplayer(o: Options) {
         }
       }
       if (wasNew) refreshChip();
+    } else if (kind === 'c' && isObj(data)) {
+      const text = cleanChat(data.m);
+      const now = performance.now();
+      if (!text || now - (lastChatAt.get(from.id) ?? -1e9) < 400) return;
+      lastChatAt.set(from.id, now);
+      const a = avatars.get(from.id);
+      chat.add(a?.pose.n || String(data.n ?? '').trim().slice(0, 20) || 'Speler', a?.color ?? peerColor(from.id), text);
+      a?.bubble.say(text);
     } else if (kind === 's' && validState(data)) {
       const newer = data.rev > rev || (data.rev === rev && data.w > writer);
       const older = data.rev < rev || (data.rev === rev && data.w < writer);
@@ -353,17 +468,20 @@ export function mountMultiplayer(o: Options) {
     }
   });
 
-  // ---------- Statusblokje rechtsboven ----------
+  // ---------- Spelers: onderdeel van het menu rechtsboven ----------
   const chip = document.createElement('div');
-  chip.style.cssText =
-    'position:fixed;right:16px;top:16px;max-width:300px;padding:8px 12px;border-radius:8px;background:rgba(0,0,0,.6);color:#fff;font:13px system-ui,sans-serif;line-height:1.45;cursor:pointer;user-select:none';
-  chip.title = 'Klik om je naam te wijzigen (zichtbaar voor andere spelers)';
+  chip.style.cssText = 'line-height:1.6';
   const chipTitle = document.createElement('div');
+  chipTitle.style.fontWeight = '600';
   const chipNames = document.createElement('div');
-  chipNames.style.color = '#b9c0c7';
-  chip.append(chipTitle, chipNames);
-  document.body.appendChild(chip);
-  chip.addEventListener('click', () => askName(false));
+  const chipRoom = document.createElement('div');
+  chipRoom.style.cssText = 'color:#9aa0a6;font-size:12px';
+  const rename = document.createElement('button');
+  rename.textContent = 'Naam wijzigen';
+  rename.style.cssText = 'margin-top:8px;padding:6px 10px;border:0;border-radius:4px;background:#3b6ea5;color:#fff;font:inherit;cursor:pointer';
+  rename.addEventListener('click', () => askName(false));
+  chip.append(chipTitle, chipNames, chipRoom, rename);
+  menu.addSection('players', 'Spelers', chip, 1);
 
   // ---------- Naam opgeven ----------
   // Bij de eerste keer spelen vragen we om een naam; die blijft in deze browser bewaard (localStorage).
@@ -458,7 +576,7 @@ export function mountMultiplayer(o: Options) {
     chipTitle.textContent = title;
     chipTitle.style.color = online ? '#a5d6a7' : '#ffcc80';
     chipNames.textContent = names;
-    chip.title = `Klik om je naam te wijzigen (zichtbaar voor andere spelers) · kamer "${room.room}" · verbindingen ${room.links}`;
+    chipRoom.textContent = `Kamer "${room.room}" · verbindingen ${room.links} · je naam is zichtbaar voor andere spelers`;
   }
   refreshChip();
 
@@ -483,6 +601,8 @@ export function mountMultiplayer(o: Options) {
       const hornDist = o.player.position.distanceTo(o.forklift.group.position);
       if (o.forklift.honking) honked = true;
       o.forklift.setRemoteHorn(driver && (driver.pose.k || performance.now() < hornUntil) ? Math.max(0.15, Math.min(1, 8 / Math.max(hornDist, 1))) : 0);
+
+      ownBubble.update(dt);
 
       // Figuren van de andere spelers soepel naar hun laatste positie bewegen
       const k = 1 - Math.exp(-dt * 12);
@@ -545,6 +665,7 @@ export function mountMultiplayer(o: Options) {
           rightHand: pushing ? a.jackHands[1] : undefined,
         });
         a.tag.set(a.pose.n, a.color);
+        a.bubble.update(dt);
         a.load.visible = !!a.pose.c && !a.pose.d;
         if (a.load.visible) {
           const order = a.pose.c === 'order';

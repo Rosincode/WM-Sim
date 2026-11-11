@@ -188,6 +188,7 @@ export function createHandheld({ camera, canvas, world, scanTargets, onScan }: O
   let bobPhase = 0;
   let seated = false;
   let scans = 0;
+  let aimed: string | null = null;
   let seatK = 0; // 0..1 overgang naar de eenhandige houding
   const raise = { scanner: 0, tablet: 0 };
 
@@ -403,6 +404,10 @@ export function createHandheld({ camera, canvas, world, scanTargets, onScan }: O
     get tool() {
       return tool;
     },
+    /** Code van het label waar de scanner nu op gericht is (klikken scant het), anders null. */
+    get aimed() {
+      return aimed;
+    },
     setTool,
     /** Het beeldvlak van de tablet (voor de WMS-app die er als iframe overheen ligt). */
     tabletDisplay,
@@ -467,6 +472,24 @@ export function createHandheld({ camera, canvas, world, scanTargets, onScan }: O
       scannerRig.visible = raise.scanner > 0.02;
       tabletRig.visible = raise.tablet > 0.02;
       crosshair.style.display = active && tool === 'scanner' ? 'block' : 'none';
+
+      // Op welk label richt de scanner nu (voor de toetsprompt)? Zonder zichtlijncontrole; die doet de scan zelf.
+      aimed = null;
+      if (active && tool === 'scanner') {
+        camera.getWorldPosition(camPos);
+        camera.getWorldDirection(camDir);
+        let bestAngle = SCAN_CONE;
+        for (const t of scanTargets) {
+          tmp.copy(t.position).sub(camPos);
+          const d = tmp.length();
+          if (d > SCAN_RANGE) continue;
+          const angle = tmp.divideScalar(d).angleTo(camDir);
+          if (angle < bestAngle) {
+            bestAngle = angle;
+            aimed = t.code;
+          }
+        }
+      }
 
       bobPhase += dt * 9 * moving;
       const bobX = Math.sin(bobPhase) * 0.006 * moving;

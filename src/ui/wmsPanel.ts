@@ -4,7 +4,7 @@ import { forget, loadRemembered, remember } from './wmsRemember';
 
 // Aanmelden bij de WMS-API: de koppeling waarmee de scanner en het magazijn hun handelingen aan de WMS
 // voorleggen. Los van de WMS-app op pc en tablet (die heeft zijn eigen login in het iframe).
-// Zweeft ingeklapt rechtsboven; klik of K klapt het open.
+// Staat in het menu rechtsboven (K); zonder parent zweeft het ingeklapt in beeld.
 
 const css = `
 .wms-panel { position: fixed; right: 16px; top: 84px; width: 280px; padding: 12px 14px; border-radius: 8px; z-index: 40;
@@ -220,7 +220,7 @@ export function mountWmsPanel(parent?: HTMLElement) {
   render();
 
   // Onthouden inloggegevens: bij het starten vanzelf weer verbinden.
-  if (!parent && wms.client.mode !== 'live') {
+  if (wms.client.mode !== 'live') {
     void loadRemembered().then(async (c) => {
       if (!c || wms.client.mode === 'live') return;
       try {

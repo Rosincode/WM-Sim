@@ -1,27 +1,20 @@
 import { WMS_ACTIONS, onProcessEvent, type ProcessEvent } from '../sim/events';
 import { SKU_NAMES } from '../sim/layout';
 import type { Warehouse } from '../sim/warehouse';
+import { menu } from './menu';
 import { SKU_COLORS } from './warehouseView';
 
-// HUD voor het magazijnproces: opdracht + actie (linksonder) en API-log / voorraad (rechtsonder).
+// HUD voor het magazijnproces: de opdracht (linksonder). API-log en voorraad staan in het menu rechtsboven;
+// welke toets je bij een object indrukt staat midden in beeld (src/ui/prompts.ts).
 
 const css = `
-.proc { position: fixed; padding: 10px 14px; border-radius: 8px; background: rgba(0,0,0,.7); color: #fff;
-  font: 13px system-ui, sans-serif; line-height: 1.45; }
-.proc-task { left: 16px; bottom: 16px; width: 380px; pointer-events: none; }
-.proc-task .goal { font-size: 15px; font-weight: 600; color: #80deea; }
-.proc-task .act { margin: 6px 0; padding: 6px 8px; border-radius: 6px; background: rgba(255,255,255,.08); }
-.proc-task .act.off { color: #9aa0a6; }
-.proc-task kbd { display: inline-block; min-width: 18px; padding: 0 5px; margin-right: 6px; border-radius: 4px;
-  background: #fff; color: #000; font: bold 12px system-ui; text-align: center; }
+.proc-task { position: fixed; left: 16px; bottom: 16px; width: min(380px, calc(100vw - 32px)); box-sizing: border-box;
+  padding: 10px 14px; border-radius: 8px; background: rgba(0,0,0,.7); color: #fff;
+  font: 13px system-ui, sans-serif; line-height: 1.45; pointer-events: none; }
+.proc-task .goal { margin-bottom: 4px; font-size: 15px; font-weight: 600; color: #80deea; }
 .proc-task .msg { font-size: 12px; color: #cfd8dc; }
 .proc-task .msg.ok { color: #a5d6a7; }
 .proc-task .msg.err { color: #ff8a80; }
-.proc-side { right: 16px; bottom: 16px; width: 420px; max-height: 45vh; display: flex; flex-direction: column; }
-.proc-side .tabs { display: flex; gap: 6px; margin-bottom: 6px; }
-.proc-side .tabs button { padding: 3px 10px; border: 0; border-radius: 4px; background: #444; color: #fff; font: inherit; cursor: pointer; }
-.proc-side .tabs button.on { background: #3b6ea5; }
-.proc-side .body { overflow-y: auto; }
 .proc-side table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .proc-side td { padding: 2px 4px; vertical-align: top; border-bottom: 1px solid rgba(255,255,255,.08); }
 .proc-side .t { color: #9aa0a6; white-space: nowrap; }
@@ -30,6 +23,7 @@ const css = `
 .proc-side .proposed { background: #6d4c41; }
 .proc-side .error { background: #c62828; }
 .proc-side .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; }
+.proc-side h4:first-child { margin-top: 0; }
 .proc-side h4 { margin: 8px 0 2px; font-size: 12px; color: #9aa0a6; text-transform: uppercase; letter-spacing: .04em; }
 `;
 
@@ -52,17 +46,22 @@ export function createProcessHud(sim: Warehouse) {
   document.head.appendChild(style);
 
   const task = document.createElement('div');
-  task.className = 'proc proc-task';
-  const side = document.createElement('div');
-  side.className = 'proc proc-side';
-  document.body.append(task, side);
+  task.className = 'proc-task';
+  document.body.appendChild(task);
+  const logEl = document.createElement('div');
+  logEl.className = 'proc-side';
+  const stockEl = document.createElement('div');
+  stockEl.className = 'proc-side';
+  menu.addSection('log', 'API-log', logEl, 3);
+  menu.addSection('stock', 'Voorraad & orders', stockEl, 4);
 
   // --- API-log ---
   const log: LogRow[] = [];
+  let logDirty = true;
   const pushLog = (row: LogRow) => {
     log.unshift(row);
     if (log.length > 60) log.pop();
-    dirty = true;
+    logDirty = true;
   };
   // WMS = door de WMS verwerkt, geweigerd = de WMS zei nee, lokaal = nog geen endpoint (alleen in de game).
   onProcessEvent((e, result) => {
@@ -75,63 +74,47 @@ export function createProcessHud(sim: Warehouse) {
     });
   });
 
-  let tab: 'log' | 'stock' = 'log';
-  let dirty = true;
-
   function addError(msg: string) {
     pushLog({ at: now(), title: 'WMS-fout', detail: msg, badge: 'fout', cls: 'error' });
+    menu.notify('log'); // het log zit in het menu: rode stip op de knop
   }
 
-  function renderSide() {
-    const tabs = `<div class="tabs">
-      <button data-tab="log" class="${tab === 'log' ? 'on' : ''}">API-log (L)</button>
-      <button data-tab="stock" class="${tab === 'stock' ? 'on' : ''}">Voorraad &amp; orders (I)</button>
-    </div>`;
-    let body = '';
-    if (tab === 'log') {
-      body = log.length
-        ? `<table>${log
-            .map(
-              (r) => `<tr><td class="t">${r.at}</td><td><b>${esc(r.title)}</b><br>${esc(r.detail)}</td>
-                <td><span class="badge ${r.cls}">${r.badge}</span></td></tr>`,
-            )
-            .join('')}</table>`
-        : '<div class="t">Nog geen processtappen.</div>';
-    } else {
-      const totals = new Map<string, number>();
-      for (const s of sim.stockList()) totals.set(s.sku, (totals.get(s.sku) ?? 0) + s.qty);
-      const stockRows = [...totals]
-        .sort()
-        .map(([sku, qty]) => `<tr><td><span class="sw" style="background:${SKU_COLORS[sku] ?? '#888'}"></span>${sku}</td>
-          <td>${esc(SKU_NAMES[sku] ?? '')}</td><td style="text-align:right">${qty}</td></tr>`)
-        .join('');
-      const orderRows = sim.orders
-        .filter((o) => o.status !== 'shipped')
-        .map((o) => `<tr><td>${o.id}</td><td>${o.status}</td><td>${o.lines.map((l) => `${l.qty}× ${l.sku}`).join(', ')}</td></tr>`)
-        .join('');
-      body = `<h4>Voorraad (totaal per artikel)</h4><table>${stockRows || '<tr><td>Leeg</td></tr>'}</table>
-        <h4>Orders</h4><table>${orderRows || '<tr><td>Geen orders</td></tr>'}</table>`;
-    }
-    const scroll = side.querySelector('.body')?.scrollTop ?? 0;
-    side.innerHTML = tabs + `<div class="body">${body}</div>`;
-    side.querySelector('.body')!.scrollTop = scroll;
-    side.querySelectorAll<HTMLButtonElement>('[data-tab]').forEach((b) =>
-      b.addEventListener('click', () => setTab(b.dataset.tab as typeof tab)),
-    );
+  function renderLog() {
+    logEl.innerHTML = log.length
+      ? `<table>${log
+          .map(
+            (r) => `<tr><td class="t">${r.at}</td><td><b>${esc(r.title)}</b><br>${esc(r.detail)}</td>
+              <td><span class="badge ${r.cls}">${r.badge}</span></td></tr>`,
+          )
+          .join('')}</table>`
+      : '<div class="t">Nog geen processtappen.</div>';
   }
 
-  function setTab(t: typeof tab) {
-    tab = t;
-    dirty = true;
+  let lastStock = '';
+  function renderStock() {
+    const totals = new Map<string, number>();
+    for (const s of sim.stockList()) totals.set(s.sku, (totals.get(s.sku) ?? 0) + s.qty);
+    const stockRows = [...totals]
+      .sort()
+      .map(([sku, qty]) => `<tr><td><span class="sw" style="background:${SKU_COLORS[sku] ?? '#888'}"></span>${sku}</td>
+        <td>${esc(SKU_NAMES[sku] ?? '')}</td><td style="text-align:right">${qty}</td></tr>`)
+      .join('');
+    const orderRows = sim.orders
+      .filter((o) => o.status !== 'shipped')
+      .map((o) => `<tr><td>${o.id}</td><td>${o.status}</td><td>${o.lines.map((l) => `${l.qty}× ${l.sku}`).join(', ')}</td></tr>`)
+      .join('');
+    const html = `<h4>Voorraad (totaal per artikel)</h4><table>${stockRows || '<tr><td>Leeg</td></tr>'}</table>
+      <h4>Orders</h4><table>${orderRows || '<tr><td>Geen orders</td></tr>'}</table>`;
+    if (html === lastStock) return;
+    lastStock = html;
+    stockEl.innerHTML = html;
   }
 
   let lastTask = '';
   let stockRefresh = 0;
 
-  /** actionLabel: vervangt de sim-actie onder E (bijv. bij de pc). */
-  function update(dt: number, pos: { x: number; z: number }, actionLabel?: string) {
+  function update(dt: number) {
     const obj = sim.objective();
-    const it = actionLabel ? { label: actionLabel, enabled: true } : sim.interactionAt(pos);
     const c = sim.carry;
     const carrying =
       c?.kind === 'pallet'
@@ -141,7 +124,6 @@ export function createProcessHud(sim: Warehouse) {
           : 'Handen vrij';
     const html = `
       <div class="goal">${esc(obj?.text ?? 'Wachten op werk…')}</div>
-      <div class="act ${it?.enabled ? '' : 'off'}"><kbd>E</kbd>${esc(it?.label ?? 'Loop naar een vrachtwagen, baan, rolcontainer, pc of stelling')}</div>
       <div class="msg">${esc(carrying)}</div>
       ${sim.messages.slice(-3).map((m) => `<div class="msg ${m.kind}">${esc(m.text)}</div>`).join('')}`;
     if (html !== lastTask) {
@@ -149,15 +131,16 @@ export function createProcessHud(sim: Warehouse) {
       lastTask = html;
     }
 
-    if (tab === 'stock' && (stockRefresh -= dt) <= 0) {
+    // Alleen tekenen wat in beeld is
+    if (menu.showing('stock') && (stockRefresh -= dt) <= 0) {
       stockRefresh = 0.5;
-      dirty = true;
+      renderStock();
     }
-    if (dirty) {
-      dirty = false;
-      renderSide();
+    if (logDirty && menu.showing('log')) {
+      logDirty = false;
+      renderLog();
     }
   }
 
-  return { update, setTab, addError };
+  return { update, addError };
 }

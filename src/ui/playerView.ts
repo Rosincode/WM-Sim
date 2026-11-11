@@ -72,7 +72,8 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   const right = new THREE.Vector3();
   const camTarget = new THREE.Vector3();
 
-  const processKeys = '<br><b>E</b>: scannen / actie (bij de pc: WMS-app) · <b>L</b>: API-log · <b>I</b>: voorraad · <b>K</b>: WMS-API';
+  const processKeys =
+    '<br><b>E</b>: scannen / actie (bij de pc: WMS-app) · <b>Enter</b> of <b>T</b>: chatten<br><b>Tab</b>: dit menu ·<b>L</b>: API-log · <b>I</b>: voorraad · <b>K</b>: WMS-API';
   const hudText: Record<ViewMode, string> = {
     overview:
       '<b>WM-Sim — Overzicht</b><br>Slepen: draaien · Scroll: zoom · Rechts slepen: schuiven<br><b>C</b>: dichtbij (first person)',

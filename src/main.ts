@@ -20,6 +20,8 @@ import { wms } from './integrations/wms';
 import { mountWarehouse } from './ui/warehouse';
 import { mountMultiplayer } from './ui/multiplayer';
 import { SceneRenderPass } from './ui/sceneRenderPass';
+import { menu } from './ui/menu';
+import { createPrompts, esc, type Prompt } from './ui/prompts';
 
 // De WMS-koppeling loopt via de poort van de sim (src/sim/wms.ts, ingevuld in src/ui/wmsGateway.ts):
 // elke handeling wacht op het antwoord van de WMS. De bridge op de bus (startWmsBridge) start daarom
@@ -145,10 +147,17 @@ controls.maxPolarAngle = Math.PI / 2.2;
 controls.maxDistance = 260;
 controls.enableDamping = true;
 
+// De uitleg van de besturing staat in het menu rechtsboven (Tab); de tekst komt uit playerView.
 const hud = document.createElement('div');
-hud.style.cssText =
-  'position:fixed;left:16px;top:16px;padding:10px 14px;border-radius:8px;background:rgba(0,0,0,.6);color:#fff;font:14px system-ui,sans-serif;line-height:1.5;pointer-events:none';
-document.body.appendChild(hud);
+hud.style.cssText = 'font-size:14px;line-height:1.65';
+menu.addSection('help', 'Besturing', hud, 0);
+// Midden-onder in beeld: welke toets je bij een object in de buurt kunt indrukken.
+const prompts = createPrompts();
+/** Aanwijzing van een voorwerp ("<b>M</b>: radio aanzetten") als prompt: begint hij met een toets, dan wordt dat de toets in beeld. */
+function hintPrompt(html: string): Prompt {
+  const m = /^<b>([^<]{1,5})<\/b>: (.*)$/.exec(html);
+  return m ? { key: m[1], html: m[2] } : { html };
+}
 
 const handheld = createHandheld({
   camera,
@@ -230,11 +239,6 @@ forklift.group.position.set(-12.6, 0, 2.5); // voor de stellingen, in het middel
 forklift.group.rotation.y = Math.PI / 2;
 scene.add(forklift.group, forklift.marker);
 if (import.meta.env.DEV) Object.assign(window, { wmDebug: { forklift, hall, warehouse, wms, setDriving: (on: boolean) => setDriving(on) } });
-
-const driveHint = document.createElement('div');
-driveHint.style.cssText =
-  'position:fixed;left:50%;top:16px;transform:translateX(-50%);max-width:560px;padding:8px 14px;border-radius:8px;background:rgba(0,0,0,.65);color:#fff;font:14px system-ui,sans-serif;line-height:1.4;text-align:center;pointer-events:none;display:none';
-document.body.appendChild(driveHint);
 
 // --- Radio op het bureau naast de pc: M schakelt tussen de live zenders ---
 const radio = createRadio();
@@ -379,22 +383,31 @@ renderer.setAnimationLoop((now) => {
 
   multiplayer?.update(dt);
 
-  const otherDriver = multiplayer?.forkliftDriver();
   radio.update(player.position);
-  const forkliftHint = driving
-    ? forklift.hint
-    : view.mode !== 'overview' && nearForklift()
-      ? otherDriver ? 'De heftruck is bezet' : '<b>R</b>: in de heftruck stappen'
-      : '';
-  const jackHint = jack.held
-    ? jack.hint
-    : !driving && view.mode !== 'overview' && nearJack()
-      ? multiplayer?.jackHolder() ? 'De pompwagen is in gebruik' : '<b>R</b>: pompwagen pakken'
-      : '';
-  const hintText = [jackHint || forkliftHint, radio.hint].filter(Boolean).join('<br>');
-  if (driveHint.innerHTML !== hintText) driveHint.innerHTML = hintText;
-  driveHint.style.display = hintText ? 'block' : 'none';
   warehouse.update(dt);
+
+  // Toetsprompts: wat kun je hier doen, en met welke toets
+  const list: Prompt[] = [];
+  if (view.mode !== 'overview') {
+    if (driving && forklift.hint) list.push(hintPrompt(forklift.hint));
+    if (jack.held && jack.hint) list.push(hintPrompt(jack.hint));
+    const action = warehouse.action();
+    if (action) list.push({ key: 'E', html: esc(action.label), off: !action.enabled });
+    if (handheld.aimed) list.push({ key: 'Klik', html: `Label <b>${esc(handheld.aimed)}</b> scannen` });
+    if (driving) {
+      list.push({ key: 'R', html: 'Uitstappen' });
+    } else if (jack.held) {
+      // loslaten (R) staat al in de aanwijzing van de pompwagen
+    } else if (nearJack() && !(nearForklift() && forkliftDistance() < jackDistance())) {
+      const holder = multiplayer?.jackHolder();
+      list.push(holder ? { html: `De pompwagen is in gebruik door ${esc(holder)}`, off: true } : { key: 'R', html: 'Pompwagen pakken' });
+    } else if (nearForklift()) {
+      const otherDriver = multiplayer?.forkliftDriver();
+      list.push(otherDriver ? { html: `De heftruck is bezet door ${esc(otherDriver)}`, off: true } : { key: 'R', html: 'In de heftruck stappen' });
+    }
+  }
+  if (radio.hint) list.push(hintPrompt(radio.hint));
+  prompts.set(list);
 
   refreshShadows();
   if (postFx) composer.render(dt);

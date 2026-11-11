@@ -3,6 +3,7 @@ import type { Item, Location, Order } from '../shared/contract';
 import { wms, type WmsClient } from '../integrations/wms';
 import { POINTS, dist } from '../sim/layout';
 import { createWarehouse, type SharedState, type Warehouse } from '../sim/warehouse';
+import { menu } from './menu';
 import { createPcScreen } from './pcScreen';
 import { createProcessHud } from './processHud';
 import { createWarehouseView } from './warehouseView';
@@ -11,8 +12,8 @@ import { missingLocations } from './wmsLocations';
 import { mountWmsPanel } from './wmsPanel';
 
 // Koppelt de magazijn-sim aan de WMS (poort + stand ophalen), de 3D-scène, de HUD en het toetsenbord.
-// Toetsen: E = scannen / actie (bij de pc: de WMS-app bedienen), L = API-log, I = voorraad & orders,
-// K = aanmelden bij de WMS-API.
+// Toetsen: E = scannen / actie (bij de pc: de WMS-app bedienen). In het menu rechtsboven: L = API-log,
+// I = voorraad & orders, K = aanmelden bij de WMS-API.
 
 /** Binnen deze afstand van de pc opent E de WMS-app; verder weglopen sluit hem. */
 const PC_RADIUS = 2;
@@ -43,7 +44,13 @@ export function mountWarehouse({
   });
   const view = createWarehouseView(scene, player, sim, { rackStock });
   const hud = createProcessHud(sim);
-  mountWmsPanel();
+  // Aanmelden bij de WMS-API zit in het menu rechtsboven (K).
+  const wmsSection = document.createElement('div');
+  menu.addSection('wms', 'WMS-API', wmsSection, 2);
+  mountWmsPanel(wmsSection);
+  wms.onError(() => menu.notify('wms'));
+  /** Wat E hier doet, voor de toetsprompt in beeld; null als er niets te doen is. */
+  let action: { label: string; enabled: boolean } | null = null;
 
   const pos = () => ({ x: player.position.x, z: player.position.z });
   const nearPc = () => dist(pos(), POINTS.terminal) <= PC_RADIUS;
@@ -59,8 +66,9 @@ export function mountWarehouse({
       else if (nearPc()) pc.open();
       else sim.interact(pos());
     }
-    if (e.code === 'KeyL') hud.setTab('log');
-    if (e.code === 'KeyI') hud.setTab('stock');
+    if (e.code === 'KeyL') menu.toggle('log');
+    if (e.code === 'KeyI') menu.toggle('stock');
+    if (e.code === 'KeyK') menu.toggle('wms');
   });
 
   // ---------- WMS is leidend: de stand ophalen ----------
@@ -132,6 +140,8 @@ export function mountWarehouse({
     stockList: () => sim.stockList(),
     /** Draagt de speler iets (pallet of orderbak)? Voor de houding van de figuur. */
     carrying: () => !!sim.carry,
+    /** Wat de toets E op deze plek doet (enabled: false = kan nu niet), of null als hier niets te doen is. */
+    action: () => action,
     /** Wat de speler draagt, voor andere spelers: '' (niets), 'order' of het artikel van de pallet. */
     carryLabel: () => (sim.carry?.kind === 'pallet' ? sim.carry.pallet.sku : sim.carry ? 'order' : ''),
     /** De handscanner las een locatielabel: de sim legt de scan voor aan de WMS. null = alleen kijken. */
@@ -156,7 +166,11 @@ export function mountWarehouse({
       const near = nearPc();
       if (pc.isOpen && !near) pc.close();
       pc.update(dt);
-      hud.update(dt, pos(), near ? (pc.isOpen ? 'Pc verlaten' : 'Pc gebruiken: WMS openen') : undefined);
+      hud.update(dt);
+      const it = near ? null : sim.interactionAt(pos());
+      action = near
+        ? { label: pc.isOpen ? 'Pc verlaten' : 'Pc gebruiken: WMS openen', enabled: true }
+        : it && { label: it.label, enabled: !!it.enabled };
 
       // Direct na een handeling de stand opnieuw ophalen, verder op een vast ritme.
       const settled = sim.pending === 0 && sim.revision !== seenRevision;
