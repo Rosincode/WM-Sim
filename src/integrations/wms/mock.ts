@@ -62,6 +62,11 @@ export function createMockClient(): WmsClient {
       return structuredClone(locations);
     },
 
+    async createLocation(l) {
+      if (locations.some((x) => x.id === l.id)) fail(`Locatie ${l.id} bestaat al.`);
+      locations.push({ id: l.id, type: l.type, x: l.x, y: l.y });
+    },
+
     mirror(items, openOrders) {
       stock.clear();
       for (const it of items) if (locations.some((l) => l.id === it.locationId)) add(it.sku, it.locationId, it.qty);

@@ -8,6 +8,8 @@ export type OrderLine = { sku: string; qty: number };
 export interface WmsClient {
   readonly mode: 'live' | 'mock';
   getLocations(): Promise<Location[]>;
+  /** Voegt een locatie van de hal toe die de WMS nog niet kent. */
+  createLocation(l: Location & { level: number }): Promise<void>;
   getStock(): Promise<Item[]>;
   getOpenOrders(): Promise<Order[]>;
   registerGoodsReceived(p: { sku: string; qty: number; dockId: string }): Promise<void>;

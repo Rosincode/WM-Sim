@@ -24,6 +24,7 @@ const idleListeners: Listener[] = [];
 let queue: Promise<void> = Promise.resolve();
 let pending = 0;
 let writes = 0;
+let locationsStamp = 0;
 
 function enqueue(label: string, call: (c: WmsClient) => Promise<unknown>) {
   const target = client; // boeking hoort bij de WMS waar hij ontstond, ook als er intussen wordt uitgelogd
@@ -58,6 +59,14 @@ export const wms = {
   /** Teller van alle boekingen; verandert hij, dan is er sinds je vorige lezing iets geboekt. */
   get writes() {
     return writes;
+  },
+  /** Verandert als er locaties in de WMS zijn bijgekomen: lees ze dan opnieuw. */
+  get locationsStamp() {
+    return locationsStamp;
+  },
+  locationsChanged() {
+    locationsStamp++;
+    changeListeners.forEach((l) => l());
   },
   /** Test de verbinding; bij succes worden de gegevens voor deze browsersessie bewaard. */
   async connect(c: WmsCredentials) {

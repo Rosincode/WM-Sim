@@ -60,6 +60,14 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
       return rows.map((r) => ({ id: r.location_id, type: r.location_type, x: Number(r.pos_x), y: Number(r.pos_y) }));
     },
 
+    async createLocation(l) {
+      // `blocked` blijft op de standaardwaarde van de WMS (nee)
+      await request<unknown>('location', {
+        method: 'POST',
+        body: JSON.stringify({ location_id: l.id, location_type: l.type, pos_x: l.x, pos_y: l.y, level: l.level }),
+      });
+    },
+
     async getStock(): Promise<Item[]> {
       const rows = await list<StockRow>('stock');
       return rows.map((r) => ({ sku: r.sku, qty: Number(r.qty), locationId: r.location_id }));

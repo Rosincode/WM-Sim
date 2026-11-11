@@ -7,6 +7,7 @@ import { createPcScreen } from './pcScreen';
 import { createProcessHud } from './processHud';
 import { createWarehouseView } from './warehouseView';
 import { createWmsGateway } from './wmsGateway';
+import { missingLocations } from './wmsLocations';
 import { mountWmsPanel } from './wmsPanel';
 
 // Koppelt de magazijn-sim aan de WMS (poort + stand ophalen), de 3D-scène, de HUD en het toetsenbord.
@@ -67,6 +68,7 @@ export function mountWarehouse({
   let lastData = '';
   let locations: Location[] = [];
   let locationsOf: WmsClient | null = null;
+  let locationsStamp = -1;
   /** De client waarvan de hele wereld is overgenomen; bij een andere client (in- of uitloggen) gebeurt dat opnieuw. */
   let loadedFrom: WmsClient | null = null;
   let polling = false;
@@ -81,9 +83,18 @@ export function mountWarehouse({
     const client = wms.client;
     const revision = sim.revision;
     try {
-      if (locationsOf !== client) {
+      if (locationsOf !== client || locationsStamp !== wms.locationsStamp) {
+        locationsStamp = wms.locationsStamp;
         locations = await client.getLocations();
         locationsOf = client;
+        // De WMS weigert elke scan en boeking op een locatie die hij niet kent: meld dat meteen.
+        const missing = missingLocations(locations);
+        if (missing.length > 0) {
+          hud.addError(
+            `De WMS mist ${missing.length} locatie${missing.length === 1 ? '' : 's'} van de hal (bijvoorbeeld ${missing[0].id}). ` +
+              'Druk op K om ze toe te voegen.',
+          );
+        }
       }
       const [stock, orders] = await Promise.all([client.getStock(), client.getOpenOrders()]);
       if (client !== wms.client) return; // intussen in- of uitgelogd

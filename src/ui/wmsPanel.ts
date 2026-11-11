@@ -1,4 +1,5 @@
 import { wms } from '../integrations/wms';
+import { addMissingLocations, hallLocations, locationsCsv, missingLocations, type HallLocation } from './wmsLocations';
 
 // Aanmelden bij de WMS-API: de koppeling waarmee de scanner en het magazijn hun handelingen aan de WMS
 // voorleggen. Los van de WMS-app op pc en tablet (die heeft zijn eigen login in het iframe).
@@ -36,6 +37,23 @@ export function mountWmsPanel(parent?: HTMLElement) {
   let showForm = false;
   let message = '';
   let messageClass = '';
+  /** Locaties van de hal die de WMS niet kent; null = nog niet gecontroleerd. */
+  let missing: HallLocation[] | null = null;
+  let checkedStamp = -1;
+  let adding = '';
+
+  async function checkLocations() {
+    const client = wms.client;
+    checkedStamp = wms.locationsStamp;
+    try {
+      const found = missingLocations(await client.getLocations());
+      if (client !== wms.client) return;
+      missing = found;
+    } catch {
+      missing = null; // de fout van het ophalen staat al in het API-log
+    }
+    render();
+  }
 
   const setMessage = (text: string, cls: 'ok' | 'err' | '') => {
     message = text;
@@ -50,8 +68,20 @@ export function mountWmsPanel(parent?: HTMLElement) {
     render();
   }
 
+  /** Regel over de locaties: kloppen de hal en de WMS, en zo niet, wat ontbreekt er. */
+  function locationsHtml() {
+    if (missing === null) return '';
+    const total = hallLocations().length;
+    if (missing.length === 0) return `<div class="msg ok">Alle ${total} locaties van de hal staan in de WMS.</div>`;
+    const sample = missing.slice(0, 3).map((l) => l.id).join(', ');
+    return `<div class="msg err">De WMS mist ${missing.length} van de ${total} locaties van de hal (${escapeHtml(sample)}${missing.length > 3 ? ', …' : ''}). Daar weigert hij scans en boekingen.</div>
+      <button data-act="add-locations" ${adding ? 'disabled' : ''}>${adding ? `Toevoegen… ${adding}` : 'Toevoegen aan de WMS'}</button>
+      <button class="secondary" data-act="csv-locations">Lijst (CSV)</button>`;
+  }
+
   function render() {
     const live = wms.client.mode === 'live';
+    if (!collapsed && checkedStamp !== wms.locationsStamp) void checkLocations();
     const dot = `<span class="dot" style="background:${live ? '#4caf50' : '#f2b134'}"></span>`;
     panel.className = `wms-panel${parent ? ' embedded' : ''}${collapsed ? ' collapsed' : ''}`;
     if (collapsed) {
@@ -81,11 +111,34 @@ export function mountWmsPanel(parent?: HTMLElement) {
             ? `<button data-act="test">Test verbinding</button> <button class="secondary" data-act="logout">Uitloggen</button>`
             : `<button data-act="login">Inloggen bij WMS</button>`
       }
+      ${locationsHtml()}
       ${parent ? '' : '<button class="secondary" data-act="collapse">Sluiten</button>'}
       ${message ? `<div class="msg ${messageClass}">${escapeHtml(message)}</div>` : ''}
       <div class="hint">De scanner en het magazijn leggen elke handeling via deze API voor aan de WMS. Zonder aanmelden draait alles op de mock-WMS.</div>
     `;
 
+    panel.querySelector('[data-act="add-locations"]')?.addEventListener('click', async () => {
+      if (!missing?.length || adding) return;
+      const list = missing;
+      adding = `0 / ${list.length}`;
+      render();
+      const { added, error } = await addMissingLocations(list, (done, total) => {
+        adding = `${done} / ${total}`;
+        render();
+      });
+      adding = '';
+      await checkLocations();
+      if (error) setMessage(`${added} locaties toegevoegd. Daarna weigerde de WMS: ${error}`, 'err');
+      else setMessage(`${added} locaties toegevoegd aan de WMS.`, 'ok');
+    });
+    panel.querySelector('[data-act="csv-locations"]')?.addEventListener('click', () => {
+      if (!missing?.length) return;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([locationsCsv(missing)], { type: 'text/csv' }));
+      a.download = 'ontbrekende-locaties.csv';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
     panel.querySelector('[data-act="collapse"]')?.addEventListener('click', (e) => {
       e.stopPropagation(); // anders klapt de klik op het paneel hem meteen weer open
       setCollapsed(true);
@@ -148,7 +201,11 @@ export function mountWmsPanel(parent?: HTMLElement) {
     });
   }
 
-  wms.onChange(render);
+  wms.onChange(() => {
+    missing = null;
+    checkedStamp = -1; // andere WMS of nieuwe locaties: opnieuw controleren
+    render();
+  });
   wms.onError((msg) => setMessage(msg, 'err'));
   render();
 }

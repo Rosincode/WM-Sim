@@ -23,8 +23,14 @@ import { mountMultiplayer } from './ui/multiplayer';
 const params = new URLSearchParams(location.search);
 
 // --- Renderer, scène, camera ---
+// Renderschaal (pixels per CSS-pixel): past zich tijdens het spelen aan de framerate aan, zie tuneScale().
+// Testen: ?scale=1 zet hem vast, ?msaa=0..4, ?ao=0 (uit) of 1 (volle resolutie), ?nobloom, ?nofx.
+const SCALES = [0.6, 0.75, 0.9, 1, 1.25, 1.5].filter((s) => s <= window.devicePixelRatio + 0.01);
+const fixedScale = Number(params.get('scale')) || 0;
+let scaleLevel = Math.min(SCALES.length - 1, SCALES.indexOf(1));
+const renderScale = () => fixedScale || SCALES[scaleLevel];
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.setPixelRatio(renderScale());
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -58,13 +64,20 @@ player.rotation.y = Math.PI / 2;
 scene.add(player);
 
 // --- Nabewerking: omgevingsschaduw (GTAO), gloed rond lampen, tonemapping ---
+// Dit is het duurste deel van een frame, daarom zuinig ingesteld: de omgevingsschaduw rekent op halve
+// resolutie (hij is toch zacht) en de kantafvlakking (MSAA) op 2 monsters.
+const MSAA = params.has('msaa') ? Number(params.get('msaa')) || 0 : 2;
+const AO_SCALE = params.has('ao') ? Number(params.get('ao')) || 0 : 0.5;
 const composer = new EffectComposer(
   renderer,
-  new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { type: THREE.HalfFloatType, samples: 4 }),
+  new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { type: THREE.HalfFloatType, samples: MSAA }),
 );
 composer.addPass(new RenderPass(scene, camera));
 const gtao = new GTAOPass(scene, camera, window.innerWidth, window.innerHeight);
-gtao.updateGtaoMaterial({ radius: 0.5, distanceExponent: 1.4, thickness: 1.2, scale: 1.15, samples: 12 });
+gtao.updateGtaoMaterial({ radius: 0.5, distanceExponent: 1.4, thickness: 1.2, scale: 1.15, samples: 8 });
+const gtaoSetSize = gtao.setSize.bind(gtao);
+gtao.setSize = (w: number, h: number) => gtaoSetSize(Math.ceil(w * AO_SCALE), Math.ceil(h * AO_SCALE));
+gtao.enabled = AO_SCALE > 0;
 // Tekstlabels (sprites) horen niet in de diepte/normaal-pass van GTAO: daar worden ze
 // als massieve vlakken getekend en verschijnen ze als zwarte balken in beeld.
 const gtaoRender = gtao.render.bind(gtao);
@@ -81,9 +94,45 @@ gtao.render = (...args: Parameters<GTAOPass['render']>) => {
   }
 };
 composer.addPass(gtao);
-composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.14, 0.6, 1.8));
+if (!params.has('nobloom')) composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.14, 0.6, 1.8));
 composer.addPass(new OutputPass());
+composer.setPixelRatio(renderScale()); // zet ook alle passes op de juiste maat
 let postFx = !params.has('nofx');
+
+// Dynamische resolutie: zakt de framerate in, dan rendert de game op een lagere schaal (iets minder scherp,
+// wel vloeiend); is er ruimte over, dan gaat de schaal weer omhoog.
+function setScaleLevel(level: number) {
+  scaleLevel = level;
+  renderer.setPixelRatio(renderScale());
+  composer.setPixelRatio(renderScale());
+}
+const tune = { ms: 0, frames: 0, calm: 0, raisedAt: -1e9, blocked: Infinity, blockedUntil: 0 };
+function tuneScale(frameMs: number, now: number) {
+  if (fixedScale || frameMs > 250 || document.hidden) return; // haperingen en een verborgen tabblad tellen niet mee
+  tune.ms += frameMs;
+  tune.frames++;
+  if (tune.ms < 1000) return;
+  const avg = tune.ms / tune.frames;
+  tune.ms = tune.frames = 0;
+  if (avg > 26 && scaleLevel > 0) {
+    // onder ~38 beelden per seconde: omlaag. Kwam dat door een verhoging van zojuist, dan die stap een tijd niet meer proberen.
+    if (now - tune.raisedAt < 8000) {
+      tune.blocked = scaleLevel;
+      tune.blockedUntil = now + 60_000;
+    }
+    tune.calm = 0;
+    setScaleLevel(scaleLevel - 1);
+  } else if (avg < 17.5 && scaleLevel < SCALES.length - 1) {
+    const next = scaleLevel + 1;
+    if (++tune.calm >= 4 && !(next >= tune.blocked && now < tune.blockedUntil)) {
+      tune.calm = 0;
+      tune.raisedAt = now;
+      setScaleLevel(next);
+    }
+  } else {
+    tune.calm = 0;
+  }
+}
 
 // --- Camera-modi (overzicht / first person / third person) ---
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -228,6 +277,7 @@ const toolHand: HandTarget = { point: new THREE.Vector3(), hideHand: true };
 
 renderer.setAnimationLoop((now) => {
   const dt = THREE.MathUtils.clamp((now - last) / 1000, 0, 0.1); // eerste frame kan een tijdstip vóór het laden hebben
+  tuneScale(now - last, now);
   last = now;
 
   forklift.update(dt, now / 1000);
