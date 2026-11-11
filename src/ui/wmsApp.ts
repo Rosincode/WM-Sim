@@ -1,7 +1,10 @@
 // De echte WMS-applicatie in een iframe, voor het scherm van de pc en van de tablet.
-// Het adres staat NIET in de repo: het komt uit de adresbalk (bewaard in localStorage van deze browser)
-// of, lokaal, uit VITE_WMS_APP_URL in .env.local (staat in .gitignore).
+// Het adres is standaard DEFAULT_APP_URL (voor iedereen gelijk). Afwijken kan per browser via de adresbalk
+// (bewaard in localStorage) of lokaal met VITE_WMS_APP_URL in .env.local. Alleen het adres, nooit inloggegevens.
 // Let op: de app moet insluiten toestaan (CSP frame-ancestors) voor de origin van de game.
+
+/** Startpagina van de WMS-app op de pc en de tablet (alleen bereikbaar binnen het tailnet). */
+const DEFAULT_APP_URL = 'https://dev.tail24c580.ts.net/';
 
 const KEY = 'wm-sim.wmsAppUrl';
 const listeners: (() => void)[] = [];
@@ -9,11 +12,11 @@ const listeners: (() => void)[] = [];
 export function getAppUrl(): string {
   try {
     const saved = localStorage.getItem(KEY);
-    if (saved !== null) return saved;
+    if (saved) return saved;
   } catch {
     // geen opslag: val terug op de build-instelling
   }
-  return (import.meta.env.VITE_WMS_APP_URL as string | undefined) ?? '';
+  return (import.meta.env.VITE_WMS_APP_URL as string | undefined) || DEFAULT_APP_URL;
 }
 
 function setAppUrl(url: string) {
