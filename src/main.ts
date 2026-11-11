@@ -14,6 +14,7 @@ import { createWarehouse, HALL } from './ui/scene/warehouse';
 import { createForklift } from './ui/scene/forklift';
 import { createCharacter } from './ui/scene/character';
 import { mountWarehouse } from './ui/warehouse';
+import { mountMultiplayer } from './ui/multiplayer';
 
 startWmsBridge(); // aanmelden bij het WMS gebeurt op de pc in het magazijn (src/ui/pcScreen.ts)
 
@@ -133,7 +134,7 @@ window.addEventListener('keydown', (e) => {
   const t = e.target;
   if (e.code === 'KeyR' && !e.repeat && !(t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement)) {
     if (driving) setDriving(false);
-    else if (nearForklift()) setDriving(true);
+    else if (nearForklift() && !multiplayer?.forkliftDriver()) setDriving(true);
   }
   if (e.code === 'KeyP' && !e.repeat && !(e.target instanceof HTMLInputElement)) postFx = !postFx;
 });
@@ -163,6 +164,21 @@ driveHint.style.cssText =
 document.body.appendChild(driveHint);
 
 const nearForklift = () => player.position.distanceTo(forklift.group.position) < 2.8;
+
+// --- Multiplayer: iedereen speelt samen in één magazijn (?room=naam voor een eigen kamer, ?solo om alleen te spelen) ---
+const multiplayer = params.has('solo')
+  ? null
+  : mountMultiplayer({
+      scene,
+      player,
+      room: params.get('room') ?? 'main',
+      shared: warehouse.shared,
+      carryLabel: warehouse.carryLabel,
+      forklift,
+      seatHipY: forklift.seat.y - 0.56,
+      isDriving: () => driving,
+      leaveForklift: () => setDriving(false),
+    });
 
 function setDriving(on: boolean) {
   if (on === driving) return;
@@ -224,7 +240,14 @@ renderer.setAnimationLoop((now) => {
   // heupen net boven de zitting; forklift.seat is de plek van het hoofd
   if (player.visible) character.update(dt, { seated: driving, seatHipY: forklift.seat.y - 0.56, carrying: warehouse.carrying() });
 
-  const hintText = driving ? forklift.hint : view.mode !== 'overview' && nearForklift() ? '<b>R</b>: in de heftruck stappen' : '';
+  multiplayer?.update(dt);
+
+  const otherDriver = multiplayer?.forkliftDriver();
+  const hintText = driving
+    ? forklift.hint
+    : view.mode !== 'overview' && nearForklift()
+      ? otherDriver ? 'De heftruck is bezet' : '<b>R</b>: in de heftruck stappen'
+      : '';
   if (driveHint.innerHTML !== hintText) driveHint.innerHTML = hintText;
   driveHint.style.display = hintText ? 'block' : 'none';
   warehouse.update(dt);
