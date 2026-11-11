@@ -100,7 +100,6 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   const sole = mat('#0e0e0f', 0.9);
   const glove = mat('#4a4d52', 0.9);
   const skin = mat('#d6a07c', 0.65);
-  const hair = mat('#3b2a1f', 0.9);
   const helmet = mat('#f2c200', 0.35);
 
   const mesh = (geo: THREE.BufferGeometry, m: THREE.Material, parent: THREE.Object3D, x = 0, y = 0, z = 0) => {
@@ -169,7 +168,7 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   mesh(new THREE.CylinderGeometry(0.062, 0.085, 0.045, 16), shirt, torso, 0, 0.578, 0.004);
   const neck = mesh(new THREE.CylinderGeometry(0.048, 0.054, 0.1, 14), skin, torso, 0, 0.62, 0);
 
-  // Hoofd met gezicht, haar en helm
+  // Hoofd met gezicht en helm (kaal: geen haar)
   const head = pivot(torso, 0, 0.62, 0);
   mesh(shapeHead(new THREE.SphereGeometry(HEAD.r, 24, 18), HEAD.r), skin, head, 0, HEAD.y, 0).scale.set(HEAD.sx, HEAD.sy, HEAD.sz);
   const features = [ball(0.013, skin, head, 0, 0.092, 0.098)]; // neus
@@ -200,9 +199,6 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   face.visible = false;
   head.add(face);
   const skinColor = skin.color.clone();
-  const hairCap = mesh(new THREE.SphereGeometry(0.104, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.6), hair, head, 0, 0.125, -0.01);
-  hairCap.scale.set(0.86, 1.25, 1);
-  hairCap.rotation.x = -0.55;
   const dome = mesh(new THREE.SphereGeometry(0.118, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), helmet, head, 0, BRIM_Y - 0.002, 0);
   dome.scale.set(0.92, 0.95, 1.1);
   const brim = mesh(new THREE.CylinderGeometry(0.12, 0.124, 0.012, 20), helmet, head, 0, BRIM_Y, 0.03);
