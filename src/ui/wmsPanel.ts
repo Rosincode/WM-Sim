@@ -148,14 +148,17 @@ export function mountWmsPanel(parent?: HTMLElement) {
       const list = missing;
       adding = `0 / ${list.length}`;
       render();
-      const { added, error } = await addMissingLocations(list, (done, total) => {
+      const { added, existing, error } = await addMissingLocations(list, (done, total) => {
         adding = `${done} / ${total}`;
         render();
       });
       adding = '';
       await checkLocations();
-      if (error) setMessage(`${added} locaties toegevoegd. Daarna weigerde de WMS: ${error}`, 'err');
-      else setMessage(`${added} locaties toegevoegd aan de WMS.`, 'ok');
+      const already = existing
+        ? ` ${existing} stonden er al en zijn overgeslagen: de WMS gaf ze niet terug in de lijst met locaties (waarschijnlijk geeft de API maar een deel van de lijst).`
+        : '';
+      if (error) setMessage(`${added} locaties toegevoegd.${already} Daarna weigerde de WMS: ${error}`, 'err');
+      else setMessage(`${added} locaties toegevoegd aan de WMS.${already}`, 'ok');
     });
     panel.querySelector('[data-act="csv-locations"]')?.addEventListener('click', () => {
       if (!missing?.length) return;

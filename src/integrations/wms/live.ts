@@ -108,22 +108,38 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
         throw err;
       }));
 
+  const learn = (refs: Refs, id: string, key: string) => {
+    refs.idByKey.set(key, id);
+    refs.keyById.set(id, key);
+  };
+
+  // Staat een sleutel niet in de lijst (net toegevoegd, of de WMS gaf niet de hele lijst terug), dan
+  // zoeken we dat ene record op met een filter op de sleutel.
+
   async function itemId(sku: string): Promise<string> {
-    let id = (await loadItems()).idByKey.get(sku);
+    const refs = await loadItems();
+    let id = refs.idByKey.get(sku);
     if (!id) {
-      items = null; // misschien net toegevoegd in de WMS
-      id = (await loadItems()).idByKey.get(sku);
+      const row = (await list<ItemRow>('item', { sku })).find((r) => r.sku === sku);
+      if (row) learn(refs, (id = row.id), sku);
     }
     if (!id) throw new WmsError(`Artikel ${sku} staat niet in de WMS.`);
     return id;
   }
 
-  async function locationId(key: string): Promise<string> {
-    let id = (await loadLocations()).idByKey.get(key);
+  /** Platform-id van een locatie, of undefined als de WMS hem niet kent. */
+  async function findLocation(key: string): Promise<string | undefined> {
+    const refs = await loadLocations();
+    let id = refs.idByKey.get(key);
     if (!id) {
-      locations = null;
-      id = (await loadLocations()).idByKey.get(key);
+      const row = (await list<LocationRow>('location', { location_id: key })).find((r) => r.location_id === key);
+      if (row) learn(refs, (id = row.id), key);
     }
+    return id;
+  }
+
+  async function locationId(key: string): Promise<string> {
+    const id = await findLocation(key);
     if (!id) throw new WmsError(`Locatie ${key} staat niet in de WMS.`);
     return id;
   }
@@ -162,9 +178,17 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
     },
 
     async createLocation(l) {
-      // `blocked` blijft op de standaardwaarde van de WMS (nee)
-      await post('location', { location_id: l.id, location_type: l.type, pos_x: l.x, pos_y: l.y, level: l.level });
-      locations = null;
+      // Eerst kijken of hij er al staat: de sleutel is uniek, een tweede keer aanmaken weigert de WMS (409).
+      if (await findLocation(l.id)) return false;
+      try {
+        // `blocked` blijft op de standaardwaarde van de WMS (nee)
+        const row = await post<LocationRow | undefined>('location', { location_id: l.id, location_type: l.type, pos_x: l.x, pos_y: l.y, level: l.level });
+        if (row?.id) learn(await loadLocations(), row.id, l.id);
+        return true;
+      } catch (err) {
+        if (err instanceof WmsError && err.status === 409) return false; // stond er toch al
+        throw err;
+      }
     },
 
     async getStock(): Promise<Item[]> {

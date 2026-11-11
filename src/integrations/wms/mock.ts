@@ -71,8 +71,9 @@ export function createMockClient(): WmsClient {
     },
 
     async createLocation(l) {
-      if (locations.some((x) => x.id === l.id)) fail(`Locatie ${l.id} bestaat al.`);
+      if (locations.some((x) => x.id === l.id)) return false;
       locations.push({ id: l.id, type: l.type, x: l.x, y: l.y, level: l.level, blocked: false });
+      return true;
     },
 
     async getItems() {

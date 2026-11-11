@@ -17,8 +17,8 @@ export interface WmsClient {
   getLocations(): Promise<WmsLocation[]>;
   /** Alle artikelen: de WMS bepaalt welke artikelen er bestaan en hoe ze heten. */
   getItems(): Promise<WmsItem[]>;
-  /** Voegt een locatie van de hal toe die de WMS nog niet kent. */
-  createLocation(l: Location & { level: number }): Promise<void>;
+  /** Voegt een locatie van de hal toe die de WMS nog niet kent. false = de locatie stond er al; er is niets aangemaakt. */
+  createLocation(l: Location & { level: number }): Promise<boolean>;
   getStock(): Promise<Item[]>;
   getOpenOrders(): Promise<Order[]>;
   registerGoodsReceived(p: { sku: string; qty: number; dockId: string }): Promise<void>;
