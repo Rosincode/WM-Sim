@@ -232,6 +232,8 @@ const radio = createRadio();
 radio.group.position.set(POINTS.terminal.x - 0.55, 0.975, POINTS.terminal.z + 0.08);
 scene.add(radio.group);
 
+if (import.meta.env.DEV) Object.assign((window as unknown as { wmDebug: object }).wmDebug, { radio });
+
 const nearForklift = () => player.position.distanceTo(forklift.group.position) < 2.8;
 
 // --- Multiplayer: iedereen speelt samen in één magazijn (?room=naam voor een eigen kamer, ?solo om alleen te spelen) ---
