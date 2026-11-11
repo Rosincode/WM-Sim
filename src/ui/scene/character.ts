@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 
 // Magazijnmedewerker: lichte, gelede figuur (hesje, helm) met procedurele loopanimatie.
-// Voorkant wijst naar +Z, voeten op y = 0. Geen modelbestanden of skinning: ~25 eenvoudige meshes.
+// Voorkant wijst naar +Z, voeten op y = 0. Geen modelbestanden of skinning: enkele tientallen eenvoudige meshes.
 
-const HIP_HEIGHT = 0.92;
+const HIP_HEIGHT = 0.94;
 const THIGH = 0.45;
 const SHIN = 0.41;
 const UPPER_ARM = 0.29;
@@ -19,14 +19,17 @@ export interface CharacterState {
 }
 
 export function createCharacter(group: THREE.Group = new THREE.Group()) {
-  const mat = (color: string, roughness = 0.85) => new THREE.MeshStandardMaterial({ color, roughness });
-  const vest = mat('#ee5a12');
-  const stripe = mat('#d9dcd6', 0.35);
-  const shirt = mat('#27364d');
-  const trousers = mat('#2b2f38');
-  const shoe = mat('#17181a', 0.6);
-  const skin = mat('#d9a47f', 0.7);
-  const helmet = mat('#f2c200', 0.4);
+  const mat = (color: string, roughness = 0.85, metalness = 0) => new THREE.MeshStandardMaterial({ color, roughness, metalness });
+  const vest = mat('#f0590f', 0.8);
+  const stripe = new THREE.MeshStandardMaterial({ color: '#e4e7e2', roughness: 0.3, metalness: 0.35, side: THREE.DoubleSide });
+  const shirt = mat('#243349');
+  const trousers = mat('#2c313b', 0.9);
+  const dark = mat('#17181a', 0.6);
+  const sole = mat('#3a3329', 0.9);
+  const glove = mat('#4a4d52', 0.9);
+  const skin = mat('#d6a07c', 0.65);
+  const hair = mat('#3b2a1f', 0.9);
+  const helmet = mat('#f2c200', 0.35);
 
   const mesh = (geo: THREE.BufferGeometry, m: THREE.Material, parent: THREE.Object3D, x = 0, y = 0, z = 0) => {
     const o = new THREE.Mesh(geo, m);
@@ -41,51 +44,103 @@ export function createCharacter(group: THREE.Group = new THREE.Group()) {
     parent.add(g);
     return g;
   };
-  /** Ledemaat die vanaf het draaipunt naar beneden hangt. */
-  const limb = (r: number, len: number, m: THREE.Material, parent: THREE.Object3D) =>
-    mesh(new THREE.CapsuleGeometry(r, len - r, 4, 10), m, parent, 0, -len / 2, 0);
+  const ball = (r: number, m: THREE.Material, parent: THREE.Object3D, x = 0, y = 0, z = 0) =>
+    mesh(new THREE.SphereGeometry(r, 14, 10), m, parent, x, y, z);
+  /** Taps toelopend ledemaat dat vanaf het draaipunt naar beneden hangt, met een ronde bovenkant. */
+  const limb = (rTop: number, rBottom: number, len: number, m: THREE.Material, parent: THREE.Object3D) => {
+    ball(rTop, m, parent);
+    return mesh(new THREE.CylinderGeometry(rTop, rBottom, len, 14), m, parent, 0, -len / 2, 0);
+  };
+  const lathe = (pts: [number, number][], m: THREE.Material, parent: THREE.Object3D) =>
+    mesh(new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), 24), m, parent);
 
   // Heupen: alles hangt hieraan, zodat het lichaam als geheel kan deinen en leunen.
   const rig = pivot(group, 0, HIP_HEIGHT, 0);
-  const pelvis = mesh(new THREE.CapsuleGeometry(0.115, 0.12, 4, 10), trousers, rig, 0, -0.02, 0);
-  pelvis.rotation.z = Math.PI / 2;
-  pelvis.scale.z = 0.9;
+  const pelvis = lathe([[0.001, -0.17], [0.09, -0.16], [0.148, -0.1], [0.162, -0.02], [0.158, 0.05]], trousers, rig);
+  pelvis.scale.set(1.05, 1, 0.68);
+  const belt = mesh(new THREE.CylinderGeometry(0.163, 0.163, 0.035, 24), dark, rig, 0, 0.03, 0);
+  belt.scale.set(1.05, 1, 0.68);
 
-  // Romp met hesje en reflecterende banden
+  // Romp: draaiprofiel van taille naar schouders, afgeplat tot een borstkas. Het hesje is de romp zelf.
+  const SX = 1.08;
+  const SZ = 0.64;
+  const PROFILE: [number, number][] = [
+    [0.001, -0.02], [0.15, -0.01], [0.156, 0.06], [0.156, 0.14], [0.172, 0.3], [0.19, 0.43], [0.186, 0.5], [0.15, 0.556], [0.075, 0.59], [0.001, 0.6],
+  ];
+  const radiusAt = (y: number) => {
+    for (let i = 1; i < PROFILE.length; i++) {
+      const [r0, y0] = PROFILE[i - 1];
+      const [r1, y1] = PROFILE[i];
+      if (y <= y1) return r0 + ((r1 - r0) * (y - y0)) / (y1 - y0);
+    }
+    return 0;
+  };
   const torso = pivot(rig);
-  const chest = mesh(new THREE.CapsuleGeometry(0.17, 0.3, 6, 14), vest, torso, 0, 0.3, 0);
-  chest.scale.set(1.15, 1, 0.72);
-  for (const y of [0.2, 0.36]) {
-    const band = mesh(new THREE.CylinderGeometry(1, 1, 0.04, 18, 1, true), stripe, torso, 0, y, 0);
-    band.scale.set(0.199, 1, 0.126);
+  const shell = pivot(torso);
+  shell.scale.set(SX, 1, SZ);
+  lathe(PROFILE, vest, shell);
+  // Reflecterende banden: één rond de taille, twee over de schouders
+  lathe([[radiusAt(0.1) + 0.004, 0.1], [radiusAt(0.145) + 0.004, 0.145]], stripe, shell);
+  for (const side of [1, -1]) {
+    const x = side * 0.088;
+    const onSurface = (y: number, dir: number) => {
+      const r = radiusAt(y) + 0.004;
+      return new THREE.Vector3(x, y, dir * SZ * r * Math.sqrt(Math.max(0, 1 - (x / (SX * r)) ** 2)));
+    };
+    const ys = [0.145, 0.25, 0.36, 0.45, 0.52, 0.55];
+    const path = new THREE.CatmullRomCurve3([
+      ...ys.map((y) => onSurface(y, 1)),
+      new THREE.Vector3(x, 0.574, 0),
+      ...ys.reverse().map((y) => onSurface(y, -1)),
+    ]);
+    mesh(new THREE.TubeGeometry(path, 28, 0.015, 6), stripe, torso).scale.set(1, 1, 1);
   }
-  mesh(new THREE.CylinderGeometry(0.05, 0.055, 0.1, 10), skin, torso, 0, 0.64, 0);
+  // Kraag van het shirt en de nek
+  mesh(new THREE.CylinderGeometry(0.062, 0.085, 0.045, 16), shirt, torso, 0, 0.578, 0.004);
+  mesh(new THREE.CylinderGeometry(0.048, 0.054, 0.1, 14), skin, torso, 0, 0.62, 0);
 
-  const head = pivot(torso, 0, 0.68, 0);
-  const skull = mesh(new THREE.SphereGeometry(0.105, 16, 12), skin, head, 0, 0.09, 0.005);
-  skull.scale.set(0.92, 1.15, 1);
-  mesh(new THREE.SphereGeometry(0.122, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), helmet, head, 0, 0.115, 0);
-  const brim = mesh(new THREE.CylinderGeometry(0.125, 0.125, 0.014, 16), helmet, head, 0, 0.12, 0.035);
-  brim.scale.z = 1.15;
+  // Hoofd met gezicht, haar en helm
+  const head = pivot(torso, 0, 0.62, 0);
+  ball(0.1, skin, head, 0, 0.1, 0).scale.set(0.9, 1.12, 1);
+  ball(0.074, skin, head, 0, 0.043, 0.022).scale.set(0.95, 0.9, 1); // kaak en kin
+  ball(0.017, skin, head, 0, 0.083, 0.1).scale.set(0.8, 1.3, 1); // neus
+  for (const side of [1, -1]) {
+    ball(0.022, skin, head, side * 0.09, 0.088, -0.004).scale.set(0.5, 1.2, 0.9); // oor
+    ball(0.0105, dark, head, side * 0.036, 0.108, 0.088); // oog
+  }
+  const hairCap = mesh(new THREE.SphereGeometry(0.104, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.6), hair, head, 0, 0.102, -0.01);
+  hairCap.scale.set(0.93, 1.1, 1);
+  hairCap.rotation.x = -0.55;
+  const dome = mesh(new THREE.SphereGeometry(0.118, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), helmet, head, 0, 0.128, 0);
+  dome.scale.set(1, 0.95, 1.1);
+  const brim = mesh(new THREE.CylinderGeometry(0.12, 0.124, 0.012, 20), helmet, head, 0, 0.13, 0.03);
+  brim.scale.z = 1.22;
+  mesh(new THREE.BoxGeometry(0.03, 0.012, 0.2), helmet, head, 0, 0.236, 0); // kam bovenop
 
   function arm(side: number) {
-    const shoulder = pivot(torso, side * 0.235, 0.5, 0);
+    const shoulder = pivot(torso, side * 0.225, 0.5, 0);
     shoulder.rotation.z = side * 0.07;
-    mesh(new THREE.SphereGeometry(0.062, 10, 8), shirt, shoulder);
-    limb(0.048, UPPER_ARM, shirt, shoulder);
+    ball(0.066, shirt, shoulder); // schouderkop
+    limb(0.056, 0.046, UPPER_ARM, shirt, shoulder); // mouw tot de elleboog
     const elbow = pivot(shoulder, 0, -UPPER_ARM, 0);
-    limb(0.041, FOREARM, shirt, elbow);
-    mesh(new THREE.SphereGeometry(0.046, 10, 8), skin, elbow, 0, -FOREARM - 0.02, 0).scale.set(0.8, 1.1, 1);
+    limb(0.044, 0.033, FOREARM, skin, elbow);
+    const hand = ball(0.04, glove, elbow, 0, -FOREARM - 0.04, 0.004);
+    hand.scale.set(0.55, 1.3, 1);
+    ball(0.016, glove, elbow, -side * 0.02, -FOREARM - 0.025, 0.03); // duim
     return { shoulder, elbow };
   }
 
   function leg(side: number) {
-    const hip = pivot(rig, side * 0.092, 0, 0);
-    limb(0.078, THIGH, trousers, hip);
+    const hip = pivot(rig, side * 0.09, -0.02, 0);
+    limb(0.084, 0.064, THIGH, trousers, hip);
     const knee = pivot(hip, 0, -THIGH, 0);
-    limb(0.06, SHIN, trousers, knee);
+    limb(0.064, 0.052, SHIN, trousers, knee);
     const foot = pivot(knee, 0, -SHIN, 0);
-    mesh(new THREE.BoxGeometry(0.1, 0.075, 0.26), shoe, foot, 0, -0.022, 0.055);
+    // Veiligheidsschoen: ronde neus, zool eronder
+    const upper = mesh(new THREE.CapsuleGeometry(0.05, 0.13, 4, 10), dark, foot, 0, -0.012, 0.05);
+    upper.rotation.x = Math.PI / 2;
+    upper.scale.z = 0.8; // lokale z staat na het kantelen verticaal
+    mesh(new THREE.BoxGeometry(0.104, 0.022, 0.25), sole, foot, 0, -0.049, 0.05);
     return { hip, knee, foot };
   }
 
@@ -172,7 +227,7 @@ export function createCharacter(group: THREE.Group = new THREE.Group()) {
     torso.rotation.z = -0.03 * twist;
     head.rotation.y = -(rig.rotation.y + torso.rotation.y) * 0.8;
     head.rotation.x = -torso.rotation.x * 0.6;
-    chest.scale.z = 0.72 + 0.012 * breathe;
+    shell.scale.z = SZ + 0.012 * breathe;
 
     // Deinen: het laagst als beide voeten aan de grond staan, het hoogst boven het standbeen
     const stride = legAmp * Math.sin(phase);

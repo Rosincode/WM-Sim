@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { LANE_SLOTS, LEVEL_Y, POINTS, laneSlot, shelfLocations, type Point } from '../sim/layout';
+import { DOCKS, HALL, LANE_LENGTH, LANE_SLOTS, LEVEL_Y, POINTS, laneSlot, shelfLocations, type Point } from '../sim/layout';
 import type { Truck, Warehouse } from '../sim/warehouse';
 import { createPcMesh } from './scene/pc';
 
@@ -196,11 +196,14 @@ export function createWarehouseView(
   const forward = new THREE.Vector3();
   let time = 0;
 
-  function placeTruck(mesh: THREE.Group, t: Truck | null) {
+  function placeTruck(mesh: THREE.Group, text: ReturnType<typeof label>, t: Truck | null) {
     mesh.visible = !!t;
+    text.set(truckText(t));
     if (!t) return;
+    const dock = DOCKS[t.dock];
     const eased = 1 - (1 - t.t) ** 2;
-    mesh.position.x = -20.4 - (1 - eased) * 24; // achterkant trailer tegen de dockdeur
+    mesh.position.set(-HALL.w / 2 - 0.4 - (1 - eased) * 34, 0, dock.z); // achterkant trailer tegen de dockdeur
+    text.sprite.position.set(dock.truck.x + 1, 4.3, dock.z);
   }
 
   const truckText = (t: Truck | null) => {

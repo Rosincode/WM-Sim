@@ -1,8 +1,8 @@
 import type { Item, Order } from '../shared/contract';
 import { publish, type Direction } from './events';
 import {
-  DOCK_IN, DOCK_OUT, LANE_SLOTS, LOCATIONS, POINTS, SKUS, SKU_NAMES,
-  dist, location, shelfLocations, type Point,
+  DOCKS, LANE_SLOTS, LOCATIONS, POINTS, SKUS, SKU_NAMES,
+  dist, lanePoint, location, shelfLocations, type Dock, type Point,
 } from './layout';
 
 // De fysieke wereld van het magazijn: vrachtwagens, pallets, voorraad op locaties en orders.
@@ -14,6 +14,8 @@ export type Truck = {
   id: string;
   direction: Direction;
   dockId: string;
+  /** Index in DOCKS van de deur waar de wagen staat. */
+  dock: number;
   status: TruckStatus;
   /** 0 = op de weg, 1 = tegen de dockdeur. */
   t: number;
@@ -23,7 +25,7 @@ export type Truck = {
 export type PickTask = { sku: string; qty: number; locationId: string; done: boolean };
 export type SimOrderStatus = 'open' | 'picking' | 'picked' | 'staged' | 'loaded' | 'shipped';
 export type SimOrder = { id: string; lines: { sku: string; qty: number }[]; status: SimOrderStatus; tasks: PickTask[] };
-export type Carry = { kind: 'pallet'; pallet: Pallet; targetId: string } | { kind: 'order'; orderId: string } | null;
+export type Carry = { kind: 'pallet'; pallet: Pallet; targetId: string; fromId: string } | { kind: 'order'; orderId: string } | null;
 export type Message = { text: string; kind: 'info' | 'ok' | 'err'; at: number };
 export type Interaction = { label: string; point: Point; enabled: boolean; run?: () => void };
 export type Objective = { point: Point; level?: number; text: string };
@@ -39,8 +41,9 @@ const stamp = Date.now().toString(36).slice(-4).toUpperCase(); // uniek per sess
 export function createWarehouse() {
   const stock = new Map<string, number>(); // sleutel: locationId|sku
   const orders: SimOrder[] = [];
-  const laneIn: (Pallet | null)[] = Array(LANE_SLOTS).fill(null);
-  const laneOut: (string | null)[] = Array(LANE_SLOTS).fill(null);
+  // Per dock een inslagbaan (pallets) en een uitslagbaan (order-id's).
+  const laneIn: (Pallet | null)[][] = DOCKS.map(() => Array(LANE_SLOTS).fill(null));
+  const laneOut: (string | null)[][] = DOCKS.map(() => Array(LANE_SLOTS).fill(null));
   const trucks: { in: Truck | null; out: Truck | null } = { in: null, out: null };
   const messages: Message[] = [];
   let carry: Carry = null;
@@ -48,6 +51,8 @@ export function createWarehouse() {
   let inTimer = 3;
   let outTimer = 5;
   let orderTimer = 8;
+  /** Dock waar de volgende (of huidige) uitgaande vrachtwagen komt; daar zet je orders klaar. */
+  let outDock = rand(DOCKS.length);
   const seq = { truckIn: 1, truckOut: 1, pallet: 1, order: 1 };
 
   // --- Berichten ---
@@ -86,7 +91,7 @@ export function createWarehouse() {
 
   function seed() {
     const shelves = shelfLocations();
-    for (let i = 0; i < 25; i++) add(shelves[rand(shelves.length)].id, SKUS[rand(SKUS.length)], 5 + rand(46));
+    for (let i = 0; i < 70; i++) add(shelves[rand(shelves.length)].id, SKUS[rand(SKUS.length)], 5 + rand(46));
   }
   seed();
 
@@ -159,44 +164,46 @@ export function createWarehouse() {
   }
 
   function unload(t: Truck) {
-    const slot = laneIn.indexOf(null);
+    const { inId } = DOCKS[t.dock];
+    const lane = laneIn[t.dock];
     const pallet = t.cargo.shift()!;
-    laneIn[slot] = pallet;
-    add(DOCK_IN, pallet.sku, pallet.qty);
-    publish({ type: 'Scanned', kind: 'pallet', barcode: pallet.id, ok: true, locationId: DOCK_IN });
-    publish({ type: 'GoodsReceived', sku: pallet.sku, qty: pallet.qty, dockId: DOCK_IN, palletId: pallet.id });
-    say(`Ontvangen: ${pallet.id}, ${pallet.qty}× ${pallet.sku}.`, 'ok');
+    lane[lane.lastIndexOf(null)] = pallet; // doorschuiven: de eerste pallet staat het verst de hal in
+    add(inId, pallet.sku, pallet.qty);
+    publish({ type: 'Scanned', kind: 'pallet', barcode: pallet.id, ok: true, locationId: inId });
+    publish({ type: 'GoodsReceived', sku: pallet.sku, qty: pallet.qty, dockId: inId, palletId: pallet.id });
+    say(`Ontvangen op ${inId}: ${pallet.id}, ${pallet.qty}× ${pallet.sku}.`, 'ok');
   }
 
-  function pickUpPallet(slot: number) {
-    const pallet = laneIn[slot]!;
+  function pickUpPallet(d: Dock, slot: number) {
+    const pallet = laneIn[d.index][slot]!;
     const targetId = putawayTarget(pallet.sku);
-    publish({ type: 'Scanned', kind: 'pallet', barcode: pallet.id, ok: !!targetId, locationId: DOCK_IN });
+    publish({ type: 'Scanned', kind: 'pallet', barcode: pallet.id, ok: !!targetId, locationId: d.inId });
     if (!targetId) {
       say('Geen vrije stellinglocatie voor deze pallet.', 'err');
       return;
     }
-    laneIn[slot] = null;
-    carry = { kind: 'pallet', pallet, targetId };
+    laneIn[d.index][slot] = null;
+    carry = { kind: 'pallet', pallet, targetId, fromId: d.inId };
     say(`${pallet.id} opgepakt. Wegzetten naar ${targetId}.`);
   }
 
-  function returnPallet() {
+  function returnPallet(d: Dock) {
     if (carry?.kind !== 'pallet') return;
-    laneIn[laneIn.indexOf(null)] = carry.pallet;
-    say(`${carry.pallet.id} teruggezet in de inslagbaan.`);
+    const lane = laneIn[d.index];
+    lane[lane.lastIndexOf(null)] = carry.pallet;
+    say(`${carry.pallet.id} teruggezet op ${d.inId}.`);
     carry = null;
   }
 
   function putaway(locId: string) {
     if (carry?.kind !== 'pallet') return;
-    const { pallet } = carry;
-    add(DOCK_IN, pallet.sku, -pallet.qty);
+    const { pallet, fromId } = carry;
+    add(fromId, pallet.sku, -pallet.qty);
     add(locId, pallet.sku, pallet.qty);
     publish({ type: 'Scanned', kind: 'location', barcode: locId, ok: true, locationId: locId });
     publish({
       type: 'PutawayDone', sku: pallet.sku, qty: pallet.qty,
-      fromLocationId: DOCK_IN, locationId: locId, palletId: pallet.id,
+      fromLocationId: fromId, locationId: locId, palletId: pallet.id,
     });
     say(`${pallet.id} weggezet op ${locId}.`, 'ok');
     carry = null;
@@ -241,25 +248,26 @@ export function createWarehouse() {
     } else {
       o.status = 'picked';
       publish({ type: 'PickCompleted', orderId: o.id });
-      say(`${o.id} compleet gepickt. Breng naar de uitgaande baan of vrachtwagen.`, 'ok');
+      say(`${o.id} compleet gepickt. Breng naar een uitslaglocatie of de vrachtwagen.`, 'ok');
     }
   }
 
-  function stage(o: SimOrder) {
-    laneOut[laneOut.indexOf(null)] = o.id;
+  function stage(o: SimOrder, d: Dock) {
+    const lane = laneOut[d.index];
+    lane[lane.indexOf(null)] = o.id;
     o.status = 'staged';
     carry = null;
-    publish({ type: 'Scanned', kind: 'location', barcode: DOCK_OUT, ok: true, locationId: DOCK_OUT });
-    publish({ type: 'OrderStaged', orderId: o.id, dockId: DOCK_OUT });
-    say(`${o.id} klaargezet in de uitgaande baan.`, 'ok');
+    publish({ type: 'Scanned', kind: 'location', barcode: d.outId, ok: true, locationId: d.outId });
+    publish({ type: 'OrderStaged', orderId: o.id, dockId: d.outId });
+    say(`${o.id} klaargezet op ${d.outId}.`, 'ok');
   }
 
-  function takeStaged(slot: number) {
-    const o = order(laneOut[slot]!)!;
-    laneOut[slot] = null;
+  function takeStaged(d: Dock, slot: number) {
+    const o = order(laneOut[d.index][slot]!)!;
+    laneOut[d.index][slot] = null;
     o.status = 'picked';
     carry = { kind: 'order', orderId: o.id };
-    publish({ type: 'Scanned', kind: 'order', barcode: o.id, ok: true, locationId: DOCK_OUT });
+    publish({ type: 'Scanned', kind: 'order', barcode: o.id, ok: true, locationId: d.outId });
     say(`${o.id} opgepakt voor inladen.`);
   }
 
@@ -298,8 +306,9 @@ export function createWarehouse() {
 
   // ========== Interacties rond de speler ==========
 
-  function truckInteraction(t: Truck | null, point: Point): Interaction | null {
+  function truckInteraction(t: Truck | null): Interaction | null {
     if (!t || t.status === 'arriving' || t.status === 'departing') return null;
+    const point = DOCKS[t.dock].truck;
     const i = (label: string, run?: () => void): Interaction => ({ label, point, enabled: !!run, run });
     if (t.status === 'waiting') return i(`Aanmelden ${t.id}`, () => checkIn(t));
     if (carry?.kind === 'pallet') return i('Zet eerst je pallet weg');
@@ -307,7 +316,7 @@ export function createWarehouse() {
     if (t.direction === 'in') {
       if (carry) return i('Handen vol');
       if (t.cargo.length === 0) return i(`Uitmelden ${t.id}`, () => checkOut(t));
-      if (!laneIn.includes(null)) return i('Inslagbaan vol: eerst wegzetten');
+      if (!laneIn[t.dock].includes(null)) return i(`${DOCKS[t.dock].inId} vol: eerst wegzetten`);
       const p = t.cargo[0];
       return i(`Scan ${p.id} en los (${p.qty}× ${p.sku}, nog ${t.cargo.length})`, () => unload(t));
     }
@@ -322,25 +331,30 @@ export function createWarehouse() {
     const list: (Interaction & { radius: number })[] = [];
     const push = (it: Interaction | null, radius: number) => it && list.push({ ...it, radius });
 
-    push(truckInteraction(trucks.in, POINTS.truckIn), 2.6);
-    push(truckInteraction(trucks.out, POINTS.truckOut), 2.6);
+    push(truckInteraction(trucks.in), 2.2);
+    push(truckInteraction(trucks.out), 2.2);
 
-    // Inslagbaan
-    const inSlot = laneIn.findIndex((p) => p);
-    if (carry?.kind === 'pallet') {
-      push({ label: 'Pallet terugzetten in inslagbaan', point: POINTS.laneIn, enabled: true, run: returnPallet }, 2.2);
-    } else if (!carry && inSlot >= 0) {
-      const p = laneIn[inSlot]!;
-      push({ label: `Scan ${p.id} en pak op (${p.qty}× ${p.sku})`, point: POINTS.laneIn, enabled: true, run: () => pickUpPallet(inSlot) }, 2.2);
-    }
-
-    // Uitgaande baan
+    // Per dock: inslaglocatie (pallets oppakken) en uitslaglocatie (orders klaarzetten of oppakken)
     const o = carriedOrder();
-    const outSlot = laneOut.findIndex((id) => id);
-    if (o?.status === 'picked' && laneOut.includes(null)) {
-      push({ label: `${o.id} afzetten in uitgaande baan`, point: POINTS.laneOut, enabled: true, run: () => stage(o) }, 2.2);
-    } else if (!carry && outSlot >= 0) {
-      push({ label: `Scan ${laneOut[outSlot]} en pak op`, point: POINTS.laneOut, enabled: true, run: () => takeStaged(outSlot) }, 2.2);
+    for (const d of DOCKS) {
+      if (Math.abs(pos.z - d.z) > 4.5) continue;
+      const inPoint = lanePoint(d.laneIn, pos);
+      const inSlot = laneIn[d.index].findLastIndex((p) => p); // de pallet aan de halkant eerst
+      if (carry?.kind === 'pallet') {
+        if (carry.fromId === d.inId)
+          push({ label: `Pallet terugzetten op ${d.inId}`, point: inPoint, enabled: true, run: () => returnPallet(d) }, 1.5);
+      } else if (!carry && inSlot >= 0) {
+        const p = laneIn[d.index][inSlot]!;
+        push({ label: `Scan ${p.id} op ${d.inId} en pak op (${p.qty}× ${p.sku})`, point: inPoint, enabled: true, run: () => pickUpPallet(d, inSlot) }, 1.5);
+      }
+
+      const outPoint = lanePoint(d.laneOut, pos);
+      const outSlot = laneOut[d.index].findIndex((id) => id);
+      if (o?.status === 'picked' && laneOut[d.index].includes(null)) {
+        push({ label: `${o.id} klaarzetten op ${d.outId}`, point: outPoint, enabled: true, run: () => stage(o, d) }, 1.5);
+      } else if (!carry && outSlot >= 0) {
+        push({ label: `Scan ${laneOut[d.index][outSlot]} op ${d.outId} en pak op`, point: outPoint, enabled: true, run: () => takeStaged(d, outSlot) }, 1.5);
+      }
     }
 
     // Orderterminal
@@ -420,26 +434,42 @@ export function createWarehouse() {
       return { point: l, level: l.level, text: `Pick ${t.qty}× ${t.sku} (${SKU_NAMES[t.sku]}) op ${l.id}` };
     }
     if (o?.status === 'picked') {
-      return to?.status === 'checkedIn'
-        ? { point: POINTS.truckOut, text: `Laad ${o.id} in ${to.id}` }
-        : { point: POINTS.laneOut, text: `Zet ${o.id} in de uitgaande baan` };
+      if (to?.status === 'checkedIn') return { point: DOCKS[to.dock].truck, text: `Laad ${o.id} in ${to.id} (${to.dockId})` };
+      const d = laneOut[outDock].includes(null) ? DOCKS[outDock] : DOCKS.find((x) => laneOut[x.index].includes(null));
+      return d ? { point: d.laneOut, text: `Zet ${o.id} klaar op ${d.outId}` } : null;
     }
-    if (ti?.status === 'waiting') return { point: POINTS.truckIn, text: `Meld ${ti.id} aan bij ${DOCK_IN}` };
-    if (ti?.status === 'checkedIn' && ti.cargo.length && laneIn.includes(null))
-      return { point: POINTS.truckIn, text: `Los ${ti.id} (${ti.cargo.length} pallet${ti.cargo.length > 1 ? 's' : ''})` };
-    if (laneIn.some((p) => p)) return { point: POINTS.laneIn, text: 'Zet de pallets uit de inslagbaan weg' };
-    if (ti?.status === 'checkedIn' && !ti.cargo.length) return { point: POINTS.truckIn, text: `Meld ${ti.id} uit` };
-    if (to?.status === 'waiting') return { point: POINTS.truckOut, text: `Meld ${to.id} aan bij ${DOCK_OUT}` };
-    if (to?.status === 'checkedIn' && laneOut.some((id) => id))
-      return { point: POINTS.laneOut, text: 'Pak een klaargezette order op om in te laden' };
-    if (orders.some((x) => x.status === 'open')) return { point: POINTS.terminal, text: 'Start een order op de pc' };
-    if (to?.status === 'checkedIn' && to.loaded.length) return { point: POINTS.truckOut, text: `Meld ${to.id} uit` };
+    const inPoint = ti ? DOCKS[ti.dock].truck : null;
+    const outPoint = to ? DOCKS[to.dock].truck : null;
+    if (ti?.status === 'waiting') return { point: inPoint!, text: `Meld ${ti.id} aan bij ${ti.dockId}` };
+    if (ti?.status === 'checkedIn' && ti.cargo.length && laneIn[ti.dock].includes(null))
+      return { point: inPoint!, text: `Los ${ti.id} (${ti.cargo.length} pallet${ti.cargo.length > 1 ? 's' : ''})` };
+    const full = DOCKS.find((d) => laneIn[d.index].some((p) => p));
+    if (full) return { point: full.laneIn, text: `Zet de pallets van ${full.inId} weg` };
+    if (ti?.status === 'checkedIn' && !ti.cargo.length) return { point: inPoint!, text: `Meld ${ti.id} uit` };
+    if (to?.status === 'waiting') return { point: outPoint!, text: `Meld ${to.id} aan bij ${to.dockId}` };
+    if (to?.status === 'checkedIn') {
+      const staged = [DOCKS[to.dock], ...DOCKS].find((d) => laneOut[d.index].some((id) => id));
+      if (staged) return { point: staged.laneOut, text: `Pak de order op ${staged.outId} op om in te laden` };
+    }
+    if (orders.some((x) => x.status === 'open')) return { point: POINTS.terminal, text: 'Start een order bij de orderterminal' };
+    if (to?.status === 'checkedIn' && to.loaded.length) return { point: outPoint!, text: `Meld ${to.id} uit` };
     return null;
   }
 
   // ========== Tijd ==========
 
+  /** Uitgaand dock: bij voorkeur waar al orders klaarstaan, nooit het dock van de lossende wagen. */
+  function chooseOutDock() {
+    const staged = laneOut.findIndex((lane) => lane.some((id) => id));
+    if (staged >= 0 && staged !== trucks.in?.dock) return staged;
+    let d = rand(DOCKS.length);
+    while (d === trucks.in?.dock) d = rand(DOCKS.length);
+    return d;
+  }
+
   function spawnTruck(direction: Direction): Truck {
+    let dock = outDock;
+    if (direction === 'in') do dock = rand(DOCKS.length); while (dock === outDock);
     const id = direction === 'in' ? `IN-${pad(seq.truckIn++)}` : `UIT-${pad(seq.truckOut++)}`;
     const cargo: Pallet[] =
       direction === 'in'
@@ -449,7 +479,7 @@ export function createWarehouse() {
             qty: 5 * (2 + rand(5)),
           }))
         : [];
-    return { id, direction, dockId: direction === 'in' ? DOCK_IN : DOCK_OUT, status: 'arriving', t: 0, cargo, loaded: [] };
+    return { id, direction, dockId: DOCKS[dock].id, dock, status: 'arriving', t: 0, cargo, loaded: [] };
   }
 
   function driveTruck(slot: 'in' | 'out', dt: number) {
@@ -466,7 +496,10 @@ export function createWarehouse() {
       if (t.t === 0) {
         trucks[slot] = null;
         if (slot === 'in') inTimer = 20;
-        else outTimer = 8;
+        else {
+          outTimer = 8;
+          outDock = chooseOutDock();
+        }
       }
     }
   }
@@ -488,15 +521,16 @@ export function createWarehouse() {
 
   function loadSnapshot(items: Item[], wmsOrders: Order[], source: string) {
     stock.clear();
-    laneIn.fill(null);
-    laneOut.fill(null);
+    laneIn.forEach((lane) => lane.fill(null));
+    laneOut.forEach((lane) => lane.fill(null));
     carry = null;
     if (trucks.out) trucks.out.loaded = [];
     for (const it of items) {
       if (!location(it.locationId) || it.qty <= 0) continue;
       add(it.locationId, it.sku, it.qty);
-      if (it.locationId === DOCK_IN && laneIn.includes(null)) {
-        laneIn[laneIn.indexOf(null)] = { id: `PAL-${stamp}-${pad(seq.pallet++, 4)}`, sku: it.sku, qty: it.qty };
+      const lane = laneIn[DOCKS.findIndex((d) => d.inId === it.locationId)];
+      if (lane?.includes(null)) {
+        lane[lane.lastIndexOf(null)] = { id: `PAL-${stamp}-${pad(seq.pallet++, 4)}`, sku: it.sku, qty: it.qty };
       }
     }
     orders.length = 0;
@@ -516,6 +550,8 @@ export function createWarehouse() {
     get trucks() { return trucks; },
     get laneIn() { return laneIn; },
     get laneOut() { return laneOut; },
+    /** Index van het dock waar de volgende uitgaande wagen komt. */
+    get outDock() { return outDock; },
     get carry() { return carry; },
     get orders() { return orders; },
     get messages() { return messages; },

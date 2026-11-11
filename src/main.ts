@@ -108,7 +108,7 @@ const view = createPlayerView({
   hud,
   bounds: BOUNDS,
   colliders: hall.colliders,
-  initialMode: params.get('view') === 'overview' ? 'overview' : 'first',
+  initialMode: params.get('view') === 'overview' ? 'overview' : params.get('view') === 'third' ? 'third' : 'first',
   onModeChange: applyMode,
 });
 
