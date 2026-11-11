@@ -14,11 +14,11 @@ interface Options {
   /** Wortel waartegen de laser wordt geraycast (de scène). */
   world: THREE.Object3D;
   scanTargets: ScanTarget[];
-  /** F met de tablet in de hand: de WMS-app openen. Zonder deze optie haalt F de tablet dichterbij. */
-  onOpenApp?: () => void;
 }
 
 const TABS = ['Voorraad', 'Orders', 'Locaties'] as const;
+/** Afmetingen van het tabletscherm in meters. */
+export const TABLET_SCREEN = { w: 0.2368, h: 0.148 };
 const SCAN_RANGE = 8;
 const SCAN_CONE = 0.075; // rad: hoe nauwkeurig je op een label moet richten
 const SEAT_SHIFT = 0.08; // zittend houd je de scanner iets verder naar rechts, naast het stuur
@@ -52,7 +52,7 @@ function forearm(from: THREE.Vector3, to: THREE.Vector3, sleeve: THREE.Material,
   return g;
 }
 
-export function createHandheld({ camera, canvas, world, scanTargets, onOpenApp }: Options) {
+export function createHandheld({ camera, canvas, world, scanTargets }: Options) {
   const root = new THREE.Group();
   camera.add(root);
 
@@ -131,12 +131,13 @@ export function createHandheld({ camera, canvas, world, scanTargets, onOpenApp }
   const tabletRig = new THREE.Group();
   root.add(tabletRig);
   const tabScreen = screen(1280, 800);
+  const tabletDisplay = mesh(new THREE.PlaneGeometry(TABLET_SCREEN.w, TABLET_SCREEN.h), new THREE.MeshBasicMaterial({ map: tabScreen.texture, fog: false }), 0, 0, 0.0065);
   {
     const box = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
     tabletRig.add(mesh(box(0.272, 0.182, 0.012), shell));
     for (const x of [-0.13, 0.13]) for (const y of [-0.085, 0.085]) tabletRig.add(mesh(box(0.03, 0.03, 0.017), rubberMat, x, y, 0));
     tabletRig.add(mesh(new THREE.PlaneGeometry(0.256, 0.166), rubberMat, 0, 0, 0.0062));
-    tabletRig.add(mesh(new THREE.PlaneGeometry(0.2368, 0.148), new THREE.MeshBasicMaterial({ map: tabScreen.texture, fog: false }), 0, 0, 0.0065));
+    tabletRig.add(tabletDisplay);
     for (const s of [-1, 1]) {
       const thumb = mesh(new THREE.CapsuleGeometry(0.011, 0.03, 6, 12), glove, s * 0.133, -0.04, 0.015);
       thumb.rotation.z = s * 0.3;
@@ -279,7 +280,7 @@ export function createHandheld({ camera, canvas, world, scanTargets, onOpenApp }
     g.textAlign = 'right';
     g.fillStyle = '#7a8594';
     g.font = '20px Arial';
-    g.fillText(onOpenApp ? 'Q: tabblad · F: WMS-app' : 'Q: tabblad · F: dichterbij', w - 32, 131);
+    g.fillText('Q: tabblad · F: dichterbij', w - 32, 131);
     g.textAlign = 'left';
 
     const shelves = data.locations.filter((l) => l.type !== 'dock');
@@ -478,10 +479,7 @@ export function createHandheld({ camera, canvas, world, scanTargets, onOpenApp }
     if (e.code === 'Digit1' || e.code === 'Numpad1') setTool('scanner');
     if (e.code === 'Digit2' || e.code === 'Numpad2') setTool('tablet');
     if (tool !== 'tablet') return;
-    if (e.code === 'KeyF') {
-      if (onOpenApp) onOpenApp();
-      else focus = !focus;
-    }
+    if (e.code === 'KeyF') focus = !focus;
     if (e.code === 'KeyQ') {
       tab = (tab + 1) % TABS.length; // E is de actietoets van de processim
       drawTablet();
@@ -514,6 +512,19 @@ export function createHandheld({ camera, canvas, world, scanTargets, onOpenApp }
       return tool;
     },
     setTool,
+    /** Het beeldvlak van de tablet (voor de WMS-app die er als iframe overheen ligt). */
+    tabletDisplay,
+    /** Is de tablet nu in beeld? */
+    get tabletVisible() {
+      return active && tabletRig.visible;
+    },
+    /** Tablet dichtbij gehouden (F) om te lezen en te bedienen. */
+    get focus() {
+      return focus;
+    },
+    setFocus(on: boolean) {
+      focus = on && active && tool === 'tablet';
+    },
     onToolChange(l: (t: Tool) => void) {
       listeners.push(l);
     },
@@ -580,10 +591,10 @@ export function createHandheld({ camera, canvas, world, scanTargets, onOpenApp }
       windowMat.color.setRGB(scanTimer > 0 ? 5 : 0.23, 0.03, 0.03);
 
       // tablet: laag voor de borst, met F dichterbij om te lezen
-      tabletPos.set(bobX + 0.2 * seatK, focus ? -0.02 : -0.135, focus ? -0.235 : -0.38);
+      tabletPos.set(bobX + 0.2 * seatK, focus ? 0 : -0.135, focus ? -0.175 : -0.38);
       tabletPos.y += bobY - (1 - raise.tablet) * 0.45;
       tabletRig.position.lerp(tabletPos, 1 - Math.exp(-dt * 14));
-      tabletRig.rotation.x += ((focus ? -0.06 : -0.42) - tabletRig.rotation.x) * k;
+      tabletRig.rotation.x += ((focus ? 0 : -0.42) - tabletRig.rotation.x) * k;
       tabletRig.rotation.y = -0.3 * seatK; // in één hand rechts: scherm naar je toe gedraaid
     },
   };

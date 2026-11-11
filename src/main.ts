@@ -93,15 +93,9 @@ hud.style.cssText =
   'position:fixed;left:16px;top:16px;padding:10px 14px;border-radius:8px;background:rgba(0,0,0,.6);color:#fff;font:14px system-ui,sans-serif;line-height:1.5;pointer-events:none';
 document.body.appendChild(hud);
 
-const tabletApp = createTabletApp(); // de echte WMS-app op de tablet (F)
-const handheld = createHandheld({
-  camera,
-  canvas: renderer.domElement,
-  world: scene,
-  scanTargets: hall.scanTargets,
-  onOpenApp: tabletApp.toggle,
-});
-handheld.onToolChange(tabletApp.close);
+const handheld = createHandheld({ camera, canvas: renderer.domElement, world: scene, scanTargets: hall.scanTargets });
+// De echte WMS-app op het scherm van de tablet (2); F haalt hem dichtbij om te bedienen.
+const tabletApp = createTabletApp({ camera, display: handheld.tabletDisplay, onClose: () => handheld.setFocus(false) });
 
 let driving = false;
 
@@ -271,4 +265,5 @@ renderer.setAnimationLoop((now) => {
 
   if (postFx) composer.render(dt);
   else renderer.render(scene, camera);
+  tabletApp.update(handheld.tabletVisible, handheld.focus);
 });
