@@ -16,6 +16,7 @@ import { createCharacter, type HandTarget } from './ui/scene/character';
 import { wms } from './integrations/wms';
 import { mountWarehouse } from './ui/warehouse';
 import { mountMultiplayer } from './ui/multiplayer';
+import { SceneRenderPass } from './ui/sceneRenderPass';
 
 // De WMS-koppeling loopt via de poort van de sim (src/sim/wms.ts, ingevuld in src/ui/wmsGateway.ts):
 // elke handeling wacht op het antwoord van de WMS. De bridge op de bus (startWmsBridge) start daarom
@@ -66,14 +67,14 @@ scene.add(player);
 
 // --- Nabewerking: omgevingsschaduw (GTAO), gloed rond lampen, tonemapping ---
 // Dit is het duurste deel van een frame, daarom zuinig ingesteld: de omgevingsschaduw rekent op halve
-// resolutie (hij is toch zacht) en de kantafvlakking (MSAA) op 2 monsters.
-const MSAA = params.has('msaa') ? Number(params.get('msaa')) || 0 : 2;
+// resolutie (hij is toch zacht) en alleen de scène zelf krijgt kantafvlakking (MSAA), zie SceneRenderPass.
+const MSAA = params.has('msaa') ? Number(params.get('msaa')) || 0 : 4;
 const AO_SCALE = params.has('ao') ? Number(params.get('ao')) || 0 : 0.5;
 const composer = new EffectComposer(
   renderer,
-  new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { type: THREE.HalfFloatType, samples: MSAA }),
+  new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { type: THREE.HalfFloatType }),
 );
-composer.addPass(new RenderPass(scene, camera));
+composer.addPass(MSAA > 0 ? new SceneRenderPass(scene, camera, MSAA) : new RenderPass(scene, camera));
 const gtao = new GTAOPass(scene, camera, window.innerWidth, window.innerHeight);
 gtao.updateGtaoMaterial({ radius: 0.5, distanceExponent: 1.4, thickness: 1.2, scale: 1.15, samples: 8 });
 const gtaoSetSize = gtao.setSize.bind(gtao);
