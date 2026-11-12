@@ -14,12 +14,15 @@ import { SKU_COLORS } from './warehouseView';
 // - De gedeelde wereld (voorraad, orders, banen, vrachtwagens, heftruck) gaat als geheel over de lijn
 //   zodra iemand er iets aan verandert. De hoogste revisie wint; bij gelijke stand beslist het speler-id.
 // - Eén speler is host (wie het langst binnen is): alleen daar ontstaan nieuwe vrachtwagens en orders.
+// - De host bewaart de wereld op de broker: wie later als eerste binnenkomt gaat verder met die stand.
 // - Chat: Enter (of T) opent het chatvenster; een bericht staat daar én als wolkje boven wie het zegt.
 // WMS-acties blijven lokaal: wie een handeling doet, meldt die zelf bij zijn WMS.
 
 const TICK_MS = 100;
 const HEARTBEAT_MS = 1000;
 const HOST_RESEND_MS = 10_000;
+/** Hoe vaak de host de wereld hooguit op de broker bewaart (ms). */
+const SAVE_MS = 3000;
 const NAME_KEY = 'wm-sim.name';
 const VEST_COLORS = ['#1e88e5', '#43a047', '#8e24aa', '#00acc1', '#d81b60', '#6d4c41', '#3949ab', '#c0ca33'];
 
@@ -51,7 +54,8 @@ interface Options {
   setFace(image: HTMLImageElement | null): void;
   /** Naam van de kamer; iedereen met dezelfde naam speelt samen. */
   room: string;
-  shared: { state(): SharedState; apply(s: SharedState): void; setAuthority(on: boolean): void };
+  /** apply: saved = de wereld komt van de broker (niemand draagt nog iets), niet van een medespeler. */
+  shared: { state(): SharedState; apply(s: SharedState, saved?: boolean): void; setAuthority(on: boolean): void };
   carryLabel(): string;
   forklift: {
     getState(): ForkliftState;
@@ -357,10 +361,54 @@ export function mountMultiplayer(o: Options) {
   let lastSimKey = simKey();
   let lastStateAt = 0;
 
+  const stateMsg = (): StateMsg => ({ rev, w: writer, sim: o.shared.state(), fork: o.forklift.getState(), jack: o.jack.getState() });
   function sendState() {
     lastStateAt = performance.now();
-    room.send('s', { rev, w: writer, sim: o.shared.state(), fork: o.forklift.getState(), jack: o.jack.getState() } satisfies StateMsg);
+    room.send('s', stateMsg());
   }
+
+  /** Neemt een wereld over: van een medespeler, of (saved) de bewaarde wereld van de broker. */
+  function applyState(data: StateMsg, saved = false) {
+    adopted = true;
+    o.shared.apply(data.sim, saved);
+    if (!o.isDriving() && !remoteDriver()) o.forklift.applyState(data.fork);
+    else o.forklift.applyLoose(data.fork.loose);
+    if (!o.jack.held() && !remoteHolder() && validJack(data.jack)) o.jack.applyState(data.jack);
+    rev = data.rev;
+    writer = data.w;
+    lastSimKey = simKey();
+    lastForkKey = forkNow();
+    lastLooseKey = looseKey();
+    lastJackKey = JSON.stringify(o.jack.getState());
+  }
+
+  // ---------- De wereld bewaren: de hal begint met de laatste stand ----------
+  let savedRev = 0;
+  let savedAt = 0;
+  /** Heeft deze speler al een wereld van een medespeler of van de broker overgenomen? */
+  let adopted = false;
+  /** Sinds wanneer we verbonden zijn (0 = nog niet). */
+  let onlineSince = 0;
+  /** Zo lang na het verbinden gaat de bewaarde wereld altijd voor op de eigen, net begonnen wereld (ms). */
+  const ADOPT_MS = 10_000;
+  function saveWorld() {
+    savedRev = rev;
+    savedAt = performance.now();
+    room.saveWorld(stateMsg());
+  }
+  room.onWorld((data) => {
+    if (!validState(data)) return;
+    // Net binnen en nog niets overgenomen: de bewaarde wereld gaat voor op de eigen, net begonnen wereld, ook
+    // als die intussen al een paar revisies heeft. Daarna alleen als hij verder is dan wat we hebben (spelen
+    // er anderen, dan is hun wereld minstens zo ver).
+    const fresh = !adopted && performance.now() - onlineSince < ADOPT_MS;
+    if (fresh || data.rev > rev || (data.rev === rev && data.w > writer)) {
+      const ahead = Math.max(rev, data.rev);
+      applyState(data, true);
+      rev = ahead; // nooit terug in revisie: anders zou een medespeler onze volgende wijziging als verouderd zien
+    }
+    savedRev = Math.max(savedRev, data.rev);
+  });
 
   let lastPose = '';
   let lastPoseAt = 0;
@@ -501,16 +549,7 @@ export function mountMultiplayer(o: Options) {
       const newer = data.rev > rev || (data.rev === rev && data.w > writer);
       const older = data.rev < rev || (data.rev === rev && data.w < writer);
       if (newer) {
-        o.shared.apply(data.sim);
-        if (!o.isDriving() && !remoteDriver()) o.forklift.applyState(data.fork);
-        else o.forklift.applyLoose(data.fork.loose);
-        if (!o.jack.held() && !remoteHolder() && validJack(data.jack)) o.jack.applyState(data.jack);
-        rev = data.rev;
-        writer = data.w;
-        lastSimKey = simKey();
-        lastForkKey = forkNow();
-        lastLooseKey = looseKey();
-        lastJackKey = JSON.stringify(o.jack.getState());
+        applyState(data);
       } else if (older && performance.now() - lastStateAt > 1000) {
         sendState(); // de afzender loopt achter: stuur de actuele wereld terug
       }
@@ -638,7 +677,10 @@ export function mountMultiplayer(o: Options) {
   }
   refreshChip();
 
-  window.addEventListener('pagehide', () => room.leave());
+  window.addEventListener('pagehide', () => {
+    if (room.isHost && rev !== savedRev) saveWorld(); // de laatste wijzigingen nog meegeven
+    room.leave();
+  });
 
   let tickAt = 0;
   let chipAt = 0;
@@ -742,6 +784,7 @@ export function mountMultiplayer(o: Options) {
       if (now - tickAt < TICK_MS) return;
       tickAt = now;
       if (room.status !== 'online') return;
+      onlineSince ||= now;
 
       sendPose();
 
@@ -761,6 +804,7 @@ export function mountMultiplayer(o: Options) {
       } else if (room.isHost && avatars.size && performance.now() - lastStateAt > HOST_RESEND_MS) {
         sendState();
       }
+      if (room.isHost && rev !== savedRev && now - savedAt > SAVE_MS && !room.congested) saveWorld();
     },
   };
 }

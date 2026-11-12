@@ -14,6 +14,9 @@ import { wmsSync } from './wmsSync';
 import { mountWmsPanel } from './wmsPanel';
 
 // Koppelt de magazijn-sim aan de WMS (poort + stand ophalen), de 3D-scène, de HUD en het toetsenbord.
+// De hal heeft zijn eigen voorraad, voor alle spelers dezelfde. De WMS hoort wat er gebeurt via scans en kan
+// dus afwijken; alleen open orders komen doorlopend uit de WMS. De voorraad van de WMS komt alleen in de hal
+// bij de allereerste start (als er nog geen bewaarde wereld is) en met de knop 'Hal resetten' (menu, WMS-API).
 // Toetsen: E = scannen / actie (bij de pc: de WMS-app bedienen). In het menu rechtsboven: L = API-log,
 // I = voorraad & orders, K = aanmelden bij de WMS-API.
 
@@ -56,6 +59,48 @@ export function mountWarehouse({
   const wmsSection = document.createElement('div');
   menu.addSection('wms', 'WMS-API', wmsSection, 2);
   mountWmsPanel(wmsSection);
+
+  // Reset: de hal weer gelijkzetten met de voorraad in de WMS (voor alle spelers).
+  const resetBox = document.createElement('div');
+  resetBox.style.cssText = 'margin-top:12px;padding-top:10px;border-top:1px solid #3a4047';
+  resetBox.innerHTML =
+    '<div style="margin-bottom:6px">De hal heeft zijn eigen voorraad, voor alle spelers dezelfde. De WMS hoort alleen via scans wat er ' +
+    'verandert en kan dus afwijken van wat er echt staat.</div>' +
+    '<button style="padding:6px 10px;border:0;border-radius:5px;background:#8a3b2e;color:#fff;font:inherit;cursor:pointer"></button>' +
+    '<div class="note" style="margin-top:6px;color:#9aa0a6"></div>';
+  const resetButton = resetBox.querySelector('button')!;
+  const resetNote = resetBox.querySelector<HTMLDivElement>('.note')!;
+  const RESET_LABEL = 'Hal resetten naar de WMS-voorraad';
+  resetButton.textContent = RESET_LABEL;
+  let resetArmed = 0;
+  resetButton.addEventListener('click', () => {
+    resetButton.blur();
+    // Twee keer klikken: de reset geldt voor iedereen en gooit weg wat fysiek afweek.
+    if (performance.now() - resetArmed > 5000) {
+      resetArmed = performance.now();
+      resetButton.textContent = 'Zeker weten? Klik nog een keer';
+      resetNote.textContent = 'Verplaatste pallets, lopende picks en wat er op de docks staat vervallen, voor alle spelers.';
+      setTimeout(() => performance.now() - resetArmed >= 5000 && (resetButton.textContent = RESET_LABEL), 5100);
+      return;
+    }
+    resetArmed = 0;
+    resetButton.textContent = RESET_LABEL;
+    resetNote.textContent = 'Bezig...';
+    resetToWms().then(
+      (n) => (resetNote.textContent = `De hal is gelijkgezet met de WMS (${n} voorraadregels).`),
+      (err) => (resetNote.textContent = `Reset mislukt: ${err instanceof Error ? err.message : err}`),
+    );
+  });
+  wmsSection.appendChild(resetBox);
+  const resetListeners: (() => void)[] = [];
+  /** Zet de hal gelijk met de voorraad en open orders in de WMS; geeft het aantal voorraadregels terug. */
+  async function resetToWms() {
+    const client = wms.client;
+    const [stock, orders] = await Promise.all([client.getStock(), client.getOpenOrders()]);
+    resetListeners.forEach((l) => l()); // eerst: wat op vorken of los op de vloer staat verdwijnt
+    sim.loadSnapshot(stock, orders, client.mode === 'live' ? 'de WMS' : 'de mock-WMS');
+    return stock.length;
+  }
   wms.onError(() => menu.notify('wms'));
   /** Wat E hier doet, voor de toetsprompt in beeld; null als er niets te doen is. */
   let action: { label: string; enabled: boolean } | null = null;
@@ -87,8 +132,8 @@ export function mountWarehouse({
   let masterOf: WmsClient | null = null;
   let masterAt = -Infinity;
   let locationsStamp = -1;
-  /** De client waarvan de hele wereld is overgenomen; bij een andere client (in- of uitloggen) gebeurt dat opnieuw. */
-  let loadedFrom: WmsClient | null = null;
+  /** Is de eerste stand uit de WMS binnen? Alleen dan, en alleen zonder bewaarde of gedeelde wereld, vult die de hal. */
+  let started = false;
   let polling = false;
   let lastPollAt = -Infinity;
   let lastError = '';
@@ -179,15 +224,16 @@ export function mountWarehouse({
         emit({ mode: client.mode, locations, items, stock, orders }, true);
       }
 
-      if (loadedFrom !== client) {
-        // Multiplayer: wie bij een lopend spel aanschuift neemt die wereld over en laadt bij de start niet opnieuw.
-        const joined = loadedFrom === null && sim.foreign;
-        loadedFrom = client;
-        if (!joined) sim.loadSnapshot(stock, orders, client.mode === 'live' ? 'de WMS' : 'de mock-WMS');
+      if (!started) {
+        // Allereerste start: is er (nog) geen wereld van een medespeler of van de broker, dan begint de hal met de
+        // voorraad uit de WMS. Komt de bewaarde wereld daarna alsnog binnen, dan vervangt die deze stand.
+        // Later in- of uitloggen laat de hal met rust: die is van de game, niet van de WMS.
+        started = true;
+        if (!sim.foreign) sim.loadSnapshot(stock, orders, client.mode === 'live' ? 'de WMS' : 'de mock-WMS');
       } else if (sim.authority && !mockOutOfStep() && sim.pending === 0 && sim.revision === revision) {
-        // Alleen de host haalt de stand binnen (de rest krijgt hem via de gedeelde wereld), en alleen als
+        // Alleen de host haalt de open orders binnen (de rest krijgt ze via de gedeelde wereld), en alleen als
         // er sinds het ophalen niets is gebeurd: anders zou een oude stand een verse handeling terugdraaien.
-        sim.syncFromWms(stock, orders);
+        sim.syncOrders(orders);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -223,12 +269,17 @@ export function mountWarehouse({
     /** Multiplayer: de gedeelde wereld lezen, overnemen en bepalen wie hem laat draaien. */
     shared: {
       state: () => sim.sharedState(),
-      apply(s: SharedState) {
+      apply(s: SharedState, saved = false) {
         sim.applyShared(s);
+        if (saved) sim.dropCarried();
         // Zonder eigen WMS gelden de artikelen van de wereld die je deelt (die van de WMS van de host).
         if (wms.client.mode === 'mock' && s.articles?.length) setArticles(s.articles);
       },
       setAuthority: sim.setAuthority,
+    },
+    /** De hal wordt gereset naar de WMS: wat op vorken of los op de vloer staat moet weg. */
+    onReset(l: () => void) {
+      resetListeners.push(l);
     },
     /** Voor de heftruck en de pompwagen: hele pallets uit en in de stellingen. */
     forkliftTake: sim.forkliftTake,

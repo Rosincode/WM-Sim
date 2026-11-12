@@ -8,6 +8,9 @@ import {
 import { offlineGateway, type WmsGateway, type WmsReply } from './wms';
 
 // De fysieke wereld van het magazijn: vrachtwagens, pallets, rolcontainers en wat er in de stellingen staat.
+// Die wereld is van de game en voor alle spelers dezelfde. De WMS is de administratie ervan: hij hoort wat
+// er gebeurt doordat spelers scannen, en kan dus achterlopen op of afwijken van wat er echt staat. Wat de WMS
+// aan voorraad heeft komt alleen in de hal bij de allereerste start en bij een bewuste reset (loadSnapshot).
 // De sim beslist niets wat van de WMS is: geen orders aanmaken, geen locatie-advies, geen pickverdeling,
 // geen voorraadcontroles. Elke handeling van de speler gaat eerst als vraag naar de WMS (src/sim/wms.ts);
 // pas na akkoord gebeurt hij fysiek. Weigert de WMS, dan gebeurt er niets en ziet de speler de melding.
@@ -951,7 +954,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     }
   }
 
-  // ========== WMS is leidend: voorraad en open orders komen uit de WMS ==========
+  // ========== De WMS: open orders komen uit de WMS, de voorraad alleen bij een reset ==========
 
   /** Alleen orders waar nog aan gewerkt moet worden (de WMS kent ook latere statussen, zie docs/wms/04). */
   const isOpen = (o: Order) => (o.status as string) === 'open' || (o.status as string) === 'picking';
@@ -963,51 +966,11 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     picks: [],
   });
 
-  /** Zet de stellingvoorraad gelijk aan de WMS, met wat fysiek anders staat: verplaatste pallets en lopende picks. */
+  /** Zet de stellingvoorraad gelijk aan de WMS (alleen bij een reset: zie loadSnapshot). */
   function setShelfStock(items: Item[]) {
     stock.clear();
     for (const it of items) if (isShelf(it.locationId) && it.qty > 0) add(it.locationId, it.sku, it.qty);
-    for (const m of moved.values()) {
-      add(m.locationId, m.sku, -m.qty);
-      if (m.at) add(m.at, m.sku, m.qty);
-    }
-    for (const o of orders) {
-      if (o.status !== 'picking') continue;
-      for (const p of o.picks) if (!p.booked) add(p.locationId, p.sku, -p.qty);
-    }
     palletize();
-  }
-
-  /**
-   * Zet de inslaglocaties gelijk aan de WMS: een ontvangst of correctie die in de WMS-app is geboekt staat
-   * daarna ook fysiek op het dock. Pallets die iemand heeft opgepakt tellen in de WMS nog mee op het dock.
-   */
-  function setDockStock(items: Item[]) {
-    for (const d of DOCKS) {
-      const lane = laneIn[d.index];
-      const want = new Map<string, number>();
-      const bump = (m: Map<string, number>, sku: string, qty: number) => m.set(sku, (m.get(sku) ?? 0) + qty);
-      for (const it of items) if (it.locationId === d.inId && it.qty > 0) bump(want, it.sku, it.qty);
-      for (const t of transit.values()) if (t.fromId === d.inId) bump(want, t.sku, -t.qty);
-      const have = new Map<string, number>();
-      for (const p of lane) if (p) bump(have, p.sku, p.qty);
-      // Te veel: pallets weghalen of kleiner maken
-      lane.forEach((p, i) => {
-        if (!p) return;
-        const over = (have.get(p.sku) ?? 0) - (want.get(p.sku) ?? 0);
-        if (over <= 0) return;
-        const take = Math.min(over, p.qty);
-        bump(have, p.sku, -take);
-        lane[i] = take === p.qty ? null : { ...p, qty: p.qty - take };
-      });
-      // Te weinig: een pallet erbij, zolang er plek is
-      for (const [sku, qty] of want) {
-        const short = qty - (have.get(sku) ?? 0);
-        if (short > 0 && lane.includes(null)) {
-          lane[lane.lastIndexOf(null)] = newPallet(sku, short);
-        }
-      }
-    }
   }
 
   /** Voorraad zoals hij nu in de hal staat (stellingen en inslaglocaties), voor wie de WMS niet zelf kan lezen. */
@@ -1024,23 +987,53 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     return list;
   }
 
-  /** Tussentijdse stand uit de WMS: voorraad (stellingen en docks) en open orders. Wat fysiek onderhanden is blijft staan. */
-  function syncFromWms(items: Item[], wmsOrders: Order[]) {
-    setShelfStock(items);
-    setDockStock(items);
+  /**
+   * Open orders uit de WMS: daar worden ze ingevoerd. De voorraad komt hier bewust niet mee: de hal heeft
+   * zijn eigen voorraad, en de WMS hoort alleen via scans wat daar verandert.
+   */
+  function syncOrders(wmsOrders: Order[]) {
     const open = wmsOrders.filter(isOpen);
     const ids = new Set(open.map((o) => o.id));
+    const before = JSON.stringify(orders);
     for (let i = orders.length - 1; i >= 0; i--) {
       if (orders[i].status === 'open' && !ids.has(orders[i].id)) orders.splice(i, 1); // elders afgehandeld of vervallen
     }
     for (const w of open) {
       const cur = order(w.id);
       if (!cur) orders.push(fromWms(w));
-      else if (cur.status === 'open') Object.assign(cur, fromWms(w));
+      // Een order waar al voor gepickt is (rolcontainer teruggevonden na een herstart) houdt wat erin ligt.
+      else if (cur.status === 'open' && cur.picks.length === 0) Object.assign(cur, fromWms(w));
     }
+    if (JSON.stringify(orders) !== before) touch();
   }
 
-  /** Begin (of opnieuw aanmelden): de hele wereld overnemen uit de WMS, ook wat er bij de docks staat. */
+  /**
+   * Na het laden van een bewaarde wereld draagt niemand nog iets: wat onderweg was toen de vorige spelers
+   * weggingen gaat terug naar waar het vandaan kwam, zodat er niets zoekraakt.
+   */
+  function dropCarried() {
+    carry = null;
+    for (const [id, t] of transit) {
+      const lane = laneIn[DOCKS.findIndex((d) => d.inId === t.fromId)];
+      if (lane?.includes(null)) lane[lane.lastIndexOf(null)] = { id, sku: t.sku, qty: t.qty };
+    }
+    transit.clear();
+    for (const o of orders) {
+      if (o.status === 'picking') o.status = 'open'; // de rolcontainer staat weer bij de andere, met wat er al in lag
+      else if (o.status === 'picked') {
+        const lane = laneOut[outDock]?.includes(null) ? laneOut[outDock] : laneOut.find((l) => l.includes(null));
+        if (!lane) continue;
+        lane[lane.indexOf(null)] = o.id;
+        o.status = 'staged';
+      }
+    }
+    touch();
+  }
+
+  /**
+   * Allereerste start of een bewuste reset: de hele hal gelijkzetten met de WMS, ook wat er bij de docks staat.
+   * Alles wat fysiek afweek (verplaatste pallets, lopende picks, wat spelers dragen) vervalt.
+   */
   function loadSnapshot(items: Item[], wmsOrders: Order[], source: string) {
     laneIn.forEach((lane) => lane.fill(null));
     laneOut.forEach((lane) => lane.fill(null));
@@ -1048,6 +1041,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     racked.clear();
     transit.clear();
     carry = null;
+    foreign = false; // deze wereld komt uit de eigen WMS
     if (trucks.out) trucks.out.loaded = [];
     orders.length = 0;
     seeding = true; // de voorraad waarmee de hal begint heeft al palletstickers
@@ -1072,7 +1066,8 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     objective,
     scan,
     loadSnapshot,
-    syncFromWms,
+    syncOrders,
+    dropCarried,
     get trucks() { return trucks; },
     get laneIn() { return laneIn; },
     get laneOut() { return laneOut; },

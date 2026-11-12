@@ -30,6 +30,9 @@ export function createRoom(roomName: string) {
   const departed = new Set<string>();
   const handlers: Handler[] = [];
   const leaveHandlers: ((peer: Peer) => void)[] = [];
+  const worldHandlers: ((data: unknown) => void)[] = [];
+  /** Onderwerp van de bewaarde wereld: de broker houdt het laatste bericht vast, ook als niemand meer speelt. */
+  const worldTopic = `${base}/world/last`;
 
   const open = new Set<MqttConnection>();
   const failed = new Set<string>();
@@ -54,6 +57,16 @@ export function createRoom(roomName: string) {
     if (!topic.startsWith(`${base}/`)) return;
     const [kind, from] = topic.slice(base.length + 1).split('/');
     if (!kind || !from || from === id) return;
+    if (kind === 'world') {
+      // De bewaarde wereld: komt binnen bij het verbinden, en telkens als een andere speler hem bewaart.
+      try {
+        const saved = JSON.parse(payload) as { by?: unknown; d?: unknown };
+        if (saved && saved.by !== id) worldHandlers.forEach((h) => h(saved.d));
+      } catch (err) {
+        console.warn('[multiplayer] bewaarde wereld genegeerd:', err);
+      }
+      return;
+    }
     // Een id wordt nooit hergebruikt (elke keer laden geeft een nieuw id). Berichten van een vertrokken
     // speler die via een tragere broker nog nadruppelen, mogen hem dus niet opnieuw laten verschijnen.
     if (departed.has(from)) return;
@@ -151,6 +164,18 @@ export function createRoom(roomName: string) {
     },
     onLeave(h: (peer: Peer) => void) {
       leaveHandlers.push(h);
+    },
+    /** De laatst bewaarde wereld van deze kamer (zie saveWorld). */
+    onWorld(h: (data: unknown) => void) {
+      worldHandlers.push(h);
+    },
+    /**
+     * Bewaart de wereld op de brokers, zodat de volgende speler verdergaat waar de vorige ophield.
+     * De brokers zijn publiek: iedereen kan dit bericht lezen en overschrijven, en een broker kan het kwijtraken.
+     */
+    saveWorld(data: unknown) {
+      const payload = JSON.stringify({ by: id, d: data });
+      for (const c of open) c.publish(worldTopic, payload, true);
     },
     /** Elke frame: spelers die niets meer van zich laten horen verdwijnen. */
     update() {

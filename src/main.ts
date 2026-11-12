@@ -284,6 +284,12 @@ function holdJack(on: boolean) {
   pushing = on;
   view.setBody(on); // roept ook applyMode aan
 }
+// Reset van de hal naar de WMS: ook wat op de vorken of los op de vloer staat verdwijnt
+warehouse.onReset(() => {
+  forklift.applyState({ ...forklift.getState(), load: null, loose: [] });
+  jack.applyState({ ...jack.getState(), load: null });
+  refreshHall();
+});
 const jackDistance = () => Math.hypot(player.position.x - jack.group.position.x, player.position.z - jack.group.position.z);
 const nearJack = () => jackDistance() < 2.2 && player.position.y < 1;
 if (import.meta.env.DEV) Object.assign((window as unknown as { wmDebug: object }).wmDebug, { jack });

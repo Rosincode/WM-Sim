@@ -143,8 +143,9 @@ export function connectMqtt(o: MqttOptions) {
       packetId = (packetId % 65535) + 1;
       send(packet(0x82, Uint8Array.of(packetId >> 8, packetId & 255), str(filter), Uint8Array.of(0)));
     },
-    publish(topic: string, payload: string) {
-      if (ready) send(packet(0x30, str(topic), enc.encode(payload)));
+    /** @param retain true: de broker bewaart dit bericht en geeft het aan iedereen die zich later abonneert. */
+    publish(topic: string, payload: string, retain = false) {
+      if (ready) send(packet(retain ? 0x31 : 0x30, str(topic), enc.encode(payload)));
     },
     close: finish,
   };
