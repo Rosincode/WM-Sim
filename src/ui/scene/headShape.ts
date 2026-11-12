@@ -9,13 +9,16 @@
  */
 export const HEAD = { hx: 0.078, hy: 0.1175, front: 0.094, back: 0.104, y: 0.125, z: 0.012 };
 
-// De foto is een staand beeld (3:4). Daarin staat het hoofd van kruin (top) tot kin (chin), gemeten vanaf de bovenrand.
-const TOP_V = 0.06;
-const CHIN_V = 0.92;
+// De foto is een staand beeld (3:4) met ruimte rond het hoofd: boven de kruin en opzij voor het haar, onder de kin
+// voor de nek. Het hoofd staat erin van kruin (top) tot kin (chin), gemeten vanaf de bovenrand.
+const TOP_V = 0.2;
+const CHIN_V = 0.82;
 const FRAME_H = (2 * HEAD.hy) / (CHIN_V - TOP_V);
 const FRAME_W = FRAME_H * 0.75;
 /** Het fotobeeld op het hoofd: kruin en kin (v), en de afmetingen in meters. */
 export const PHOTO = { top: TOP_V, chin: CHIN_V, w: FRAME_W, h: FRAME_H };
+/** Foto's van vóór de ruimere uitsnede (120×160): daarin vulde het hoofd het beeld bijna helemaal. */
+export const OLD_PHOTO = { top: 0.06, h: (2 * HEAD.hy) / 0.86, w: ((2 * HEAD.hy) / 0.86) * 0.75 };
 
 /** Plek op de foto (u naar rechts, v omlaag, beide 0..1) van een punt op het hoofd. */
 export const photoUV = (x: number, y: number) => ({ u: 0.5 + x / FRAME_W, v: TOP_V + (HEAD.hy - y) / FRAME_H });
@@ -23,37 +26,41 @@ export const photoUV = (x: number, y: number) => ({ u: 0.5 + x / FRAME_W, v: TOP
 /** Hoogte op het hoofd van een plek op de foto. */
 export const headY = (v: number) => HEAD.hy - (v - TOP_V) * FRAME_H;
 
-const EYE_X = 0.031;
+// Plek van ogen, neuspunt en mond op het hoofd. De verhoudingen (t.o.v. de afstand ogen-kin) zijn het gemiddelde
+// van echte gezichten, zodat een foto zo min mogelijk vervormd hoeft te worden om te passen.
+const EYE_X = 0.0316;
+const EYE_Y = 0;
+const NOSE_Y = -0.04;
+const MOUTH_Y = -0.0676;
 /** Waar op de foto de ogen horen: hoogte, en afstand van elk oog tot het midden. */
-export const EYES = { v: 0.49, du: EYE_X / FRAME_W };
+export const EYES = { v: photoUV(0, EYE_Y).v, du: EYE_X / FRAME_W };
 /** Hoogte op de foto van de neuspunt en van de mond. */
-export const NOSE_V = 0.64;
-export const MOUTH_V = 0.745;
+export const NOSE_V = photoUV(0, NOSE_Y).v;
+export const MOUTH_V = photoUV(0, MOUTH_Y).v;
 
-const EYE_Y = headY(EYES.v);
-const NOSE_Y = headY(NOSE_V);
-const MOUTH_Y = headY(MOUTH_V);
-
-/** Het hoofd loopt naar de kin smaller toe. g = hoogte, -1 (kin) .. 1 (kruin); geeft de factor op de breedte. */
-const taper = (g: number) => 1 - 0.3 * Math.max(0, -g) ** 2;
+// Onder de ogen is het hoofd geen ei maar voller: een brede kaak en een stompe kin (superellips).
+const JAW = 2.5;
+const full = (g: number) => (g >= 0 ? Math.sqrt(1 - g * g) : (1 - (-g) ** JAW) ** (1 / JAW));
+/** Factor op de breedte en diepte t.o.v. een bol, op hoogte g (-1 kin .. 1 kruin). */
+const blunt = (g: number) => (g >= 0 ? 1 : full(g) / Math.max(1e-4, Math.sqrt(1 - g * g)));
 
 /** Halve breedte van het hoofd (recht van voren gezien) op hoogte y. */
 export function halfWidth(y: number) {
-  const g = Math.max(-1, Math.min(1, y / HEAD.hy));
-  return HEAD.hx * Math.sqrt(1 - g * g) * taper(g);
+  return HEAD.hx * full(Math.max(-1, Math.min(1, y / HEAD.hy)));
 }
 
 /**
- * Punt op het hoofd in de richting (dx, dy, dz) vanuit het midden (lengte 1). Een ei-vorm met een smallere
+ * Punt op het hoofd in de richting (dx, dy, dz) vanuit het midden (lengte 1). Een ei-vorm met een volle
  * kaak, een kin die naar voren steekt, een achterhoofd dat naar de nek toe wegloopt, en in het gezicht een
  * neus, oogkassen, lippen en kin. Opzij en omhoog (x, y) volgen alleen uit dx en dy, zodat de foto er recht op past.
  */
 export function headSurface(dx: number, dy: number, dz: number, out: { x: number; y: number; z: number }) {
   const t = Math.max(0, -dy);
-  const x = HEAD.hx * dx * taper(dy);
+  const b = blunt(dy);
+  const x = HEAD.hx * dx * b;
   const y = HEAD.hy * dy;
-  let z = dz >= 0 ? HEAD.front * dz * (1 - 0.12 * t * t) : HEAD.back * dz * (1 - 0.5 * t * t);
-  z += 0.05 * t ** 2.2; // kaak en kin naar voren, de onderkant van de schedel naar de nek
+  let z = dz >= 0 ? HEAD.front * dz * b * (1 - 0.1 * t * t) : HEAD.back * dz * b * (1 - 0.5 * t * t);
+  z += 0.026 * t ** 2.2; // kaak en kin naar voren, de onderkant van de schedel naar de nek
   if (dz > 0) {
     const k = Math.min(1, dz / 0.35);
     const face = k * k * (3 - 2 * k);
@@ -73,7 +80,7 @@ export function headSurface(dx: number, dy: number, dz: number, out: { x: number
 /** Punt op de voorkant van het hoofd (het gezicht) recht voor (x, y). */
 export function headFront(x: number, y: number, out = { x: 0, y: 0, z: 0 }) {
   const dy = Math.max(-1, Math.min(1, y / HEAD.hy));
-  const dx = x / (HEAD.hx * taper(dy));
+  const dx = x / (HEAD.hx * blunt(dy));
   return headSurface(dx, dy, Math.sqrt(Math.max(0, 1 - dx * dx - dy * dy)), out);
 }
 
@@ -87,3 +94,17 @@ export function headOutline(steps = 40): [number, number][] {
   }
   return [...right, ...right.slice(1, -1).reverse().map(([u, v]): [number, number] => [1 - u, v])];
 }
+
+/**
+ * Waar herkenningspunten van een gezicht op het hoofd horen (x opzij, y omhoog; links/rechts gespiegeld): hiermee
+ * wordt een foto zo bijgetrokken dat ogen, neus, mond, kin en de rand van het gezicht op hun plek op het hoofd vallen.
+ */
+export const FACE_POINTS = {
+  eye: [EYE_X, EYE_Y],
+  nose: [0, NOSE_Y],
+  mouth: [0, MOUTH_Y],
+  chin: [0, 0.003 - HEAD.hy],
+  forehead: [0, 0.051],
+  side: [0.071, -0.017],
+  jaw: [0.0578, -0.0785],
+} satisfies Record<string, [number, number]>;

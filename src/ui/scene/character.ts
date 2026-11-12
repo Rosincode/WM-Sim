@@ -8,7 +8,11 @@ import { EYES, HEAD, MOUTH_V, halfWidth, headFront, headSurface, headY } from '.
 // draaiprofielen (ledematen, romp) en een gevormd hoofd. Zonder foto draagt hij een helm; met een foto is het
 // hoofd dat van de speler: gezicht, huidskleur en haar (of kaal) komen van de foto, zie headPhoto.ts.
 
-const HIP_HEIGHT = 0.9;
+const HIP_HEIGHT = 0.916; // heupen (draaipunt van de figuur) boven de grond als hij rechtop staat
+const HIP_DROP = 0.02; // de heupgewrichten zitten iets onder dat draaipunt
+const ANKLE = 0.06; // enkel boven de zool
+const HEEL = 0.06; // hiel achter de enkel
+const TOE = 0.15; // punt vóór de enkel waarover de voet afrolt
 const THIGH = 0.43;
 const SHIN = 0.41;
 const UPPER_ARM = 0.29;
@@ -52,9 +56,9 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   const mat = (color: string, roughness = 0.85, metalness = 0) => new THREE.MeshStandardMaterial({ color, roughness, metalness });
   const vest = mat(colors.vest ?? '#f0590f', 0.8);
   const stripe = new THREE.MeshStandardMaterial({ color: '#e4e7e2', roughness: 0.3, metalness: 0.35, side: THREE.DoubleSide });
+  const dark = mat('#17181a', 0.6);
   const shirt = mat('#243349');
   const trousers = mat('#2c313b', 0.9);
-  const dark = mat('#17181a', 0.6);
   const sole = mat('#0e0e0f', 0.9);
   const glove = mat('#4a4d52', 0.9);
   const skin = mat('#d6a07c', 0.65);
@@ -78,57 +82,151 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   const lathe = (pts: [number, number][], m: THREE.Material, parent: THREE.Object3D) =>
     mesh(new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), 24), m, parent);
 
+  /**
+   * Vorm uit doorsnedes boven elkaar: per hoogte y een halve breedte (w), de diepte naar voren (f) en naar achteren
+   * (b) en hoe hoekig de doorsnede is (n: 2 = ellips, hoger = vierkanter). Tussen de doorsnedes loopt de vorm vloeiend
+   * door. Geeft de geometrie en `at`: de doorsnede op een willekeurige hoogte.
+   */
+  type Ring = { y: number; w: number; f: number; b: number; n?: number };
+  function loft(rings: Ring[], grow = 0, from = rings[0].y, to = rings[rings.length - 1].y, closed = true) {
+    const key = (k: keyof Ring, i: number) => rings[THREE.MathUtils.clamp(i, 0, rings.length - 1)][k] ?? 2.2;
+    const at = (y: number) => {
+      let i = 0;
+      while (i < rings.length - 2 && y > rings[i + 1].y) i++;
+      const t = THREE.MathUtils.clamp((y - rings[i].y) / (rings[i + 1].y - rings[i].y), 0, 1);
+      // Catmull-Rom tussen de doorsnedes
+      const mix = (k: keyof Ring) => {
+        const [p0, p1, p2, p3] = [key(k, i - 1), key(k, i), key(k, i + 1), key(k, i + 2)];
+        return 0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (3 * p1 - p0 - 3 * p2 + p3) * t * t * t);
+      };
+      return { w: mix('w') + grow, f: mix('f') + grow, b: mix('b') + grow, n: mix('n') };
+    };
+    const SEG = 64;
+    const rows = Math.max(2, Math.round((to - from) / 0.008));
+    const pos: number[] = [];
+    const index: number[] = [];
+    for (let j = 0; j <= rows; j++) {
+      const y = from + ((to - from) * j) / rows;
+      const r = at(y);
+      for (let i = 0; i < SEG; i++) {
+        const a = (i / SEG) * Math.PI * 2;
+        const c = Math.cos(a);
+        const sn = Math.sin(a);
+        pos.push(r.w * Math.sign(c) * Math.abs(c) ** (2 / r.n), y, (sn >= 0 ? r.f : r.b) * Math.sign(sn) * Math.abs(sn) ** (2 / r.n));
+        if (j < rows) {
+          const p = j * SEG + i;
+          const q = j * SEG + ((i + 1) % SEG);
+          index.push(p, p + SEG, q, q, p + SEG, q + SEG);
+        }
+      }
+    }
+    if (closed) {
+      for (const [j, y] of [[0, from], [rows, to]] as const) {
+        const centre = pos.length / 3;
+        pos.push(0, y, 0);
+        for (let i = 0; i < SEG; i++) {
+          const p = j * SEG + i;
+          const q = j * SEG + ((i + 1) % SEG);
+          if (j) index.push(p, centre, q);
+          else index.push(q, centre, p);
+        }
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setIndex(index);
+    geo.computeVertexNormals();
+    return { geo, at };
+  }
+
   // Heupen: alles hangt hieraan, zodat het lichaam als geheel kan deinen en leunen.
   const rig = pivot(group, 0, HIP_HEIGHT, 0);
-  const pelvis = lathe([[0.001, -0.17], [0.09, -0.16], [0.148, -0.1], [0.162, -0.02], [0.158, 0.05]], trousers, rig);
-  pelvis.scale.set(1.05, 1, 0.55);
+  mesh(
+    loft([
+      { y: -0.185, w: 0.04, f: 0.04, b: 0.04 },
+      { y: -0.15, w: 0.125, f: 0.085, b: 0.092 },
+      { y: -0.09, w: 0.168, f: 0.1, b: 0.112 },
+      { y: -0.03, w: 0.168, f: 0.102, b: 0.112 },
+      { y: 0.05, w: 0.16, f: 0.098, b: 0.1 },
+    ]).geo,
+    trousers,
+    rig,
+  );
 
-  // Romp: draaiprofiel van heup naar schouders, afgeplat tot een borstkas. Het hesje is de romp zelf en valt over de heupen.
-  const SX = 1.08;
-  const SZ = 0.64;
-  const PROFILE: [number, number][] = [
-    [0.001, -0.09], [0.176, -0.1], [0.172, -0.02], [0.16, 0.08], [0.158, 0.16], [0.172, 0.3], [0.19, 0.43], [0.186, 0.5], [0.15, 0.556], [0.075, 0.59], [0.001, 0.6],
+  // Romp: het hesje is de romp zelf en valt over de heupen. Taille, borstkas, schouders die aflopen naar de nek.
+  const VEST: Ring[] = [
+    { y: -0.055, w: 0.186, f: 0.116, b: 0.12 },
+    { y: 0.0, w: 0.183, f: 0.114, b: 0.117 },
+    { y: 0.1, w: 0.172, f: 0.108, b: 0.102 },
+    { y: 0.22, w: 0.174, f: 0.112, b: 0.1, n: 2.3 },
+    { y: 0.34, w: 0.188, f: 0.122, b: 0.106, n: 2.5 },
+    { y: 0.43, w: 0.197, f: 0.123, b: 0.11, n: 2.5 },
+    { y: 0.49, w: 0.198, f: 0.11, b: 0.106, n: 2.4 },
+    { y: 0.535, w: 0.168, f: 0.088, b: 0.094 },
+    { y: 0.565, w: 0.112, f: 0.068, b: 0.078 },
+    { y: 0.592, w: 0.064, f: 0.056, b: 0.06 },
   ];
-  const radiusAt = (y: number) => {
-    for (let i = 1; i < PROFILE.length; i++) {
-      const [r0, y0] = PROFILE[i - 1];
-      const [r1, y1] = PROFILE[i];
-      if (y <= y1) return r0 + ((r1 - r0) * (y - y0)) / (y1 - y0);
-    }
-    return 0;
-  };
   const torso = pivot(rig);
   const shell = pivot(torso);
-  shell.scale.set(SX, 1, SZ);
-  lathe(PROFILE, vest, shell);
-  // Reflecterende banden: één rond de taille, twee over de schouders
-  lathe([[radiusAt(0) + 0.004, 0], [radiusAt(0.045) + 0.004, 0.045]], stripe, shell);
-  for (const side of [1, -1]) {
-    const x = side * 0.088;
-    const onSurface = (y: number, dir: number) => {
-      const r = radiusAt(y) + 0.004;
-      return new THREE.Vector3(x, y, dir * SZ * r * Math.sqrt(Math.max(0, 1 - (x / (SX * r)) ** 2)));
-    };
-    const ys = [0.045, 0.15, 0.27, 0.38, 0.46, 0.52, 0.55];
-    const path = new THREE.CatmullRomCurve3([
-      ...ys.map((y) => onSurface(y, 1)),
-      new THREE.Vector3(x, 0.574, 0),
-      ...ys.reverse().map((y) => onSurface(y, -1)),
-    ]);
-    mesh(new THREE.TubeGeometry(path, 28, 0.015, 6), stripe, torso).scale.set(1, 1, 1);
+  const body = loft(VEST);
+  mesh(body.geo, vest, shell);
+  /** Punt op het hesje (iets erboven) op hoogte y, x opzij; voor- of achterkant. */
+  const onVest = (x: number, y: number, front: boolean, lift = 0.003) => {
+    const r = body.at(y);
+    const k = Math.max(0, 1 - Math.abs(x / (r.w + lift)) ** r.n) ** (1 / r.n);
+    return new THREE.Vector3(x, y, front ? (r.f + lift) * k : -(r.b + lift) * k);
+  };
+  /** Band die over het hesje loopt van `y0` omhoog; met `over`: over de schouder en langs de rug weer omlaag. */
+  function band(x: number, width: number, y0: number, y1: number, over: boolean, m: THREE.Material) {
+    const pos: number[] = [];
+    const index: number[] = [];
+    const edges = [x - width / 2, x + width / 2];
+    // elke rand loopt tot waar het hesje daar ophoudt (de schouder)
+    const tops = edges.map((e) => {
+      if (!over) return y1;
+      let lo = y0;
+      let hi = y1;
+      for (let i = 0; i < 24; i++) {
+        const mid = (lo + hi) / 2;
+        if (body.at(mid).w + 0.003 > Math.abs(e) * 1.001) lo = mid;
+        else hi = mid;
+      }
+      return lo;
+    });
+    const N = 30;
+    const steps = over ? 2 * N : N;
+    for (let i = 0; i <= steps; i++) {
+      const front = i <= N;
+      const t = (front ? i : steps - i) / N;
+      edges.forEach((e, k) => {
+        const p = onVest(e, y0 + (tops[k] - y0) * (1 - (1 - t) ** 1.6), front); // dichter op elkaar bij de schouder
+        pos.push(p.x, p.y + 0.002 * t, p.z);
+      });
+      if (i < steps) index.push(i * 2, i * 2 + 1, i * 2 + 2, i * 2 + 1, i * 2 + 3, i * 2 + 2);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setIndex(index);
+    geo.computeVertexNormals();
+    return mesh(geo, m, shell);
   }
+  // Reflecterende banden: één rond de taille, twee over de schouders; rits midden voor.
+  mesh(loft(VEST, 0.003, 0, 0.045, false).geo, stripe, shell);
+  for (const side of [1, -1]) band(side * 0.086, 0.036, 0.045, 0.59, true, stripe);
+  band(0, 0.009, -0.053, 0.575, false, dark);
   // Kraag van het shirt en de nek
-  mesh(new THREE.CylinderGeometry(0.06, 0.084, 0.045, 20), shirt, torso, 0, 0.578, 0.004);
-  const neck = mesh(new THREE.CylinderGeometry(0.047, 0.055, 0.13, 18), skin, torso, 0, 0.63, 0.002);
+  mesh(new THREE.CylinderGeometry(0.058, 0.072, 0.03, 20), shirt, torso, 0, 0.59, 0.002);
+  const neck = lathe([[0.062, -0.075], [0.054, -0.035], [0.049, 0.01], [0.049, 0.065]], skin, torso);
+  neck.position.set(0, 0.63, 0.002);
   neck.rotation.x = 0.1;
+  neck.scale.z = 1.08;
 
   // Hoofd: een bol die tot hoofd is gevormd (headShape.ts). De richting van elk punt vanuit het midden blijft
   // bewaard, zodat de vorm opnieuw kan worden opgebouwd als er haar bij komt.
   const head = pivot(torso, 0, 0.62, 0);
   const skull = pivot(head, 0, HEAD.y, HEAD.z);
-  const SEG_W = 80;
-  const SEG_H = 56;
-  const HAIR = 0.014; // dikte van het haar
+  const SEG_W = 112;
+  const SEG_H = 80;
   const headGeo = new THREE.SphereGeometry(1, SEG_W, SEG_H, -Math.PI / 2); // naad achterop
   const dirs = headGeo.attributes.position.array.slice();
   const pt = { x: 0, y: 0, z: 0 };
@@ -139,7 +237,7 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
       const dy = dirs[i * 3 + 1];
       const dz = dirs[i * 3 + 2];
       headSurface(dx, dy, dz, pt);
-      const h = hairAt ? HAIR * hairAt(dx, dy, dz) : 0;
+      const h = hairAt ? hairAt(dx, dy, dz) : 0;
       if (h > 0) {
         // haar ligt op het hoofd: naar buiten langs de normaal
         const nx = dx / HEAD.hx;
@@ -182,15 +280,17 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   });
   // Het gewone gezicht (zonder foto): ogen, wenkbrauwen en mond; de neus zit in de vorm van het hoofd.
   const features: THREE.Object3D[] = [];
+  const white = mat('#f1efe9', 0.5);
   const eyeY = headY(EYES.v);
   for (const side of [1, -1]) {
     const e = headFront(side * 0.031, eyeY);
-    const eye = ball(0.0095, dark, skull, e.x, e.y, e.z - 0.002);
-    eye.scale.set(1, 0.85, 0.6);
+    const eye = ball(0.0115, white, skull, e.x, e.y, e.z - 0.004);
+    eye.scale.set(1.15, 0.72, 0.6);
+    features.push(eye, ball(0.005, dark, skull, e.x, e.y, e.z + 0.0018));
     const b = headFront(side * 0.033, eyeY + 0.021);
     const brow = mesh(new THREE.CapsuleGeometry(0.0038, 0.022, 4, 8), dark, skull, b.x, b.y, b.z);
     brow.rotation.set(0, side * 0.35, Math.PI / 2 - side * 0.12);
-    features.push(eye, brow);
+    features.push(brow);
   }
   const lips = headFront(0, headY(MOUTH_V));
   const mouth = mesh(new THREE.CapsuleGeometry(0.0035, 0.03, 4, 8), mat('#9a5c4c', 0.7), skull, lips.x, lips.y, lips.z);
@@ -198,9 +298,7 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   features.push(mouth);
   // Lang haar valt achter de nek tot op de schouders
   const hairMat = mat('#2a2018', 0.8);
-  const drape = mesh(new THREE.SphereGeometry(1, 20, 14), hairMat, skull, 0, -0.13, -0.078);
-  drape.scale.set(0.086, 0.13, 0.046);
-  drape.rotation.x = 0.28;
+  const drape = lathe([[0.001, -0.1], [1, 0]], hairMat, skull); // de vorm volgt uit de foto, zie setFace
   drape.visible = false;
   // Helm (alleen zonder foto: met een foto is het eigen haar te zien)
   const helm = pivot(skull, 0, 0.048, -0.004);
@@ -326,7 +424,7 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   }
 
   function leg(side: number) {
-    const hip = pivot(rig, side * 0.094, -0.02, 0);
+    const hip = pivot(rig, side * 0.094, -HIP_DROP, 0);
     // Werkbroek: bovenbeen, knie, kuit (iets naar achteren) en een zoom op de schoen
     limb([[0.084, 0], [0.088, -0.07], [0.085, -0.18], [0.075, -0.31], [0.068, -THIGH]], trousers, hip);
     const knee = pivot(hip, 0, -THIGH, 0);
@@ -335,7 +433,7 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
     // Veiligheidsschoen: hoge hiel en wreef, lage ronde neus, zool eronder
     mesh(shoeGeo, dark, foot);
     mesh(soleGeo, sole, foot);
-    return { hip, knee, foot };
+    return { side, hip, knee, foot };
   }
 
   const shoeGeo = shoe(0.045, (dz) => 0.078 - 0.03 * THREE.MathUtils.smoothstep(dz, -0.1, 0.6), -0.042, 0.004);
@@ -376,6 +474,47 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   let seat = 0; // 0..1 overgang naar zithouding
   let carry = 0;
   let air = 0;
+  let hipY = HIP_HEIGHT - HIP_DROP; // hoogte van de heupgewrichten
+  let land = 0; // 1 vlak na het neerkomen: door de knieën
+  let lean = 0; // voorover bij optrekken, achterover bij afremmen
+  let roll = 0; // de bocht in hangen
+  let prevYaw = 0;
+  let prevSpeed = 0;
+  let wasAir = false;
+
+  /**
+   * Waar de enkel is op een plek in de pas (ph 0..1; 0 = de voet komt neer): z vóór de heup, y boven de grond, en
+   * hoe de voet gekanteld is (pitch, + = hiel omhoog). Tijdens het staan (ph < duty) blijft de voet op zijn plek op
+   * de grond terwijl het lichaam er `stride` meter overheen gaat: hij komt neer op de hiel, ligt vlak en rolt af
+   * over de tenen. Daarna zwaait hij naar voren, `lift` hoog.
+   */
+  type Foot = { z: number; y: number; pitch: number; stance: boolean };
+  const feet: Foot[] = [0, 1].map(() => ({ z: 0, y: ANKLE, pitch: 0, stance: true }));
+  const from: Foot = { z: 0, y: 0, pitch: 0, stance: true };
+  const to: Foot = { z: 0, y: 0, pitch: 0, stance: true };
+  function planted(s: number, stride: number, strike: number, out: Foot) {
+    const heel = Math.min(0.36 * stride, 0.34) - HEEL - stride * s; // de hiel als de voet vlak zou staan
+    const k = Math.min(1, stride / 0.75);
+    const pitch = s < 0.18 ? -strike * k * (1 - s / 0.18) : s > 0.45 ? 0.95 * k * ((s - 0.45) / 0.55) ** 2 : 0;
+    const c = Math.cos(pitch);
+    const sn = Math.sin(Math.abs(pitch));
+    out.z = pitch <= 0 ? heel + HEEL * c - ANKLE * sn : heel + HEEL + TOE - TOE * c + ANKLE * sn;
+    out.y = (pitch <= 0 ? HEEL : TOE) * sn + ANKLE * c;
+    out.pitch = pitch;
+    out.stance = true;
+  }
+  function footAt(ph: number, duty: number, stride: number, strike: number, lift: number, out: Foot) {
+    if (ph < duty) return planted(ph / duty, stride, strike, out);
+    const u = (ph - duty) / (1 - duty);
+    planted(1, stride, strike, from);
+    planted(0, stride, strike, to);
+    const e = u * u * (3 - 2 * u);
+    out.z = from.z + (to.z - from.z) * e;
+    out.y = from.y + (to.y - from.y) * e + lift * Math.sin(Math.PI * u ** 0.8);
+    out.pitch = from.pitch + (to.pitch - from.pitch) * THREE.MathUtils.smoothstep(u, 0.1, 0.85);
+    out.stance = false;
+  }
+  const LEG_MAX = THIGH + SHIN - 0.004; // nooit helemaal gestrekt
 
   const ease = (cur: number, target: number, dt: number, rate: number) => cur + (target - cur) * (1 - Math.exp(-dt * rate));
 
@@ -401,33 +540,68 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
     air = ease(air, !state.seated && (state.airborne ?? p.y > 0.02) ? 1 : 0, dt, 14);
 
     const abs = Math.abs(speed);
-    const gait = THREE.MathUtils.smoothstep(abs, 0.15, 1.2) * (1 - seat); // 0 = staan, 1 = lopen
-    const run = THREE.MathUtils.smoothstep(abs, 5.6, 8.5); // 0 = lopen, 1 = rennen
-    // Pasfrequentie groeit minder hard dan de snelheid (langere passen), anders wordt het trippelen.
-    phase += Math.sign(speed) * 0.8 * Math.pow(abs, 0.42) * Math.PI * 2 * dt * (abs > 0.05 ? 1 : 0);
-
-    const legAmp = (0.5 + 0.35 * run) * gait;
-    const kneeAmp = (0.95 + 0.55 * run) * gait;
-    const armAmp = (0.5 + 0.45 * run) * gait * (1 - carry);
+    const gait = THREE.MathUtils.smoothstep(abs, 0.1, 0.7) * (1 - seat); // 0 = staan, 1 = in beweging
+    const run = THREE.MathUtils.smoothstep(abs, 2, 4.2); // 0 = lopen, 1 = rennen (met zweeffase)
+    const sprint = THREE.MathUtils.smoothstep(abs, 5.5, 9);
+    // Pasfrequentie (hele passen per seconde), welk deel van de pas een voet aan de grond staat, en hoe ver het
+    // lichaam in die tijd over de voet heen gaat: zo staan de voeten stil op de grond in plaats van te glijden.
+    const freq = THREE.MathUtils.lerp(0.8 * Math.pow(abs, 0.42), 1.5 + 0.19 * (abs - 5), run);
+    const duty = THREE.MathUtils.lerp(0.62, Math.max(0.2, 0.29 - 0.0175 * (abs - 5)), run);
+    const stride = Math.min((abs * duty) / Math.max(freq, 0.1), 1.05) * (1 - seat);
+    phase += Math.sign(speed) * freq * dt * (abs > 0.05 ? 1 : 0);
+    phase -= Math.floor(phase);
+    const turn = Math.PI * 2 * phase;
     const breathe = Math.sin(time * 1.6);
+    const idle = 1 - gait;
+
+    // Optrekken, afremmen, bochten en neerkomen
+    const yaw = group.rotation.y;
+    const yawRate = dt > 0 ? Math.atan2(Math.sin(yaw - prevYaw), Math.cos(yaw - prevYaw)) / dt : 0;
+    const accel = dt > 0 ? (speed - prevSpeed) / dt : 0;
+    prevYaw = yaw;
+    prevSpeed = speed;
+    lean = ease(lean, THREE.MathUtils.clamp(accel * 0.012, -0.1, 0.12), dt, 8);
+    roll = ease(roll, THREE.MathUtils.clamp(-yawRate * abs * 0.012, -0.14, 0.14), dt, 6);
+    const flying = air > 0.5;
+    if (wasAir && !flying) land = 1;
+    wasAir = flying;
+    land = ease(land, 0, dt, 7);
+
+    // Voeten: waar ze horen te staan
+    const strike = THREE.MathUtils.lerp(0.28, 0.06, run);
+    const lift = THREE.MathUtils.lerp(0.05 + 0.04 * gait, 0.3 + 0.16 * sprint, run) * gait;
+    feet.forEach((f, i) => footAt((phase + i * 0.5) % 1, duty, stride, strike, lift, f));
+    // Heupen: lopend zo hoog als het been dat staat toelaat (het hoogst boven de voet, het laagst met beide voeten
+    // aan de grond); rennend veren ze in op de landing en komen ze los in de zweeffase.
+    let high = HIP_HEIGHT - HIP_DROP - 0.012 * gait;
+    for (const f of feet) if (f.stance) high = Math.min(high, f.y + Math.sqrt(Math.max(0.3, LEG_MAX * LEG_MAX - f.z * f.z)));
+    const bounce = HIP_HEIGHT - HIP_DROP - 0.07 - 0.035 * Math.cos(2 * turn - Math.PI * 2 * duty);
+    const standHip = THREE.MathUtils.lerp(high, bounce, run * gait) - 0.1 * land * (1 - air) + 0.004 * breathe * idle;
+    hipY = ease(hipY, standHip, dt, 30);
+    const seatY = (state.seatHipY ?? 0.5) - p.y;
+    rig.position.y = THREE.MathUtils.lerp(hipY + HIP_DROP, seatY, seat);
 
     legs.forEach((l, i) => {
-      const ph = phase + i * Math.PI;
-      const swing = Math.sin(ph); // + = been naar voren
-      // Knie buigt terwijl het been naar voren zwaait, en blijft gestrekt tijdens het afzetten.
-      const lift = Math.max(0, Math.cos(ph - 0.35));
-      let hip = -legAmp * swing - 0.12 * run * gait;
-      let knee = 0.04 + kneeAmp * lift * lift;
-      // In de lucht: benen iets opgetrokken
-      hip = THREE.MathUtils.lerp(hip, i ? -0.25 : -0.5, air);
-      knee = THREE.MathUtils.lerp(knee, i ? 0.7 : 0.95, air);
+      // Tweebots-IK van heup naar enkel, de knie naar voren
+      const f = feet[i];
+      const ty = f.y - hipY;
+      const d = THREE.MathUtils.clamp(Math.hypot(f.z, ty), 0.3, LEG_MAX);
+      const reach = Math.atan2(f.z, -ty) + Math.acos(THREE.MathUtils.clamp((THIGH * THIGH + d * d - SHIN * SHIN) / (2 * THIGH * d), -1, 1));
+      let hip = -reach;
+      let knee = Math.PI - Math.acos(THREE.MathUtils.clamp((THIGH * THIGH + SHIN * SHIN - d * d) / (2 * THIGH * SHIN), -1, 1));
+      let foot = f.pitch - hip - knee;
+      // In de lucht: benen iets opgetrokken, tenen omlaag
+      hip = THREE.MathUtils.lerp(hip, i ? -0.25 : -0.55, air);
+      knee = THREE.MathUtils.lerp(knee, i ? 0.75 : 1.0, air);
+      foot = THREE.MathUtils.lerp(foot, 0.35, air);
       // Zittend: bovenbenen naar voren, onderbenen omlaag
       hip = THREE.MathUtils.lerp(hip, -1.42, seat);
       knee = THREE.MathUtils.lerp(knee, 1.3, seat);
-      l.hip.rotation.z = (i ? -0.1 : 0.1) * seat; // zittend: knieën iets uit elkaar, om de stuurkolom
+      // lopend de voeten dichter bij elkaar dan de heupen; zittend de knieën iets uit elkaar, om de stuurkolom
+      l.hip.rotation.z = l.side * (0.1 * seat - 0.035 * gait * (1 - seat));
       l.hip.rotation.x = hip;
       l.knee.rotation.x = knee;
-      l.foot.rotation.x = THREE.MathUtils.lerp(-(hip + knee) * 0.45, 0.1, seat); // zool ongeveer vlak
+      l.foot.rotation.x = THREE.MathUtils.lerp(foot, 0.1, seat);
     });
 
     // Scanner/tablet in de hand (niet terwijl je iets draagt)
@@ -443,10 +617,13 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
     laser.opacity = Math.min(1, scan * 3);
     tablet.position.x = -0.2 * seat; // rijdend: in de rechterhand, naast het stuur
 
+    // Armen zwaaien tegen het been aan dezelfde kant in: lopend losjes en bijna gestrekt, rennend gebogen en krachtig.
+    const swingAmp = THREE.MathUtils.lerp(0.42 * Math.min(1, stride / 0.8), 0.7 + 0.25 * sprint, run) * gait * (1 - carry);
     arms.forEach((a, i) => {
-      const swing = Math.sin(phase + i * Math.PI); // arm zwaait tegengesteld aan het been aan dezelfde kant
-      let shoulder = armAmp * swing + 0.03 * breathe * (1 - gait);
-      let elbow = -(0.18 + 0.25 * gait + 1.05 * run * gait) - 0.3 * armAmp * Math.max(0, -swing);
+      const legForward = Math.cos(turn + i * Math.PI - 0.25); // + = het been aan deze kant is voor
+      const forward = Math.max(0, -legForward); // de arm is dan juist achter
+      let shoulder = swingAmp * (legForward + 0.15 * run) + 0.03 * breathe * idle;
+      let elbow = -THREE.MathUtils.lerp(0.16 + 0.1 * gait + 0.35 * swingAmp * forward, 1.35 + 0.35 * forward, run * gait * (1 - carry));
       shoulder = THREE.MathUtils.lerp(shoulder, -0.95, carry); // dragen: armen voor zich uit
       elbow = THREE.MathUtils.lerp(elbow, -0.55, carry);
       shoulder = THREE.MathUtils.lerp(shoulder, i ? -0.2 : -1.2, air * (1 - carry));
@@ -457,27 +634,25 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
         shoulder = THREE.MathUtils.lerp(shoulder, -0.45 - lookPitch * 0.8 - 0.3 * scan, holdScanner);
         elbow = THREE.MathUtils.lerp(elbow, -1.15 + 0.4 * scan, holdScanner);
       }
-      a.shoulder.rotation.set(shoulder, 0, a.restZ);
+      a.shoulder.rotation.set(shoulder, 0, a.restZ + a.side * 0.1 * run * gait * (1 - carry) * (1 - seat));
       a.elbow.rotation.x = elbow;
     });
 
-    // Romp: licht voorover bij tempo, schouders draaien tegen de heupen in, hoofd blijft recht vooruit
-    const twist = Math.sin(phase) * gait;
-    rig.rotation.y = 0.1 * twist;
-    torso.rotation.y = -(0.1 + 0.16 * (1 - carry)) * twist;
-    torso.rotation.x = (0.04 + 0.2 * run) * gait * Math.sign(speed || 1) + 0.1 * carry - 0.08 * seat;
-    torso.rotation.z = -0.03 * twist;
-    head.rotation.y = -(rig.rotation.y + torso.rotation.y) * 0.8 + lookYaw;
+    // Bekken en romp: het bekken draait mee met het voorste been en zakt aan de kant van het zwaaiende been, de
+    // schouders draaien ertegenin; voorover bij tempo en bij optrekken, de bocht in hangen. Het hoofd blijft recht.
+    const lead = Math.cos(turn) * gait; // + = linkerbeen (i = 0) voor
+    const support = Math.cos(turn - Math.PI * duty) * gait; // + = het gewicht op het linkerbeen
+    const sway = Math.sin(time * 0.55) * idle * (1 - seat); // stilstaand: gewicht rustig van been naar been
+    rig.rotation.y = -(0.07 + 0.05 * run) * lead;
+    rig.rotation.z = (0.035 - 0.015 * run) * support + 0.012 * sway;
+    rig.position.x = (0.022 - 0.012 * run) * support + 0.008 * sway;
+    torso.rotation.y = (0.07 + 0.05 * run + (0.1 + 0.08 * run) * (1 - carry)) * lead;
+    torso.rotation.x = (0.03 + 0.11 * run + 0.07 * sprint) * gait * Math.sign(speed || 1) + lean * (1 - seat) + 0.1 * carry - 0.08 * seat + 0.12 * land * (1 - air);
+    torso.rotation.z = -0.7 * rig.rotation.z + roll * (1 - seat);
+    head.rotation.y = -(rig.rotation.y + torso.rotation.y) * 0.85 + lookYaw;
     head.rotation.x = -torso.rotation.x * 0.6 - lookPitch * 0.75;
-    shell.scale.z = SZ + 0.012 * breathe;
-
-    // Deinen: het laagst als beide voeten aan de grond staan, het hoogst boven het standbeen
-    const stride = legAmp * Math.sin(phase);
-    const bob = -(THIGH + SHIN) * (1 - Math.cos(stride)) * 0.6 + 0.03 * run * gait * Math.abs(Math.cos(phase));
-    const standY = HIP_HEIGHT + bob;
-    const seatY = (state.seatHipY ?? 0.5) - p.y;
-    rig.position.y = THREE.MathUtils.lerp(standY, seatY, seat);
-    rig.position.x = 0.018 * Math.cos(phase) * gait * (1 - run);
+    head.rotation.z = -0.5 * (rig.rotation.z + torso.rotation.z);
+    shell.scale.z = 1 + 0.018 * breathe;
 
     // Handen met een doel (stuur, scanner/tablet): pas nu, want de romp staat in zijn eindstand
     arms.forEach((a, i) => {
@@ -510,10 +685,22 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
     for (const f of features) f.visible = !look;
     helm.visible = !look;
     if (look?.hair) hairMat.color.copy(look.hair);
-    drape.visible = !!look?.long;
+    drape.visible = !!look?.drape;
+    if (look?.drape) {
+      // Gordijn van haar naast en achter de nek, van onder het haar op het hoofd tot waar het op de foto reikt:
+      // bovenaan smal (het verdwijnt in het haar op het hoofd), onderaan rond afgewerkt.
+      const { halfWidth: w, bottom, depth } = look.drape;
+      const top: [number, number][] = [[1, -0.1], [0.97, -0.065], [0.86, -0.03], [0.6, 0.01], [0.3, 0.03]];
+      const end: [number, number][] = [[0.001, bottom], [0.55, bottom + 0.006], [0.84, bottom + 0.022], [0.97, bottom + 0.05]];
+      const points = [...end, ...top.filter(([, y]) => y > bottom + 0.07)];
+      drape.geometry.dispose();
+      drape.geometry = new THREE.LatheGeometry(points.map(([r, y]) => new THREE.Vector2(r, y)), 28);
+      drape.scale.set(w, 1, 0.062 + 0.5 * depth);
+      drape.position.set(0, 0, -0.03 - 0.5 * depth);
+    }
     shapeHead(look?.hairAt);
     // oren verdwijnen onder haar dat eroverheen valt
-    ears.forEach((ear, i) => (ear.visible = !look || look.hairAt(i ? -0.99 : 0.99, -0.1, -0.1) < 0.5));
+    ears.forEach((ear, i) => (ear.visible = !look || look.hairAt(i ? -0.99 : 0.99, -0.1, -0.1) < 0.003));
   }
 
   /** First person in de heftruck: het hoofd niet tekenen, de camera zit op die plek. */

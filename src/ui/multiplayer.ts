@@ -583,7 +583,7 @@ export function mountMultiplayer(o: Options) {
       'position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);font:14px system-ui,sans-serif';
     const form = document.createElement('form');
     form.style.cssText =
-      'width:min(380px,calc(100vw - 32px));padding:20px;border-radius:12px;background:#1f2429;color:#fff;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:12px';
+      'width:min(600px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto;padding:20px;border-radius:12px;background:#1f2429;color:#fff;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:12px';
     const title = document.createElement('div');
     title.textContent = first ? 'Welkom! Hoe heet je?' : 'Je naam en foto wijzigen';
     title.style.cssText = 'font-size:18px;font-weight:600';
