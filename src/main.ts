@@ -200,6 +200,7 @@ const view = createPlayerView({
   player,
   hud,
   bounds: BOUNDS,
+  walkable: hall.walkable,
   solids: [hall.solids, () => forklift.solids(), () => jack.solids(), () => robots.solids()],
   initialMode: params.get('view') === 'overview' ? 'overview' : params.get('view') === 'third' ? 'third' : 'first',
   onModeChange: applyMode,

@@ -137,10 +137,10 @@ function outlineOf(m: WarehouseModel): number[] {
     rect(wallX, z, 0.5, 3);
     for (const side of [-1, 1]) rect(wallX + docks.lanes.distanceFromWall, z + side * docks.lanes.offsetFromDoor, laneLen, 1.5);
   }
-  // Kantoor en kantine (noordhoek bij de docks) en de parkeerplaats (zuidhoek)
+  // Kantoor en kantine (aanbouw buiten tegen de noordwand, bij de docks) en de parkeerplaats (zuidhoek)
   const rooms = m.rooms;
-  rect(wallX + rooms.officeWidth / 2, -hall.depth / 2 + rooms.depth / 2, rooms.officeWidth, rooms.depth);
-  rect(wallX + rooms.officeWidth + rooms.canteenWidth / 2, -hall.depth / 2 + rooms.depth / 2, rooms.canteenWidth, rooms.depth);
+  rect(wallX + rooms.officeWidth / 2, -hall.depth / 2 - rooms.depth / 2, rooms.officeWidth, rooms.depth);
+  rect(wallX + rooms.officeWidth + rooms.canteenWidth / 2, -hall.depth / 2 - rooms.depth / 2, rooms.canteenWidth, rooms.depth);
   rect(wallX + m.parking.width / 2, hall.depth / 2 - m.parking.depth / 2, m.parking.width, m.parking.depth);
   rect(m.desk.x, m.desk.z, 1.5, 0.75);
   rect(m.rollContainers.x, m.rollContainers.z, 2.8, 0.8);

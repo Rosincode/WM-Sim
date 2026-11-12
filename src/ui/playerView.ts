@@ -11,13 +11,17 @@ interface Options {
   controls: OrbitControls;
   player: THREE.Object3D;
   hud: HTMLElement;
-  /** Loopbaar gebied (x/z-grenzen). */
-  bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+  /** Loopbaar gebied (x/z-grenzen): de hal. */
+  bounds: Zone;
+  /** Gebieden buiten de hal waar de speler ook mag lopen (deuropeningen en de kamers erachter). */
+  walkable?: Zone[];
   /** Bronnen van blokken (stellingen, pallets, heftruck) waar de speler tegenaan loopt, op staat of onderdoor loopt. */
   solids?: (() => Solid[])[];
   initialMode?: ViewMode;
   onModeChange?: (mode: ViewMode) => void;
 }
+
+type Zone = { minX: number; maxX: number; minZ: number; maxZ: number };
 
 /** Voertuig waarin de speler zit: `seat` is de plek van de speler, `eye` die van de camera in first person (lokaal). */
 type Vehicle = { object: THREE.Object3D; seat: THREE.Vector3; eye?: THREE.Vector3 };
@@ -33,7 +37,8 @@ const PLAYER_HEIGHT = 1.8;
 const STEP = 0.35; // zo hoog stap je zonder springen ergens op (pallet, vorken)
 const FOOT = 0.2; // zo ver mogen je voeten over een rand steken
 
-export function createPlayerView({ camera, canvas, controls, player, hud, bounds, solids = [], initialMode = 'overview', onModeChange }: Options) {
+export function createPlayerView({ camera, canvas, controls, player, hud, bounds, walkable = [], solids = [], initialMode = 'overview', onModeChange }: Options) {
+  const zones = [bounds, ...walkable];
   let mode: ViewMode = 'overview';
   let closeMode: Exclude<ViewMode, 'overview'> = 'first'; // laatst gebruikte dichtbij-modus
   let pitch = 0;
@@ -198,8 +203,14 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     const len = Math.hypot(move, strafe) || 1; // diagonaal niet sneller
     player.position.addScaledVector(forward, (move / len) * speed * dt);
     player.position.addScaledVector(right, (strafe / len) * speed * dt);
-    player.position.x = THREE.MathUtils.clamp(player.position.x, bounds.minX, bounds.maxX);
-    player.position.z = THREE.MathUtils.clamp(player.position.z, bounds.minZ, bounds.maxZ);
+    // Binnen het loopbare gebied blijven: de hal, of een gebied erbuiten (aanbouw). Loop je overal uit, dan houdt
+    // het gebied waar je vandaan kwam je tegen.
+    const within = (z: Zone, x: number, zz: number) => x >= z.minX && x <= z.maxX && zz >= z.minZ && zz <= z.maxZ;
+    if (!zones.some((z) => within(z, p.x, p.z))) {
+      const home = zones.find((z) => within(z, startX, startZ)) ?? bounds;
+      p.x = THREE.MathUtils.clamp(p.x, home.minX, home.maxX);
+      p.z = THREE.MathUtils.clamp(p.z, home.minZ, home.maxZ);
+    }
 
     // Hoogte: zwaartekracht, je hoofd stoten, en de ondergrond (vloer, pallet, vorken, stellingniveau)
     const prevFeet = p.y;

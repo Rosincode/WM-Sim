@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { DOCKS, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, type Bay } from '../../sim/layout';
-import { createRooms, ROOM_WINDOWS } from './rooms';
+import { DOCKS, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, WALKWAY_X, type Bay } from '../../sim/layout';
+import { createRooms, ROOM_DOORS } from './rooms';
 import { onTop } from './style';
 import * as tex from './textures';
 
@@ -181,10 +181,10 @@ export function createWarehouse(scene: THREE.Scene) {
     marking(RACK_MID_X, z + 0.85, RACK_LEN + 1.4, 0.1, YELLOW);
   }
   // Looppad tussen de dockzone en de stellingen
-  const WALK_X = RACK_MIN_X - 4.8;
-  // Het loopt van de voorwand van de kamers (de deur van de kantine) tot aan de parkeerplaats, of anders tot de wand.
+  const WALK_X = WALKWAY_X;
+  // Het loopt van de noordwand (daar zit de deur naar de kantine) tot aan de parkeerplaats, of anders tot de wand.
   const across = (r: { minX: number; maxX: number }) => WALK_X > r.minX && WALK_X < r.maxX;
-  const walkFrom = across(ROOMS.canteen) || across(ROOMS.office) ? ROOMS.canteen.maxZ + 0.3 : -D / 2 + 2;
+  const walkFrom = across(ROOMS.canteen) || across(ROOMS.office) ? -D / 2 + 0.4 : -D / 2 + 2;
   const walkTo = across(PARKING.area) ? PARKING.area.minZ - 0.3 : D / 2 - 2;
   const walkMid = (walkFrom + walkTo) / 2;
   const walkLen = walkTo - walkFrom;
@@ -243,7 +243,7 @@ export function createWarehouse(scene: THREE.Scene) {
   // ---------- Wanden ----------
   const panelTex = tex.wallPanel();
   /**
-   * @param holes raamopeningen [van, tot, onderkant, bovenkant]; van/tot langs de wand, gemeten vanuit het midden
+   * @param holes openingen (raam of deur) [van, tot, onderkant, bovenkant]; van/tot langs de wand, gemeten vanuit het midden
    *              in de eigen richting van het vlak (naar rechts als je er van binnenuit tegenaan kijkt).
    */
   function wall(x: number, z: number, ry: number, len: number, holes: [number, number, number, number][] = []) {
@@ -255,7 +255,8 @@ export function createWarehouse(scene: THREE.Scene) {
       const rect = (a: number, b: number, y0: number, y1: number) =>
         [new THREE.Vector2(a, y0), new THREE.Vector2(b, y0), new THREE.Vector2(b, y1), new THREE.Vector2(a, y1)];
       const shape = new THREE.Shape(rect(-len / 2, len / 2, -H / 2, H / 2));
-      for (const [a, b, y0, y1] of holes) shape.holes.push(new THREE.Path(rect(a, b, y0 - H / 2, y1 - H / 2)));
+      // een deur begint op de vloer: het gat blijft 2 mm van de rand, anders deelt het een zijde met de omtrek
+      for (const [a, b, y0, y1] of holes) shape.holes.push(new THREE.Path(rect(a, b, Math.max(y0, 0.002) - H / 2, y1 - H / 2)));
       geo = new THREE.ShapeGeometry(shape);
       const p = geo.attributes.position;
       const uv = geo.attributes.uv;
@@ -269,7 +270,7 @@ export function createWarehouse(scene: THREE.Scene) {
     // Plint: doorlopend, behalve onder een raam dat lager begint dan de plint hoog is
     const plinthMat = paint('#9a9b96', 0.9, 0);
     const plinth = (a: number, b: number, h: number) => {
-      if (b - a < 0.001) return;
+      if (b - a < 0.001 || h < 0.001) return; // onder een deur geen plint
       const part = new THREE.Mesh(new THREE.BoxGeometry(b - a, h, 0.1), plinthMat);
       part.position.set(x + Math.cos(ry) * ((a + b) / 2), h / 2, z - Math.sin(ry) * ((a + b) / 2));
       part.rotation.y = ry;
@@ -284,22 +285,14 @@ export function createWarehouse(scene: THREE.Scene) {
     }
     plinth(cur, len / 2, 1.2);
   }
-  // Ramen van het kantoor en de kantine: in de dockwand (west) en de noordwand
-  const holesIn = (side: 'west' | 'north', sign: number) =>
-    ROOM_WINDOWS.filter((w) => w.wall === side).map((w): [number, number, number, number] => [
-      Math.min(w.from * sign, w.to * sign),
-      Math.max(w.from * sign, w.to * sign),
-      w.y0,
-      w.y1,
-    ]);
-  wall(0, -D / 2, 0, W, holesIn('north', 1));
+  // Deuren naar het kantoor en de kantine: open gaten in de noordwand
+  wall(0, -D / 2, 0, W, ROOM_DOORS.map((d): [number, number, number, number] => [d.from, d.to, 0, d.height]));
   wall(0, D / 2, Math.PI, W);
-  wall(-W / 2, 0, Math.PI / 2, D, holesIn('west', -1));
+  wall(-W / 2, 0, Math.PI / 2, D);
   wall(W / 2, 0, -Math.PI / 2, D);
 
-  // ---------- Kantoor en kantine ----------
-  const rooms = createRooms({ scene, roof, solid, walkX: RACK_MIN_X - 4.8 });
-  colliders.push(rooms.area);
+  // ---------- Kantoor en kantine: aanbouw buiten tegen de noordwand ----------
+  const rooms = createRooms({ scene, roof, solid });
 
   // Kolommen met aanrijbescherming
   const columns = new Batch();
@@ -868,6 +861,8 @@ export function createWarehouse(scene: THREE.Scene) {
   return {
     roof,
     colliders,
+    /** Waar de speler buiten de hal mag lopen: de deuren naar en de kamers van de aanbouw (kantoor, kantine). */
+    walkable: rooms.walkable,
     /** Alles waar de speler tegenaan loopt of op kan staan: stellingen, pallets in de stellingen en vaste aankleding. */
     solids: () => solids,
     loadHeight,

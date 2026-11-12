@@ -1,9 +1,9 @@
 import * as THREE from 'three';
-import { DOCKS, DOCK_PITCH } from '../../sim/layout';
+import { DOCKS, DOCK_PITCH, ROOMS } from '../../sim/layout';
 import logoUrl from '../assets/robodu-logo.jpg';
 import { onTop } from './style';
 import * as tex from './textures';
-import { ROOM_WINDOWS } from './rooms';
+import { ROOM_HEIGHT, ROOM_WINDOWS } from './rooms';
 import { Batch, EXIT_X, HALL, UNIT_BOX, UNIT_CYL, paint } from './warehouse';
 
 // Buitenkant van het magazijn: gevels met het RoBoDu-logo, het vrachtwagenterrein voor de docks,
@@ -20,6 +20,8 @@ export function createExterior(scene: THREE.Scene) {
   const { w: W, d: D, h: H } = HALL;
   const X0 = -W / 2; // dockgevel (west)
   const TOP = H + 2.5; // gevel met dakrand
+  /** De aanbouw met kantoor en kantine, buiten tegen de noordgevel (zie rooms.ts). */
+  const ANNEX: Rect = { minX: ROOMS.office.minX, maxX: ROOMS.canteen.maxX, minZ: ROOMS.office.minZ, maxZ: ROOMS.office.maxZ };
   const root = new THREE.Group();
   scene.add(root);
 
@@ -97,15 +99,17 @@ export function createExterior(scene: THREE.Scene) {
 
   // ---------- Gevels ----------
   const panelTex = tex.wallPanel();
-  function facade(x: number, z: number, ry: number, len: number) {
+  /** Gevelvlak met het midden op (x, z), van hoogte `from` tot de dakrand. */
+  function facade(x: number, z: number, ry: number, len: number, from = 0) {
     const t = panelTex.clone();
-    t.repeat.set(len, 1);
+    t.repeat.set(len, (TOP - from) / TOP);
+    t.offset.y = from / TOP;
     t.needsUpdate = true;
     const m = new THREE.Mesh(
-      new THREE.PlaneGeometry(len, TOP),
+      new THREE.PlaneGeometry(len, TOP - from),
       new THREE.MeshStandardMaterial({ map: t, color: '#eef1f4', roughness: 0.55, metalness: 0.25 }),
     );
-    m.position.set(x, TOP / 2, z);
+    m.position.set(x, (TOP + from) / 2, z);
     m.rotation.y = ry;
     m.receiveShadow = true;
     root.add(m);
@@ -113,22 +117,26 @@ export function createExterior(scene: THREE.Scene) {
   facade(X0 - 0.03, 0, -Math.PI / 2, D);
   facade(W / 2 + 0.03, 0, Math.PI / 2, D);
   facade(0, D / 2 + 0.03, 0, W);
-  facade(0, -D / 2 - 0.03, Math.PI, W);
+  // Noordgevel: waar de aanbouw (kantoor en kantine) ertegenaan staat begint de gevel pas boven het dak daarvan
+  facade((ANNEX.minX + ANNEX.maxX) / 2, -D / 2 - 0.03, Math.PI, ANNEX.maxX - ANNEX.minX, ROOM_HEIGHT);
+  facade((ANNEX.maxX + W / 2) / 2, -D / 2 - 0.03, Math.PI, W / 2 - ANNEX.maxX);
 
   // Dakrand (donkerblauw), accentstreep (blauw) en plint, rondom
   const trimNavy = new Batch();
   const trimBlue = new Batch();
   const plinth = new Batch();
+  const thin = (v: number, f: number) => (v < 1 ? v * f : v - 0.1); // dikte iets smaller, lengte iets korter
   for (const [x, z, sx, sz] of [
     [X0 - 0.06, 0, 0.3, D + 0.4],
     [W / 2 + 0.06, 0, 0.3, D + 0.4],
     [0, D / 2 + 0.06, W + 0.4, 0.3],
     [0, -D / 2 - 0.06, W + 0.4, 0.3],
   ]) {
-    const thin = (v: number, f: number) => (v < 1 ? v * f : v - 0.1); // dikte iets smaller, lengte iets korter
     trimNavy.add(x, TOP - 0.3, z, sx, 0.6, sz);
     trimBlue.add(x, TOP - 0.72, z, thin(sx, 0.8), 0.16, thin(sz, 0.8));
-    plinth.add(x, 0.25, z, thin(sx, 0.7), 0.5, thin(sz, 0.7));
+    // de plint van de noordgevel loopt alleen naast de aanbouw: erachter zitten de deuren naar de hal
+    if (z < 0 && sx > 1) plinth.add((ANNEX.maxX + W / 2 + 0.15) / 2, 0.25, z, W / 2 + 0.15 - ANNEX.maxX, 0.5, thin(sz, 0.7));
+    else plinth.add(x, 0.25, z, thin(sx, 0.7), 0.5, thin(sz, 0.7));
   }
   root.add(
     trimNavy.build(UNIT_BOX, paint(NAVY, 0.5, 0.3)),
@@ -190,13 +198,13 @@ export function createExterior(scene: THREE.Scene) {
   canopy.add(EXIT_X, 2.85, D / 2 + 1.1, 4.2, 0.16, 2.2);
   for (const dx of [-1.9, 1.9]) canopy.add(EXIT_X + dx, 1.4, D / 2 + 2.05, 0.12, 2.8, 0.12);
   root.add(windows.build(UNIT_BOX, glass, false), canopy.build(UNIT_BOX, paint(NAVY, 0.5, 0.3)));
-  // Ramen van het kantoor en de kantine: van buiten donker glas. Een vlak dat alleen naar buiten kijkt,
-  // zodat je er van binnenuit doorheen naar het terrein kijkt.
+  // Ramen van het kantoor en de kantine (de aanbouw): van buiten donker glas. Een vlak dat alleen naar buiten
+  // kijkt, zodat je er van binnenuit doorheen naar het terrein kijkt.
   for (const w of ROOM_WINDOWS) {
     const pane = new THREE.Mesh(new THREE.PlaneGeometry(w.to - w.from, w.y1 - w.y0), glass);
     const mid = (w.from + w.to) / 2;
-    if (w.wall === 'west') pane.position.set(X0 - 0.05, (w.y0 + w.y1) / 2, mid);
-    else pane.position.set(mid, (w.y0 + w.y1) / 2, -D / 2 - 0.05);
+    if (w.wall === 'west') pane.position.set(w.at - 0.02, (w.y0 + w.y1) / 2, mid);
+    else pane.position.set(mid, (w.y0 + w.y1) / 2, w.at - 0.02);
     pane.rotation.y = w.wall === 'west' ? -Math.PI / 2 : Math.PI;
     root.add(pane);
   }
@@ -273,7 +281,7 @@ export function createExterior(scene: THREE.Scene) {
   // ---------- Bomen ----------
   const building: Rect = { minX: X0, maxX: W / 2, minZ: -D / 2, maxZ: D / 2 };
   const blocked = (x: number, z: number, margin: number) =>
-    [...paved, building].some((r) => x > r.minX - margin && x < r.maxX + margin && z > r.minZ - margin && z < r.maxZ + margin);
+    [...paved, building, ANNEX].some((r) => x > r.minX - margin && x < r.maxX + margin && z > r.minZ - margin && z < r.maxZ + margin);
   const trunks = new Batch();
   const crowns = new Batch();
   const crownTints: THREE.Color[] = [];

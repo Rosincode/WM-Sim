@@ -7,7 +7,8 @@
 //   docks           dockdeuren in de westwand (x = -width/2), elk met een inslag- en een uitslagbaan
 //   desk            bureau met de pc; radio en printer staan erop (dx/dz ten opzichte van het bureau)
 //   rollContainers  lege rolcontainers: hier begin je aan een order
-//   rooms           kantoor en kantine: in de hoek van de dockwand en de noordwand, het kantoor in de hoek
+//   rooms           kantoor en kantine: aanbouw buiten tegen de noordwand, bij de dockwand (het kantoor op de hoek);
+//                   depth is de diepte van de aanbouw, vanuit de hal door een deur in de noordwand te bereiken
 //   parking         parkeerplaats in de andere hoek van de dockwand (zuid): een vak voor de heftruck, een voor
 //                   de pompwagen en robotBays vakken voor robots
 //   equipment       startplek van de heftruck en de pompwagen (standaard in hun vak op de parkeerplaats)
@@ -206,11 +207,17 @@ export type Rect = { minX: number; maxX: number; minZ: number; maxZ: number };
 /** Vak op de vloer: midden (x, z), breedte (langs x) en diepte (langs z). */
 export type Bay = Point & { w: number; d: number };
 
-/** Kantoor en kantine: tegen de noordwand bij de docks, het kantoor in de hoek en de kantine ernaast. */
+/** Looppad (x) tussen de dockzone en de stellingen; het loopt langs z door de hele hal. */
+export const WALKWAY_X = SECTION_X[0] - SECTION_PITCH / 2 - 4.8;
+
+/**
+ * Kantoor en kantine: een aanbouw buiten tegen de noordwand, bij de hoek met de dockwand. Het kantoor zit op de
+ * hoek en de kantine ernaast; vanuit de hal loop je er door een deur in de noordwand in.
+ */
 export const ROOMS = (() => {
   const { depth, officeWidth, canteenWidth } = model.rooms;
-  const minZ = -HALL.d / 2;
-  const maxZ = minZ + depth;
+  const maxZ = -HALL.d / 2;
+  const minZ = maxZ - depth;
   const office: Rect = { minX: WALL_X, maxX: WALL_X + officeWidth, minZ, maxZ };
   const canteen: Rect = { minX: office.maxX, maxX: office.maxX + canteenWidth, minZ, maxZ };
   return { office, canteen };
