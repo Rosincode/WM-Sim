@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { DOCKS, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX } from '../../sim/layout';
+import { onTop } from './style';
 import * as tex from './textures';
 
 // Het magazijngebouw: vloer, wanden, dak, docks, stellingen, pallets en verlichting.
@@ -151,17 +152,16 @@ export function createWarehouse(scene: THREE.Scene) {
     const key = color + (map ? map.id : '');
     let mat = paintMats.get(key);
     if (!mat) {
-      mat = new THREE.MeshStandardMaterial({
-        color,
-        map: map ?? null,
-        alphaMap: map ? null : wornAlpha,
-        transparent: true,
-        roughness: 0.55,
-        depthWrite: false,
-        polygonOffset: true,
-        polygonOffsetFactor: -4,
-        polygonOffsetUnits: -4,
-      });
+      mat = onTop(
+        new THREE.MeshStandardMaterial({
+          color,
+          map: map ?? null,
+          alphaMap: map ? null : wornAlpha,
+          transparent: true,
+          roughness: 0.55,
+          depthWrite: false,
+        }),
+      );
       paintMats.set(key, mat);
     }
     const geo = new THREE.PlaneGeometry(w, d);
@@ -318,8 +318,8 @@ export function createWarehouse(scene: THREE.Scene) {
 
   // ---------- Docks ----------
   const doorMat = paint('#c3c8cc', 0.5, 0.35);
-  const windowMat = glow(2.4, 2.8, 3.3);
-  const leveller = new THREE.MeshStandardMaterial({ map: tex.treadPlate(), roughness: 0.45, metalness: 0.75 });
+  const windowMat = onTop(glow(2.4, 2.8, 3.3));
+  const leveller = onTop(new THREE.MeshStandardMaterial({ map: tex.treadPlate(), roughness: 0.45, metalness: 0.75 }));
   const dockParts = new Batch();
   const dockHazard = new Batch();
   const bollards = new Batch();
@@ -344,7 +344,7 @@ export function createWarehouse(scene: THREE.Scene) {
 
     const board = new THREE.Mesh(
       new THREE.PlaneGeometry(1.5, 0.75),
-      new THREE.MeshStandardMaterial({ map: tex.sign(`DOCK ${i + 1}`, '#17346b', '#ffffff'), roughness: 0.5 }),
+      onTop(new THREE.MeshStandardMaterial({ map: tex.sign(`DOCK ${i + 1}`, '#17346b', '#ffffff'), roughness: 0.5 })),
     );
     board.rotation.y = Math.PI / 2;
     board.position.set(x0 + 0.06, 4.35, z);
@@ -354,7 +354,7 @@ export function createWarehouse(scene: THREE.Scene) {
     for (const [id, dz] of [[inId, -1.6], [outId, 1.6]] as const) {
       const label = new THREE.Mesh(
         new THREE.PlaneGeometry(0.4, 0.15),
-        new THREE.MeshStandardMaterial({ map: tex.locationLabel(id, 'down', 0.5), roughness: 0.6 }),
+        onTop(new THREE.MeshStandardMaterial({ map: tex.locationLabel(id, 'down', 0.5), roughness: 0.6 })),
       );
       label.rotation.y = Math.PI / 2;
       label.position.set(x0 + 0.195, 1.5, z + dz);
@@ -422,7 +422,7 @@ export function createWarehouse(scene: THREE.Scene) {
       }
     });
     // Kopbescherming en rij-aanduiding
-    const rowSign = new THREE.MeshStandardMaterial({ map: tex.sign(`R${r + 1}`, '#17346b', '#ffffff'), roughness: 0.5 });
+    const rowSign = onTop(new THREE.MeshStandardMaterial({ map: tex.sign(`R${r + 1}`, '#17346b', '#ffffff'), roughness: 0.5 }));
     for (const [x, ry] of [[RACK_MIN_X - 0.36, -Math.PI / 2], [RACK_MAX_X + 0.36, Math.PI / 2]] as const) {
       endGuards.add(x, 0.22, z0, 0.12, 0.44, 1.4);
       solid(x, z0, 0.12, 1.4, 0, 0.44);
@@ -445,7 +445,7 @@ export function createWarehouse(scene: THREE.Scene) {
         return geo.translate(position.x, position.y, position.z);
       }),
     ),
-    new THREE.MeshStandardMaterial({ map: labelAtlas.texture, roughness: 0.6 }),
+    onTop(new THREE.MeshStandardMaterial({ map: labelAtlas.texture, roughness: 0.6 })),
   );
   scene.add(labelMesh);
 
@@ -459,7 +459,7 @@ export function createWarehouse(scene: THREE.Scene) {
     endGuards.build(UNIT_BOX, hazard),
     decks.build(
       UNIT_BOX,
-      new THREE.MeshStandardMaterial({ map: deckTexture, alphaTest: 0.5, roughness: 0.4, metalness: 0.7 }),
+      onTop(new THREE.MeshStandardMaterial({ map: deckTexture, alphaTest: 0.5, roughness: 0.4, metalness: 0.7 })),
       false,
     ),
   );
@@ -501,7 +501,7 @@ export function createWarehouse(scene: THREE.Scene) {
   scene.add(exitDoor);
   const exitSign = new THREE.Mesh(
     new THREE.PlaneGeometry(0.6, 0.3),
-    new THREE.MeshBasicMaterial({ map: tex.sign('EXIT', '#0c8a3e', '#ffffff') }),
+    onTop(new THREE.MeshBasicMaterial({ map: tex.sign('EXIT', '#0c8a3e', '#ffffff') })),
   );
   exitSign.position.set(EXIT_X, 2.45, D / 2 - 0.06);
   exitSign.rotation.y = Math.PI;
@@ -523,7 +523,7 @@ export function createWarehouse(scene: THREE.Scene) {
   const STICKER_Z = 0.503; // net voor de klossen
   const STICKER_X = 0.603;
   const stickerGeo = new THREE.PlaneGeometry(0.2, 0.13);
-  const stickerMat = new THREE.MeshStandardMaterial({ map: tex.palletSticker(), roughness: 0.6 });
+  const stickerMat = onTop(new THREE.MeshStandardMaterial({ map: tex.palletSticker(), roughness: 0.6 }));
   const stickers = new THREE.InstancedMesh(stickerGeo, stickerMat, MAX_PALLETS * 2);
   stickers.setColorAt(0, new THREE.Color(1, 1, 1));
   stickers.receiveShadow = true;

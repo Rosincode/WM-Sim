@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { onTop } from './style';
 import { UNIT_BOX, paint } from './warehouse';
 import { canvasTexture } from './textures';
 
@@ -9,6 +10,8 @@ import { canvasTexture } from './textures';
 export const ROBOT_DECK = 0.24;
 /** Halve breedte en halve lengte van de robot, voor botsingen. */
 export const ROBOT_HALF = { x: 0.35, z: 0.5 };
+/** Hoogte van de heftafel in rust: de bovenkant steekt net boven de kap uit, zodat de twee niet in één vlak liggen. */
+const DECK_DOWN = 0.205;
 
 let parts: ReturnType<typeof makeParts> | null = null;
 function makeParts() {
@@ -27,7 +30,7 @@ function makeParts() {
     trim: paint('#e9edf2', 0.4, 0.1),
     deck: paint('#2b3138', 0.5, 0.6),
     black: paint('#0b0d10', 0.3, 0.4),
-    logo: new THREE.MeshStandardMaterial({ map: logo, roughness: 0.35, metalness: 0.2 }),
+    logo: onTop(new THREE.MeshStandardMaterial({ map: logo, roughness: 0.35, metalness: 0.2 })),
     logoGeo: new THREE.PlaneGeometry(0.44, 0.11),
   };
 }
@@ -53,7 +56,7 @@ export function createGeekRobot() {
   part(ledMat, 0.706, 0.014, 0.9, 0, 0.116, 0);
   part(ledMat, 0.5, 0.014, 1.006, 0, 0.116, 0);
   // Heftafel: komt omhoog onder de pallet
-  const deck = part(p.deck, 0.54, 0.02, 0.8, 0, 0.215, 0);
+  const deck = part(p.deck, 0.54, 0.02, 0.8, 0, DECK_DOWN, 0);
   for (const side of [1, -1]) {
     const logo = new THREE.Mesh(p.logoGeo, p.logo);
     logo.position.set(side * 0.3305, 0.16, 0);
@@ -62,7 +65,7 @@ export function createGeekRobot() {
   }
   const top = new THREE.Mesh(p.logoGeo, p.logo);
   top.rotation.x = -Math.PI / 2;
-  top.position.set(0, 0.2105, -0.42);
+  top.position.set(0, 0.2105, -0.44); // achter de heftafel, op de kap
   top.scale.setScalar(0.6);
   group.add(top);
 
@@ -73,7 +76,7 @@ export function createGeekRobot() {
     },
     /** up: 0 = tafel omlaag, 1 = pallet opgetild. */
     setLift(up: number) {
-      deck.position.y = 0.2 + up * (ROBOT_DECK - 0.2 - 0.01);
+      deck.position.y = DECK_DOWN + up * (ROBOT_DECK - 0.01 - DECK_DOWN);
     },
   };
 }
@@ -95,7 +98,7 @@ export function createRobotCharger() {
   part(new THREE.MeshBasicMaterial({ color: '#3ddc84' }), 0.01, 0.03, 0.12, 0.655, 0.36, 0);
   const mark = new THREE.Mesh(
     new THREE.PlaneGeometry(1.5, 1.0),
-    new THREE.MeshStandardMaterial({ color: '#1769e0', transparent: true, opacity: 0.3, depthWrite: false }),
+    onTop(new THREE.MeshStandardMaterial({ color: '#1769e0', transparent: true, opacity: 0.3, depthWrite: false })),
   );
   mark.rotation.x = -Math.PI / 2;
   mark.position.set(-0.05, 0.015, 0);

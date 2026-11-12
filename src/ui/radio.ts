@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { onTop } from './scene/style';
 
 // Radio in het magazijn: speelt de live stream van een echte zender (internetradio).
 // M (als je erbij staat): uit → PiratenRadio.nl → 100% NL → uit. Verder weg klinkt hij zachter.
@@ -43,7 +44,7 @@ export function createRadio() {
   const ctx = canvas.getContext('2d')!;
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
-  const display = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 0.056), new THREE.MeshBasicMaterial({ map: texture }));
+  const display = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 0.056), onTop(new THREE.MeshBasicMaterial({ map: texture })));
   display.position.set(-0.085, 0.125, -0.051);
   display.rotation.y = Math.PI;
   group.add(display);

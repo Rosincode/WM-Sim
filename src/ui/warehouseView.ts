@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { DOCKS, HALL, LANE_LENGTH, LANE_SLOTS, LEVEL_Y, POINTS, laneSlot, shelfLocations, type Point } from '../sim/layout';
 import type { Truck, Warehouse } from '../sim/warehouse';
 import { createPcMesh } from './scene/pc';
+import { onTop } from './scene/style';
 import { palletSticker } from './scene/textures';
 
 // 3D-weergave van de processtaat. Leest alleen de sim; wijzigt niets.
@@ -37,7 +38,7 @@ function pallet(color = '#a5784a') {
   const load = box(0.9, 0.7, 0.9, color);
   load.position.y = 0.47;
   // Palletsticker op de pallet zelf, in het midden van beide lange kanten; alleen zichtbaar als de pallet er een heeft
-  stickerMat ??= new THREE.MeshStandardMaterial({ map: palletSticker(), roughness: 0.6 });
+  stickerMat ??= onTop(new THREE.MeshStandardMaterial({ map: palletSticker(), roughness: 0.6 }));
   const sticker = new THREE.Group();
   for (const side of [1, -1]) {
     const s = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.11), stickerMat);
@@ -105,7 +106,8 @@ function label(width = 4) {
 function floorMark(p: Point, w: number, d: number, color: string) {
   const m = new THREE.Mesh(
     new THREE.PlaneGeometry(w, d),
-    new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.35 }),
+    // laag +2: het vlak ligt over de vloerverf van de baan heen
+    onTop(new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.35, depthWrite: false }), 2),
   );
   m.rotation.x = -Math.PI / 2;
   m.position.set(p.x, 0.02, p.z);

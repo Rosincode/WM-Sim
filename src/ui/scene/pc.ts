@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { onTop } from './style';
 
 // Werkplek met pc (bureau, monitor, toetsenbord, muis, kast). De voorkant (waar je staat) is de -Z-kant.
 
@@ -32,7 +33,7 @@ export function createPcMesh() {
   add(0.74, 0.434, 0.035, 0, 1.4, 0.21, plastic);
 
   // Beeldvlak (16:9): zelf donker; de echte WMS-app ligt er als HTML-laag overheen (src/ui/pcScreen.ts).
-  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.7 * (9 / 16)), new THREE.MeshBasicMaterial({ color: '#0b0d10' }));
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.7 * (9 / 16)), onTop(new THREE.MeshBasicMaterial({ color: '#0b0d10' })));
   screen.position.set(0, 1.4, 0.19);
   screen.rotation.y = Math.PI; // beeld naar de -Z-kant
   group.add(screen);

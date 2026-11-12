@@ -19,3 +19,10 @@ Alles in de hal (voertuigen, apparaten, inrichting) heeft dezelfde stijl; de hef
 - Ingeladen modellen (.glb in src/ui/assets) leveren alleen de vorm: textures eruit halen vóór het toevoegen, en na het laden `restyle()` uit style.ts aanroepen voor de materialen en egale vlakken. Altijd een eenvoudige reservevorm als het laden mislukt.
 - Uitzondering: stickers, schermen en borden met tekst mogen een (canvas)texture hebben.
 - Alles werpt en ontvangt schaduw; lampjes zijn `MeshBasicMaterial` of emissive.
+
+## Vlakken op vlakken (laag +1)
+Een plat vlak dat op een ander vlak ligt, flikkert zodra je er wat verder vanaf staat, hoe dun de spleet ertussen ook is. Dit geldt voor alles in en om de hal.
+- Elk vlak dat óp iets ligt (sticker, label, bord, logo, scherm, vloermarkering, vloerplaat) krijgt `onTop(materiaal)` uit src/ui/scene/style.ts: laag +1 boven zijn ondergrond.
+- Ligt het op iets dat zelf al een laag is, dan een laag meer: `onTop(materiaal, 2)`. Voorbeeld: vloer 0, vloerverf +1, het gekleurde baanvlak daarover +2.
+- Geen losse `polygonOffset`-waarden in de code en niet oplossen door het vlak een stukje op te tillen; een kleine afstand (enkele mm) mag blijven, de laag doet het werk.
+- Twee massieve onderdelen liggen nooit precies in hetzelfde vlak: laat het ene minstens 3 mm uitsteken of verzinken.

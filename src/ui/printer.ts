@@ -3,6 +3,7 @@ import { articleName } from '../sim/catalog';
 import { location } from '../sim/layout';
 import type { Item } from '../shared/contract';
 import type { SimOrder } from '../sim/warehouse';
+import { onTop } from './scene/style';
 
 // Laserprinter op het bureau naast de pc: drukt de picklijst van een order af.
 // B (als je erbij staat): afdrukken → het vel schuift eruit → B: vel pakken. Het vel houd je daarna linksboven
@@ -196,7 +197,7 @@ export function createPrinter(src: PrinterSource) {
   texture.anisotropy = 8;
   const paper = new THREE.Mesh(
     new THREE.PlaneGeometry(PAPER.w, PAPER.h),
-    new THREE.MeshStandardMaterial({ map: texture, roughness: 0.9, side: THREE.DoubleSide }),
+    onTop(new THREE.MeshStandardMaterial({ map: texture, roughness: 0.9, side: THREE.DoubleSide })),
   );
   paper.rotation.set(-Math.PI / 2, 0, Math.PI);
   paper.receiveShadow = true;

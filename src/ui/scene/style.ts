@@ -23,6 +23,19 @@ export const STYLE = {
 };
 
 /**
+ * Laag +1: zet een plat vlak dat óp een ander vlak ligt (sticker, label, bord, logo, scherm, vloermarkering)
+ * bij het tekenen één laag vóór zijn ondergrond. Zonder dit flikkeren de twee door elkaar zodra je er wat
+ * verder vanaf staat, hoe dun de spleet ertussen ook is. Ligt het vlak op iets dat zelf al een laag is
+ * (een markering op vloerverf), geef dan een laag meer mee. Zie "Vlakken op vlakken" in CLAUDE.md.
+ */
+export function onTop<T extends THREE.Material>(material: T, layers = 1): T {
+  material.polygonOffset = true;
+  material.polygonOffsetFactor = -4 * layers;
+  material.polygonOffsetUnits = -4 * layers;
+  return material;
+}
+
+/**
  * Brengt een ingeladen model in de huisstijl: de materialen van hierboven (op naam van het materiaal in
  * het model) en opnieuw berekende normalen, zodat vlakken egaal zijn en alleen echte randen scherp blijven.
  * @param crease hoek (rad) waarboven een rand scherp blijft

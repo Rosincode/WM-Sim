@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { DOCKS, DOCK_PITCH } from '../../sim/layout';
 import logoUrl from '../assets/robodu-logo.jpg';
+import { onTop } from './style';
 import * as tex from './textures';
 import { Batch, EXIT_X, HALL, UNIT_BOX, UNIT_CYL, paint } from './warehouse';
 
@@ -22,10 +23,10 @@ export function createExterior(scene: THREE.Scene) {
   scene.add(root);
 
   // ---------- Terrein ----------
-  const offset = (factor: number) => ({ polygonOffset: true, polygonOffsetFactor: factor, polygonOffsetUnits: factor });
+  // Lagen (onTop in style.ts): asfalt +1 op het gras, beton +2, belijning en cijfers +3
   const grassMat = new THREE.MeshStandardMaterial({ map: tex.grass(), roughness: 1 });
-  const asphaltMat = new THREE.MeshStandardMaterial({ map: tex.asphalt(), roughness: 0.95, ...offset(-1) });
-  const concreteMat = new THREE.MeshStandardMaterial({ color: '#b5b3ac', roughness: 0.9, ...offset(-2) });
+  const asphaltMat = onTop(new THREE.MeshStandardMaterial({ map: tex.asphalt(), roughness: 0.95 }));
+  const concreteMat = onTop(new THREE.MeshStandardMaterial({ color: '#b5b3ac', roughness: 0.9 }), 2);
 
   function ground(r: Rect, y: number, mat: THREE.Material, tile: number) {
     const w = r.maxX - r.minX;
@@ -78,7 +79,7 @@ export function createExterior(scene: THREE.Scene) {
     }
   }
   root.add(
-    lines.build(UNIT_BOX, new THREE.MeshStandardMaterial({ color: '#e9e9e2', roughness: 0.8, ...offset(-6) }), false),
+    lines.build(UNIT_BOX, onTop(new THREE.MeshStandardMaterial({ color: '#e9e9e2', roughness: 0.8 }), 3), false),
   );
 
   // Docknummers op het asfalt (leesbaar vanuit het overzicht)
@@ -86,7 +87,7 @@ export function createExterior(scene: THREE.Scene) {
   DOCKS.forEach((d, i) => {
     const m = new THREE.Mesh(
       numberGeo,
-      new THREE.MeshStandardMaterial({ map: tex.floorText(String(i + 1)), color: '#f0c20a', transparent: true, depthWrite: false, roughness: 0.8, ...offset(-6) }),
+      onTop(new THREE.MeshStandardMaterial({ map: tex.floorText(String(i + 1)), color: '#f0c20a', transparent: true, depthWrite: false, roughness: 0.8 }), 3),
     );
     m.rotation.x = -Math.PI / 2;
     m.position.set(X0 - 22.5, -0.005, d.z);
@@ -138,7 +139,7 @@ export function createExterior(scene: THREE.Scene) {
   const logoTex = new THREE.TextureLoader().load(logoUrl);
   logoTex.colorSpace = THREE.SRGBColorSpace;
   logoTex.anisotropy = 8;
-  const logoMat = new THREE.MeshStandardMaterial({ map: logoTex, roughness: 0.6, metalness: 0 });
+  const logoMat = onTop(new THREE.MeshStandardMaterial({ map: logoTex, roughness: 0.6, metalness: 0 }));
   const frameMat = paint(NAVY, 0.5, 0.3);
   /** Logobord; (x, z) is het midden op de gevel, ry de richting waarin het bord kijkt. */
   function logo(x: number, y: number, z: number, ry: number, height: number) {
@@ -167,7 +168,7 @@ export function createExterior(scene: THREE.Scene) {
     for (const dz of [-1.05, 1.05]) seals.add(X0 - 0.16, 0.32, d.z + dz, 0.22, 0.45, 0.3);
     const s = new THREE.Mesh(
       signGeo,
-      new THREE.MeshStandardMaterial({ map: tex.sign(String(i + 1), NAVY, '#ffffff'), roughness: 0.5 }),
+      onTop(new THREE.MeshStandardMaterial({ map: tex.sign(String(i + 1), NAVY, '#ffffff'), roughness: 0.5 })),
     );
     s.rotation.y = -Math.PI / 2;
     s.position.set(X0 - 0.1, 4.45, d.z);
