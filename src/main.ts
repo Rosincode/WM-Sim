@@ -23,6 +23,7 @@ import { mountMultiplayer } from './ui/multiplayer';
 import { SceneRenderPass } from './ui/sceneRenderPass';
 import { menu } from './ui/menu';
 import { createPrompts, esc, type Prompt } from './ui/prompts';
+import { createEditor } from './ui/editor';
 
 // De WMS-koppeling loopt via de poort van de sim (src/sim/wms.ts, ingevuld in src/ui/wmsGateway.ts):
 // elke handeling wacht op het antwoord van de WMS. De bridge op de bus (startWmsBridge) start daarom
@@ -171,12 +172,15 @@ const handheld = createHandheld({
 const tabletApp = createTabletApp({ camera, display: handheld.tabletDisplay, onClose: () => handheld.setFocus(false) });
 
 let driving = false;
+/** Bewerkmodus voor de indeling van de hal (src/ui/editor.ts); werkt alleen in het overzicht. */
+let editor: ReturnType<typeof createEditor> | undefined;
 
 /** Loopt de speler met de pompwagen? */
 let pushing = false;
 
 function applyMode(mode: ViewMode) {
   const overview = mode === 'overview';
+  if (!overview) editor?.close();
   hall.roof.visible = !overview; // dak weg zodat je van boven naar binnen kijkt
   scene.fog = overview ? DISTANCE_HAZE : HAZE;
   scene.background = overview ? OUTSIDE : INSIDE;
@@ -199,6 +203,9 @@ const view = createPlayerView({
   initialMode: params.get('view') === 'overview' ? 'overview' : params.get('view') === 'third' ? 'third' : 'first',
   onModeChange: applyMode,
 });
+
+editor = createEditor({ scene, camera, canvas: renderer.domElement, controls, toOverview: () => view.setMode('overview') });
+if (params.has('edit') || editor.resume) editor.open(); // ?edit, of de bewerkmodus stond open voor het herladen
 
 // Handig bij testen: ?at=x,z,draaiing(graden) en ?tool=2
 const at = params.get('at')?.split(',').map(Number);

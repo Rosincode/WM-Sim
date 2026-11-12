@@ -13,7 +13,75 @@
 //
 // De locaties moeten gelijk lopen met de WMS (pos_x = x, pos_y = z in de 3D-scène); het WMS-paneel
 // laat zien welke locaties van de hal de WMS nog niet kent.
-import model from './warehouse.json';
+//
+// Bewerken in de game (src/ui/editor.ts) levert een concept op dat in localStorage van deze browser staat en
+// hier vóór het bestand gaat; definitief wordt het pas als het als warehouse.json is opgeslagen en ingecheckt.
+import base from './warehouse.json';
+
+export type WarehouseModel = typeof base;
+/** localStorage-sleutel van het concept uit de bewerkmodus. */
+export const MODEL_DRAFT_KEY = 'wm-sim.model-draft';
+
+function shapeError(m: unknown, ref: unknown, path: string): string | null {
+  if (typeof ref === 'number') return typeof m === 'number' && Number.isFinite(m) ? null : `${path} moet een getal zijn`;
+  if (Array.isArray(ref)) {
+    if (!Array.isArray(m)) return `${path} moet een lijst zijn`;
+    for (const [i, v] of m.entries()) {
+      const e = shapeError(v, ref[0], `${path}[${i}]`);
+      if (e) return e;
+    }
+    return null;
+  }
+  if (typeof m !== 'object' || m === null || Array.isArray(m)) return `${path} ontbreekt`;
+  for (const [k, v] of Object.entries(ref as object)) {
+    const e = shapeError((m as Record<string, unknown>)[k], v, path ? `${path}.${k}` : k);
+    if (e) return e;
+  }
+  return null;
+}
+
+/** Waarom dit geen bruikbaar model is (zelfde opbouw als warehouse.json, zinnige aantallen), of null als het klopt. */
+export function modelError(m: unknown): string | null {
+  const shape = shapeError(m, base, '');
+  if (shape) return shape;
+  const { hall, racks, docks } = m as WarehouseModel;
+  const count = (v: number) => Number.isInteger(v) && v >= 1 && v <= 40;
+  if (hall.width < 10 || hall.depth < 10 || hall.height < 3) return 'hall: minstens 10 × 10 m en 3 m hoog';
+  if (!count(racks.rows) || !count(racks.sections)) return 'racks.rows en racks.sections: een geheel getal van 1 t/m 40';
+  if (!count(racks.palletsPerLocation)) return 'racks.palletsPerLocation: een geheel getal vanaf 1';
+  if (racks.rowPitch <= 0 || racks.sectionPitch <= 0 || racks.palletPitch <= 0) return 'racks: tussenafstanden moeten groter dan 0 zijn';
+  const levels = racks.levelHeights;
+  if (levels.length < 2 || levels[0] !== 0 || levels.some((y, i) => i > 0 && y <= levels[i - 1]))
+    return 'racks.levelHeights: minstens twee niveaus, oplopend vanaf 0';
+  if (!count(docks.count) || !count(docks.lanes.slots)) return 'docks.count en docks.lanes.slots: een geheel getal van 1 t/m 40';
+  if (docks.pitch <= 0 || docks.lanes.slotPitch <= 0) return 'docks: tussenafstanden moeten groter dan 0 zijn';
+  return null;
+}
+
+function loadDraft(): WarehouseModel | null {
+  try {
+    const text = globalThis.localStorage?.getItem(MODEL_DRAFT_KEY);
+    if (!text) return null;
+    const m: unknown = JSON.parse(text);
+    // Onbruikbaar (bijvoorbeeld van een oudere versie) of inmiddels gelijk aan het bestand: het concept vervalt.
+    if (modelError(m) || JSON.stringify(m) === JSON.stringify(base)) {
+      localStorage.removeItem(MODEL_DRAFT_KEY);
+      return null;
+    }
+    return m as WarehouseModel;
+  } catch {
+    return null;
+  }
+}
+
+const draft = loadDraft();
+/** Het model uit warehouse.json. */
+export const BASE_MODEL: WarehouseModel = base;
+/** Het model waarmee de hal nu is opgebouwd: het concept uit de bewerkmodus, anders warehouse.json. */
+export const MODEL: WarehouseModel = draft ?? base;
+/** true: de hal is opgebouwd uit een concept dat alleen in deze browser staat. */
+export const MODEL_IS_DRAFT = !!draft;
+const model = MODEL;
 
 export type LocationType = 'dock' | 'rack' | 'pick';
 export type SimLocation = { id: string; type: LocationType; x: number; z: number; level: number };
