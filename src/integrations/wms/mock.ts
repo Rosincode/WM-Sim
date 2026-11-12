@@ -1,4 +1,5 @@
 import type { Item, Order } from '../../shared/contract';
+import { DOCKS, HALL, LOCATIONS } from '../../sim/layout';
 import { WmsError, type WmsClient, type WmsItem, type WmsLocation } from './types';
 
 // In-memory WMS met dezelfde regels en seed-data als docs/wms/01-basis-datamodel.md.
@@ -14,27 +15,14 @@ const ITEMS: WmsItem[] = [
 const SKUS = ITEMS.map((i) => i.sku);
 
 function seedLocations(): WmsLocation[] {
-  // Zelfde plattegrond als src/sim/layout.ts en docs/wms/05-grotere-hal-locaties.md:
-  // 10 dockdeuren met elk een inslag- en uitslaglocatie, 11 stellingen van 7 secties.
-  const locs: WmsLocation[] = [];
-  for (let d = 0; d < 10; d++) {
-    const id = `DOCK-${String(d + 1).padStart(2, '0')}`;
-    const y = -22.5 + d * 5;
-    locs.push({ id, type: 'dock', x: -28, y, level: 0, blocked: false }); // de deur zelf (aan- en afmelden, laden)
-    locs.push({ id: `${id}-IN`, type: 'dock', x: -20.3, y: y - 1.3, level: 0, blocked: false });
-    locs.push({ id: `${id}-UIT`, type: 'dock', x: -20.3, y: y + 1.3, level: 0, blocked: false });
-  }
-  const xs = [-8, -4, 0, 4, 8, 12, 16];
-  const ys = Array.from({ length: 11 }, (_, i) => -25 + i * 5);
-  ys.forEach((y, r) =>
-    xs.forEach((x, s) => {
-      for (const level of [1, 2, 3]) {
-        const id = `R${r + 1}-${String(s + 1).padStart(2, '0')}-${level}`;
-        locs.push({ id, type: level === 1 ? 'pick' : 'rack', x, y, level, blocked: false });
-      }
-    }),
-  );
-  return locs;
+  // Zelfde plattegrond als de hal: de locaties komen uit het model (src/sim/warehouse.json via src/sim/layout.ts),
+  // dus een andere indeling van de hal geldt vanzelf ook voor de mock.
+  return [
+    // de deur zelf (aan- en afmelden, laden)
+    ...DOCKS.map((d) => ({ id: d.id, type: 'dock' as const, x: -HALL.w / 2, y: d.z, level: 0, blocked: false })),
+    // inslag- en uitslaglocaties en de stellingen
+    ...LOCATIONS.map((l) => ({ id: l.id, type: l.type, x: l.x, y: l.z, level: l.level, blocked: false })),
+  ];
 }
 
 export function createMockClient(): WmsClient {
