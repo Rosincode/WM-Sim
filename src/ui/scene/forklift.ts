@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { Collider, Hall, RackPallet, Slot, Solid } from './warehouse';
 
 // Bestuurbare heftruck (elektrische contragewichttruck). Voorkant wijst naar +Z.
@@ -46,15 +48,77 @@ const REACH = 0.45; // hoe nauwkeurig de vorken onder de pallet moeten zitten
 const MAX_SPEED = 4.2;
 const MAX_REVERSE = 2.6;
 
+// ---------- Vormen ----------
+/** Punt in het zijaanzicht: z (naar voren), y (omhoog) en eventueel de straal van de afgeronde hoek. */
+type P = [z: number, y: number, r?: number];
+
+/** Zijaanzicht met afgeronde hoeken, uitgetrokken over de breedte (x, rond het midden). */
+function profile(pts: P[], width: number, bevel = 0.012) {
+  const shape = new THREE.Shape();
+  const n = pts.length;
+  pts.forEach(([z, y, r = 0], i) => {
+    const [pz, py] = pts[(i + n - 1) % n];
+    const [nz, ny] = pts[(i + 1) % n];
+    const lp = Math.hypot(pz - z, py - y);
+    const ln = Math.hypot(nz - z, ny - y);
+    const d = Math.min(r, lp / 2, ln / 2);
+    const az = z + ((pz - z) / lp) * d;
+    const ay = y + ((py - y) / lp) * d;
+    if (i === 0) shape.moveTo(az, ay);
+    else shape.lineTo(az, ay);
+    if (d > 0) shape.quadraticCurveTo(z, y, z + ((nz - z) / ln) * d, y + ((ny - y) / ln) * d);
+  });
+  shape.closePath();
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth: width - 2 * bevel,
+    bevelEnabled: true,
+    bevelThickness: bevel,
+    bevelSize: bevel,
+    bevelOffset: -bevel,
+    bevelSegments: 2,
+    curveSegments: 6,
+  });
+  geo.translate(0, 0, bevel - width / 2);
+  geo.rotateY(-Math.PI / 2); // vorm-x wordt z, de uittrekrichting wordt x
+  return toCreasedNormals(geo, 0.3); // bochten vloeiend, vlakke kanten en de afschuining strak
+}
+
+/** Punten op een cirkelboog in het zijaanzicht; hoek 0 wijst naar voren, een kwartslag is recht omhoog. */
+function arc(cz: number, cy: number, r: number, from: number, to: number, steps = 14): P[] {
+  return Array.from({ length: steps + 1 }, (_, i) => {
+    const a = from + ((to - from) * i) / steps;
+    return [cz + Math.cos(a) * r, cy + Math.sin(a) * r] as P;
+  });
+}
+
+/** Buis langs een reeks punten, met ronde bochten. */
+function tube(pts: [number, number, number][], radius: number, corner: number) {
+  const v = pts.map((p) => new THREE.Vector3(...p));
+  const path = new THREE.CurvePath<THREE.Vector3>();
+  let from = v[0];
+  for (let i = 1; i < v.length - 1; i++) {
+    const a = v[i].clone().add(v[i - 1].clone().sub(v[i]).setLength(corner));
+    const c = v[i].clone().add(v[i + 1].clone().sub(v[i]).setLength(corner));
+    path.add(new THREE.LineCurve3(from, a));
+    path.add(new THREE.QuadraticBezierCurve3(a, v[i], c));
+    from = c;
+  }
+  path.add(new THREE.LineCurve3(from, v[v.length - 1]));
+  return new THREE.TubeGeometry(path, 90, radius, 10);
+}
+
 export function createForklift({ hall, colliders, bounds, take, place, onStockChange }: Options) {
   const g = new THREE.Group();
-  const yellow = new THREE.MeshStandardMaterial({ color: '#f0b414', roughness: 0.38, metalness: 0.25 });
+  // Zelfde lak, rubber en staal als de pompwagen
+  const red = new THREE.MeshStandardMaterial({ color: '#c9381c', roughness: 0.42, metalness: 0.25 });
+  const dark = new THREE.MeshStandardMaterial({ color: '#2b2e32', roughness: 0.55, metalness: 0.35 });
   const black = new THREE.MeshStandardMaterial({ color: '#1b1c1e', roughness: 0.6, metalness: 0.3 });
-  const steel = new THREE.MeshStandardMaterial({ color: '#3a3d42', roughness: 0.4, metalness: 0.8 });
-  const rubber = new THREE.MeshStandardMaterial({ color: '#101010', roughness: 0.95 });
+  const steel = new THREE.MeshStandardMaterial({ color: '#8a9097', roughness: 0.35, metalness: 0.8 });
+  const rubber = new THREE.MeshStandardMaterial({ color: '#151617', roughness: 0.85 });
   const seat = new THREE.MeshStandardMaterial({ color: '#25272b', roughness: 0.9 });
+  const tailLight = new THREE.MeshStandardMaterial({ color: '#7a0c08', emissive: '#ff2a1a', emissiveIntensity: 0.6 });
 
-  const add = (parent: THREE.Object3D, geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, rx = 0, rz = 0) => {
+  const add = (parent: THREE.Object3D, geo: THREE.BufferGeometry, mat: THREE.Material, x = 0, y = 0, z = 0, rx = 0, rz = 0) => {
     const m = new THREE.Mesh(geo, mat);
     m.position.set(x, y, z);
     m.rotation.set(rx, 0, rz);
@@ -64,14 +128,43 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
     return m;
   };
   const b = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
+  const rb = (w: number, h: number, d: number, r: number) => new RoundedBoxGeometry(w, h, d, 3, r);
+  const cyl = (r: number, len: number, seg = 16) => new THREE.CylinderGeometry(r, r, len, seg);
+  const v = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
+  /** Ronde staaf tussen twee punten. */
+  const rod = (parent: THREE.Object3D, from: THREE.Vector3, to: THREE.Vector3, r: number, mat: THREE.Material) => {
+    const m = add(parent, cyl(r, from.distanceTo(to), 12), mat);
+    m.position.copy(from).add(to).multiplyScalar(0.5);
+    m.quaternion.setFromUnitVectors(THREE.Object3D.DEFAULT_UP, to.clone().sub(from).normalize());
+    return m;
+  };
 
-  // Chassis en contragewicht
-  add(g, b(1.1, 0.5, 1.9), yellow, 0, 0.5, -0.1);
-  add(g, b(1.12, 0.75, 0.55), black, 0, 0.7, -1.0);
-  add(g, b(1.0, 0.45, 0.8), yellow, 0, 0.95, -0.45);
-  add(g, b(0.5, 0.12, 0.5), seat, 0, 1.24, -0.45);
-  add(g, b(0.5, 0.5, 0.1), seat, 0, 1.5, -0.7, -0.15);
-  add(g, b(0.9, 0.6, 0.12), yellow, 0, 1.0, 0.55);
+  // Onderstel, met daaroverheen de rode kap: motorkap onder de stoel en de vloer voor de voeten
+  add(g, profile([[-0.6, 0.24], [-0.6, 0.75], [0.66, 0.75], [0.66, 0.24, 0.08]], 0.88), dark);
+  add(g, profile([[-0.56, 0.3], [-0.72, 0.5], [-0.72, 1.18], [-0.12, 1.18, 0.08], [-0.06, 0.78, 0.04], [0.2, 0.78], [0.2, 0.3, 0.06]], 1.08, 0.02), red);
+  add(g, rb(0.8, 0.05, 0.5, 0.012), rubber, 0, 0.77, 0.19);
+  // Voorschot met het dashboard, schuin naar de bestuurder, en de hendels van de mast
+  add(g, profile([[0.42, 0.75], [0.42, 1.2, 0.05], [0.58, 1.34, 0.04], [0.64, 1.34, 0.03], [0.64, 0.75]], 0.9, 0.02), red);
+  for (const x of [0.24, 0.31, 0.38]) {
+    add(g, cyl(0.008, 0.16, 8), steel, x, 1.4, 0.52, -0.3);
+    add(g, new THREE.SphereGeometry(0.02, 12, 8), black, x, 1.476, 0.496);
+  }
+  // Spatborden over de voorwielen
+  const fender = profile([...arc(0.55, 0.3, 0.4, 0.35, Math.PI), ...arc(0.55, 0.3, 0.345, Math.PI, 0.35)], 0.26, 0.008);
+  for (const x of [-0.56, 0.56]) add(g, fender, red, x);
+
+  // Contragewicht: rond aan de achterkant, met aan weerszijden een wang over het achterwiel
+  const back: P[] = [[-0.72, 1.18], [-1.28, 1.18, 0.22], [-1.28, 0.36, 0.1]];
+  add(g, profile([[-0.72, 0.28], ...back, [-1.2, 0.28]], 0.82, 0.02), dark);
+  const cheek = profile([...back, [-1.2, 0.3], ...arc(-0.85, 0.24, 0.28, 2.926, 1.088)], 0.16, 0.02);
+  for (const x of [-0.49, 0.49]) {
+    add(g, cheek, dark, x);
+    add(g, b(0.14, 0.05, 0.02), tailLight, x * 0.75, 0.74, -1.283).castShadow = false;
+  }
+
+  // Stoel
+  add(g, rb(0.52, 0.12, 0.5, 0.04), seat, 0, 1.24, -0.45);
+  add(g, rb(0.5, 0.56, 0.1, 0.04), seat, 0, 1.5, -0.71, -0.15);
   // Stuurkolom vanaf de vloer schuin naar de bestuurder; het stuur zit binnen handbereik boven de knieën.
   add(g, new THREE.CylinderGeometry(0.025, 0.03, 1.0, 10), black, 0, 1.19, 0.17, -0.5);
   const wheelRim = add(g, new THREE.TorusGeometry(0.16, 0.022, 10, 32), black, 0, 1.63, -0.07, Math.PI / 2 - 0.5);
@@ -82,46 +175,69 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
   wheelGrip.position.set(Math.sin(1.05) * 0.16, Math.cos(1.05) * 0.16, 0);
   wheelRim.add(wheelGrip);
 
-  // Beschermkooi
-  for (const x of [-0.5, 0.5]) {
-    add(g, b(0.06, 1.3, 0.06), black, x, 1.6, 0.62, 0.12);
-    add(g, b(0.06, 1.2, 0.06), black, x, 1.65, -0.95);
-  }
-  add(g, b(1.1, 0.05, 1.7), black, 0, 2.25, -0.15);
-  for (const z of [-0.7, -0.35, 0, 0.35]) add(g, b(1.0, 0.03, 0.05), black, 0, 2.22, z);
+  // Beschermkooi: per kant één gebogen buis van spatbord naar contragewicht, met een rooster als dak
+  for (const x of [-0.5, 0.5]) add(g, tube([[x, 0.66, 0.55], [x, 2.22, 0.68], [x, 2.22, -0.97], [x, 1.12, -0.97]], 0.032, 0.14), black);
+  for (const z of [0.6, -0.9]) rod(g, v(-0.5, 2.22, z), v(0.5, 2.22, z), 0.028, black);
+  for (let z = -0.72; z < 0.5; z += 0.18) add(g, b(1.0, 0.02, 0.045), black, 0, 2.22, z);
 
-  // Wielen
-  const wheels: THREE.Mesh[] = [];
-  for (const x of [-0.56, 0.56]) {
-    wheels.push(add(g, new THREE.CylinderGeometry(0.3, 0.3, 0.22, 24), rubber, x, 0.3, 0.55, 0, Math.PI / 2));
-    wheels.push(add(g, new THREE.CylinderGeometry(0.24, 0.24, 0.2, 24), rubber, x, 0.24, -0.85, 0, Math.PI / 2));
+  // Wielen: band met ronde schouders, velg en wielmoeren
+  const wheels: { o: THREE.Object3D; r: number }[] = [];
+  const wheel = (x: number, z: number, r: number, w: number) => {
+    const o = new THREE.Group();
+    o.position.set(x, r, z);
+    g.add(o);
+    const h = w / 2;
+    const tyre = [[r * 0.56, -h], [r - 0.035, -h], [r - 0.008, -h + 0.02], [r, -h + 0.05], [r, h - 0.05], [r - 0.008, h - 0.02], [r - 0.035, h], [r * 0.56, h]];
+    add(o, new THREE.LatheGeometry(tyre.map(([px, py]) => new THREE.Vector2(px, py)), 32), rubber, 0, 0, 0, 0, Math.PI / 2);
+    add(o, cyl(r * 0.58, w * 0.72, 28), steel, 0, 0, 0, 0, Math.PI / 2);
+    add(o, cyl(r * 0.2, w * 0.86, 16), red, 0, 0, 0, 0, Math.PI / 2);
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2;
+      add(o, cyl(0.014, w * 0.8, 6), black, 0, Math.cos(a) * r * 0.38, Math.sin(a) * r * 0.38, 0, Math.PI / 2);
+    }
+    wheels.push({ o, r });
+  };
+  for (const side of [-1, 1]) {
+    wheel(side * 0.56, 0.55, 0.3, 0.22);
+    wheel(side * 0.5, -0.85, 0.24, 0.16);
   }
 
-  // Mast: vast deel + uitschuivend deel
-  for (const x of [-0.36, 0.36]) add(g, b(0.09, 2.5, 0.12), steel, x, 1.3, 0.98);
-  add(g, b(0.82, 0.08, 0.1), steel, 0, 2.5, 0.98);
-  add(g, b(0.82, 0.08, 0.1), steel, 0, 0.6, 0.98);
+  // Mast: vast deel (met hef- en neigcilinders) + uitschuivend deel
+  for (const x of [-0.36, 0.36]) {
+    add(g, rb(0.09, 2.5, 0.12, 0.015), dark, x, 1.3, 0.98);
+    add(g, cyl(0.035, 1.9, 12), steel, x * 0.55, 1.15, 0.955);
+    rod(g, v(x * 0.85, 0.62, 0.6), v(x, 1.0, 0.93), 0.03, steel);
+  }
+  for (const y of [0.6, 1.55, 2.5]) add(g, b(0.82, 0.08, 0.1), dark, 0, y, 0.98);
   const innerMast = new THREE.Group();
-  for (const x of [-0.28, 0.28]) add(innerMast, b(0.07, 2.5, 0.09), steel, x, 1.3, 1.0);
+  for (const x of [-0.28, 0.28]) add(innerMast, rb(0.07, 2.5, 0.09, 0.012), steel, x, 1.3, 1.0);
   add(innerMast, b(0.64, 0.07, 0.08), steel, 0, 2.52, 1.0);
+  for (const x of [-0.1, 0.1]) add(innerMast, b(0.025, 2.4, 0.012), black, x, 1.3, 1.03); // hefkettingen
   g.add(innerMast);
 
-  // Vorkenbord met vorken (beweegt mee met de hefhoogte)
+  // Vorkenbord met lastrek en vorken (beweegt mee met de hefhoogte)
   const carriage = new THREE.Group();
-  add(carriage, b(0.95, 0.5, 0.06), black, 0, 0.42, 1.08);
-  for (const y of [0.9, 1.15]) add(carriage, b(0.95, 0.03, 0.03), black, 0, y, 1.08);
-  for (const x of [-0.3, 0.3]) {
-    add(carriage, b(0.11, 0.045, 1.1), steel, x, 0.11, FORK_Z);
-    add(carriage, b(0.11, 0.5, 0.045), steel, x, 0.34, 1.13);
-  }
+  for (const y of [0.24, 0.6]) add(carriage, rb(0.95, 0.1, 0.06, 0.012), black, 0, y, 1.08);
+  add(carriage, b(0.6, 0.3, 0.03), black, 0, 0.42, 1.065);
+  for (const x of [-0.45, -0.225, 0, 0.225, 0.45]) add(carriage, b(0.03, 0.62, 0.03), black, x, 0.94, 1.08);
+  add(carriage, b(0.93, 0.03, 0.03), black, 0, 1.24, 1.08);
+  // Vork uit één stuk: rug, ronde hiel en een blad dat naar de punt dunner wordt
+  const forkBlade = profile([[1.11, 0.62], [1.155, 0.62], [1.155, 0.133, 0.03], [2.21, 0.133], [2.21, 0.118], [1.85, 0.088], [1.11, 0.088, 0.04]], 0.11, 0.006);
+  for (const x of [-0.3, 0.3]) add(carriage, forkBlade, steel, x);
   g.add(carriage);
 
   // Zwaailamp en koplampen
   const beacon = new THREE.MeshBasicMaterial();
-  add(g, new THREE.CylinderGeometry(0.05, 0.05, 0.09, 12), beacon, 0.4, 2.33, -0.8);
+  add(g, b(0.22, 0.015, 0.2), black, 0.38, 2.24, -0.8);
+  add(g, cyl(0.06, 0.03), black, 0.4, 2.262, -0.8);
+  add(g, cyl(0.045, 0.07, 14), beacon, 0.4, 2.31, -0.8);
+  add(g, new THREE.SphereGeometry(0.045, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), beacon, 0.4, 2.345, -0.8);
   const head = new THREE.MeshBasicMaterial();
   head.color.setRGB(3, 3, 2.7);
-  for (const x of [-0.45, 0.45]) add(g, new THREE.SphereGeometry(0.045, 12, 8), head, x, 2.18, 0.72);
+  for (const x of [-0.5, 0.5]) {
+    add(g, cyl(0.06, 0.08), black, x, 2.08, 0.72, Math.PI / 2);
+    add(g, cyl(0.048, 0.01), head, x, 2.08, 0.762, Math.PI / 2);
+  }
 
   // Markering van de plek waar de pallet terechtkomt
   const marker = new THREE.Mesh(
@@ -515,7 +631,7 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
       if (driving) updateHint(slot);
 
       // Details
-      for (const w of wheels) w.rotation.x += (speed * dt) / 0.3;
+      for (const w of wheels) w.o.rotation.x += (speed * dt) / w.r;
       wheelRim.rotation.z = -steer * 1.2;
       const k = driving ? 0.6 + 0.4 * Math.sin(time * 9) : 0.15;
       beacon.color.setRGB(3.5 * k, 1.4 * k, 0.1);
