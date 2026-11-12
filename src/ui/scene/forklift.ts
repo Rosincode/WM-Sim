@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
+import { STYLE } from './style';
 import type { Collider, Hall, RackPallet, Slot, Solid } from './warehouse';
 
 // Bestuurbare heftruck (elektrische contragewichttruck). Voorkant wijst naar +Z.
@@ -109,13 +110,8 @@ function tube(pts: [number, number, number][], radius: number, corner: number) {
 
 export function createForklift({ hall, colliders, bounds, take, place, onStockChange }: Options) {
   const g = new THREE.Group();
-  // Zelfde lak, rubber en staal als de pompwagen
-  const red = new THREE.MeshStandardMaterial({ color: '#c9381c', roughness: 0.42, metalness: 0.25 });
-  const dark = new THREE.MeshStandardMaterial({ color: '#2b2e32', roughness: 0.55, metalness: 0.35 });
-  const black = new THREE.MeshStandardMaterial({ color: '#1b1c1e', roughness: 0.6, metalness: 0.3 });
-  const steel = new THREE.MeshStandardMaterial({ color: '#8a9097', roughness: 0.35, metalness: 0.8 });
-  const rubber = new THREE.MeshStandardMaterial({ color: '#151617', roughness: 0.85 });
-  const seat = new THREE.MeshStandardMaterial({ color: '#25272b', roughness: 0.9 });
+  // Materialen van de huisstijl, gedeeld met de pompwagen
+  const { paint: red, dark, black, steel, rubber, seat } = STYLE;
   const tailLight = new THREE.MeshStandardMaterial({ color: '#7a0c08', emissive: '#ff2a1a', emissiveIntensity: 0.6 });
 
   const add = (parent: THREE.Object3D, geo: THREE.BufferGeometry, mat: THREE.Material, x = 0, y = 0, z = 0, rx = 0, rz = 0) => {

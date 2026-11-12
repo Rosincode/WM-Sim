@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import modelUrl from '../assets/palletjack.glb?url';
 import type { Carried, Load, Loose } from './forklift';
-import { paint, type Hall, type RackPallet, type Solid } from './warehouse';
+import { restyle, STYLE } from './style';
+import type { Hall, RackPallet, Solid } from './warehouse';
 
 // Pompwagen (handpallettruck). Pakken met R: hij rolt dan voor je uit, de vorken wijzen van je af.
 // Q pompt de vorken omhoog of laat ze zakken. Alleen voor pallets op de vloer: los in de hal of op
@@ -12,6 +13,7 @@ import { paint, type Hall, type RackPallet, type Solid } from './warehouse';
 // - frame: chassis en vorken, gaat omhoog bij het pompen;
 // - base: pomp, stuurwiel en de rollen onder de vorkpunten, blijven op de vloer;
 // - handle: de dissel, met zijn draaipunt op de pomp; kantelt naar je toe zolang iemand hem duwt.
+// Het model levert alleen de vorm: de materialen komen uit de huisstijl (style.ts), zonder textures.
 // Lukt het laden niet, dan staat er een eenvoudige pompwagen van blokken.
 
 interface Options {
@@ -53,6 +55,9 @@ const HAND = { x: 0.11, y: 0.72, z: 0.01 };
 const TILT = 0.45;
 
 const loader = new GLTFLoader();
+/** Het model heeft hier en daar vlakken die van binnenuit zichtbaar zijn: daarom dubbelzijdig. */
+const twoSided = (m: THREE.Material) => Object.assign(m.clone(), { side: THREE.DoubleSide });
+const MATERIALS = { jack_paint: twoSided(STYLE.paint), jack_rubber: twoSided(STYLE.rubber), jack_steel: twoSided(STYLE.steel) };
 
 export function createPalletJack({ hall, bounds, take, place, onStockChange, loose }: Options) {
   const g = new THREE.Group();
@@ -70,6 +75,7 @@ export function createPalletJack({ hall, bounds, take, place, onStockChange, loo
   loader.load(
     modelUrl,
     (gltf) => {
+      restyle(gltf.scene, MATERIALS);
       const part = (name: string) => {
         const o = gltf.scene.getObjectByName(name);
         if (!o) throw new Error(`pompwagen: deel "${name}" ontbreekt in het model`);
@@ -91,8 +97,7 @@ export function createPalletJack({ hall, bounds, take, place, onStockChange, loo
 
   /** Reserve als het model niet laadt: blokken in dezelfde maten. */
   function simpleShape() {
-    const red = paint('#c9381c', 0.45, 0.3);
-    const dark = paint('#2b2e32', 0.5, 0.5);
+    const { paint: red, rubber: dark } = STYLE;
     const part = (parent: THREE.Object3D, geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, rx = 0, rz = 0) => {
       const m = new THREE.Mesh(geo, mat);
       m.position.set(x, y, z);
