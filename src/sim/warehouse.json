@@ -1,5 +1,5 @@
 {
-  "hall": { "width": 56, "depth": 56, "height": 8.5 },
+  "hall": { "width": 56, "depth": 72, "height": 8.5 },
 
   "racks": {
     "rows": 11,
@@ -29,26 +29,30 @@
 
   "rollContainers": { "x": -11.3, "z": 5 },
 
+  "rooms": { "depth": 7.5, "officeWidth": 6, "canteenWidth": 9 },
+
+  "parking": { "width": 16, "depth": 7.5, "robotBays": 6 },
+
   "equipment": {
-    "forklift": { "x": -12.6, "z": 2.5, "rotation": 90 },
-    "palletJack": { "x": -13.4, "z": 5.4, "rotation": 90 }
+    "forklift": { "x": -25.7, "z": 34.2, "rotation": 180 },
+    "palletJack": { "x": -23.3, "z": 34.3, "rotation": 0 }
   },
 
   "playerStart": { "x": -14.8, "z": 2.5, "rotation": 90 },
 
   "furniture": {
-    "packingTable": { "x": 24.5, "z": -26.5 },
+    "packingTable": { "x": 24.5, "z": -34.5 },
     "palletStacks": [
-      { "x": 23.5, "z": 26.8, "count": 9 },
-      { "x": 25.1, "z": 26.8, "count": 12 },
-      { "x": 26.7, "z": 26.8, "count": 6 }
+      { "x": 23.5, "z": 34.8, "count": 9 },
+      { "x": 25.1, "z": 34.8, "count": 12 },
+      { "x": 26.7, "z": 34.8, "count": 6 }
     ],
     "exitDoor": { "x": 20.5 },
     "fireExtinguishers": [
-      { "x": -14, "z": -27.6 },
-      { "x": 14, "z": -27.6 },
-      { "x": -14, "z": 27.6 },
-      { "x": 0, "z": 27.6 },
+      { "x": -10, "z": -35.6 },
+      { "x": 14, "z": -35.6 },
+      { "x": -10, "z": 35.6 },
+      { "x": 4, "z": 35.6 },
       { "x": 27.6, "z": -10 },
       { "x": 27.6, "z": 10 }
     ]

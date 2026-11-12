@@ -20,6 +20,22 @@ export const STYLE = {
   rubber: mat('#151617', 0.9, 0),
   /** Bekleding: stoelen. */
   seat: mat('#25272b', 0.9, 0),
+  /** Wit: binnenwanden, plafonds, kasten, apparaten. */
+  white: mat('#e4e6e8', 0.8, 0),
+  /** Plafond van een kamer: licht van zichzelf, want het krijgt alleen licht van onderen. */
+  ceiling: new THREE.MeshStandardMaterial({ color: '#f2f3f4', emissive: '#9a9c9e', roughness: 0.9, metalness: 0 }),
+  /** Hout: tafelbladen, werkbladen. */
+  wood: mat('#b98a5a', 0.75, 0),
+  /** Blauw accent: stoelen in kantoor en kantine. */
+  blue: mat('#1e4f9c', 0.7, 0.05),
+  /** Groen: planten. */
+  green: mat('#3f7d4a', 0.9, 0),
+  /** Vloerbedekking van het kantoor. */
+  carpet: mat('#566270', 0.95, 0),
+  /** Vloer van de kantine. */
+  vinyl: mat('#cbc5b8', 0.8, 0),
+  /** Glas in ramen: doorzichtig. */
+  glass: new THREE.MeshStandardMaterial({ color: '#bcd6e8', roughness: 0.1, metalness: 0, transparent: true, opacity: 0.16, depthWrite: false }),
 };
 
 /**

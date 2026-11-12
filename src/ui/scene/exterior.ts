@@ -3,6 +3,7 @@ import { DOCKS, DOCK_PITCH } from '../../sim/layout';
 import logoUrl from '../assets/robodu-logo.jpg';
 import { onTop } from './style';
 import * as tex from './textures';
+import { ROOM_WINDOWS } from './rooms';
 import { Batch, EXIT_X, HALL, UNIT_BOX, UNIT_CYL, paint } from './warehouse';
 
 // Buitenkant van het magazijn: gevels met het RoBoDu-logo, het vrachtwagenterrein voor de docks,
@@ -189,6 +190,16 @@ export function createExterior(scene: THREE.Scene) {
   canopy.add(EXIT_X, 2.85, D / 2 + 1.1, 4.2, 0.16, 2.2);
   for (const dx of [-1.9, 1.9]) canopy.add(EXIT_X + dx, 1.4, D / 2 + 2.05, 0.12, 2.8, 0.12);
   root.add(windows.build(UNIT_BOX, glass, false), canopy.build(UNIT_BOX, paint(NAVY, 0.5, 0.3)));
+  // Ramen van het kantoor en de kantine: van buiten donker glas. Een vlak dat alleen naar buiten kijkt,
+  // zodat je er van binnenuit doorheen naar het terrein kijkt.
+  for (const w of ROOM_WINDOWS) {
+    const pane = new THREE.Mesh(new THREE.PlaneGeometry(w.to - w.from, w.y1 - w.y0), glass);
+    const mid = (w.from + w.to) / 2;
+    if (w.wall === 'west') pane.position.set(X0 - 0.05, (w.y0 + w.y1) / 2, mid);
+    else pane.position.set(mid, (w.y0 + w.y1) / 2, -D / 2 - 0.05);
+    pane.rotation.y = w.wall === 'west' ? -Math.PI / 2 : Math.PI;
+    root.add(pane);
+  }
 
   // ---------- Geparkeerde auto's ----------
   const rand = tex.rng(303);

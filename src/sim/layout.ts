@@ -7,7 +7,10 @@
 //   docks           dockdeuren in de westwand (x = -width/2), elk met een inslag- en een uitslagbaan
 //   desk            bureau met de pc; radio en printer staan erop (dx/dz ten opzichte van het bureau)
 //   rollContainers  lege rolcontainers: hier begin je aan een order
-//   equipment       startplek van de heftruck en de pompwagen
+//   rooms           kantoor en kantine: in de hoek van de dockwand en de noordwand, het kantoor in de hoek
+//   parking         parkeerplaats in de andere hoek van de dockwand (zuid): een vak voor de heftruck, een voor
+//                   de pompwagen en robotBays vakken voor robots
+//   equipment       startplek van de heftruck en de pompwagen (standaard in hun vak op de parkeerplaats)
 //   playerStart     waar de speler begint
 //   furniture       paktafel, palletstapels, nooduitgang (zuidwand), brandblussers
 //
@@ -55,6 +58,10 @@ export function modelError(m: unknown): string | null {
     return 'racks.levelHeights: minstens twee niveaus, oplopend vanaf 0';
   if (!count(docks.count) || !count(docks.lanes.slots)) return 'docks.count en docks.lanes.slots: een geheel getal van 1 t/m 40';
   if (docks.pitch <= 0 || docks.lanes.slotPitch <= 0) return 'docks: tussenafstanden moeten groter dan 0 zijn';
+  const { rooms, parking } = m as WarehouseModel;
+  if (rooms.depth < 4 || rooms.officeWidth < 4 || rooms.canteenWidth < 6) return 'rooms: kantoor minstens 4 × 4 m, kantine minstens 6 × 4 m';
+  if (parking.width < 6.2 || parking.depth < 5) return 'parking: minstens 6,2 m breed en 5 m diep';
+  if (!Number.isInteger(parking.robotBays) || parking.robotBays < 0 || parking.robotBays > 40) return 'parking.robotBays: een geheel getal van 0 t/m 40';
   return null;
 }
 
@@ -194,6 +201,36 @@ export const START = {
   forklift: pose(model.equipment.forklift),
   palletJack: pose(model.equipment.palletJack),
 };
+
+export type Rect = { minX: number; maxX: number; minZ: number; maxZ: number };
+/** Vak op de vloer: midden (x, z), breedte (langs x) en diepte (langs z). */
+export type Bay = Point & { w: number; d: number };
+
+/** Kantoor en kantine: tegen de noordwand bij de docks, het kantoor in de hoek en de kantine ernaast. */
+export const ROOMS = (() => {
+  const { depth, officeWidth, canteenWidth } = model.rooms;
+  const minZ = -HALL.d / 2;
+  const maxZ = minZ + depth;
+  const office: Rect = { minX: WALL_X, maxX: WALL_X + officeWidth, minZ, maxZ };
+  const canteen: Rect = { minX: office.maxX, maxX: office.maxX + canteenWidth, minZ, maxZ };
+  return { office, canteen };
+})();
+
+/** Parkeerplaats tegen de zuidwand bij de docks: vakken voor de heftruck, de pompwagen en de robots. */
+export const PARKING = (() => {
+  const { width, depth, robotBays } = model.parking;
+  const maxZ = HALL.d / 2;
+  const area: Rect = { minX: WALL_X, maxX: WALL_X + width, minZ: maxZ - depth, maxZ };
+  /** Vak met zijn achterkant 0,3 m van de wand. */
+  const bay = (x: number, w: number, d: number): Bay => ({ x, z: maxZ - 0.3 - d / 2, w, d });
+  const fits = Math.max(0, Math.floor((width - 6.2) / 1.6));
+  return {
+    area,
+    forklift: bay(WALL_X + 2.3, 2.6, 4.3),
+    palletJack: bay(WALL_X + 4.7, 1.4, 2.4),
+    robots: Array.from({ length: Math.min(robotBays, fits) }, (_, i) => bay(WALL_X + 7 + i * 1.6, 1.6, 1.8)),
+  };
+})();
 
 /** Vaste aankleding van de hal. */
 export const FURNITURE = model.furniture;

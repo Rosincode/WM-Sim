@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { DOCKS, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX } from '../../sim/layout';
+import { DOCKS, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, type Bay } from '../../sim/layout';
+import { createRooms, ROOM_WINDOWS } from './rooms';
 import { onTop } from './style';
 import * as tex from './textures';
 
@@ -181,11 +182,17 @@ export function createWarehouse(scene: THREE.Scene) {
   }
   // Looppad tussen de dockzone en de stellingen
   const WALK_X = RACK_MIN_X - 4.8;
-  marking(WALK_X, 0, 1.4, D - 4, '#2f7a4c');
-  marking(WALK_X - 0.75, 0, 0.1, D - 4, '#e9e9e2');
-  marking(WALK_X + 0.75, 0, 0.1, D - 4, '#e9e9e2');
+  // Het loopt van de voorwand van de kamers (de deur van de kantine) tot aan de parkeerplaats, of anders tot de wand.
+  const across = (r: { minX: number; maxX: number }) => WALK_X > r.minX && WALK_X < r.maxX;
+  const walkFrom = across(ROOMS.canteen) || across(ROOMS.office) ? ROOMS.canteen.maxZ + 0.3 : -D / 2 + 2;
+  const walkTo = across(PARKING.area) ? PARKING.area.minZ - 0.3 : D / 2 - 2;
+  const walkMid = (walkFrom + walkTo) / 2;
+  const walkLen = walkTo - walkFrom;
+  marking(WALK_X, walkMid, 1.4, walkLen, '#2f7a4c');
+  marking(WALK_X - 0.75, walkMid, 0.1, walkLen, '#e9e9e2');
+  marking(WALK_X + 0.75, walkMid, 0.1, walkLen, '#e9e9e2');
   const walkIcon = tex.walkwayIcon();
-  for (const z of spread(D - 6, 10)) marking(WALK_X, z, 0.9, 0.9, '#ffffff', walkIcon, Math.PI / 2);
+  for (const z of spread(walkLen - 2, 10)) marking(WALK_X, walkMid + z, 0.9, 0.9, '#ffffff', walkIcon, Math.PI / 2);
   // Per dock: een inslagbaan (blauw) en een uitslagbaan (groen), met de locatiecode op de vloer
   for (const d of DOCKS) {
     const lanes = [
@@ -202,6 +209,30 @@ export function createWarehouse(scene: THREE.Scene) {
       marking(p.x + len / 2 + 0.4, p.z, 1.8, 0.45, color, tex.floorText(code.replace('DOCK-', '')), Math.PI / 2);
     }
   }
+  // Parkeerplaats: een vak voor de heftruck, een voor de pompwagen en vakken voor de robots.
+  // De tekst lees je als je vanuit de hal naar de wand kijkt.
+  {
+    const { area, forklift, palletJack, robots } = PARKING;
+    const WHITE = '#e9e9e2';
+    const bay = (b: Bay, color: string) => {
+      for (const side of [-1, 1]) marking(b.x + (side * b.w) / 2, b.z, 0.08, b.d, color);
+      marking(b.x, b.z + b.d / 2, b.w + 0.08, 0.08, color);
+    };
+    const label = (b: Bay, text: string, w: number) => marking(b.x, b.z - b.d / 2 - 0.45, w, w / 4, WHITE, tex.floorText(text), Math.PI);
+    bay(forklift, YELLOW);
+    label(forklift, 'HEFTRUCK', 2.2);
+    bay(palletJack, YELLOW);
+    label(palletJack, 'POMPWAGEN', 1.5);
+    for (const b of robots) bay(b, '#2e8bd8');
+    if (robots.length) {
+      const first = robots[0];
+      const last = robots[robots.length - 1];
+      label({ ...first, x: (first.x + last.x) / 2 }, 'ROBOTS', 2.4);
+    }
+    // rand van de parkeerplaats aan de kant van de hal
+    marking((area.minX + area.maxX) / 2 + 0.3, area.minZ, area.maxX - area.minX - 0.6, 0.1, YELLOW);
+    marking(area.maxX, (area.minZ + area.maxZ) / 2, 0.1, area.maxZ - area.minZ, YELLOW);
+  }
   for (const [mat, geos] of paintGeos) {
     const m = new THREE.Mesh(mergeGeometries(geos), mat);
     m.receiveShadow = true;
@@ -211,28 +242,64 @@ export function createWarehouse(scene: THREE.Scene) {
 
   // ---------- Wanden ----------
   const panelTex = tex.wallPanel();
-  function wall(x: number, z: number, ry: number, len: number) {
+  /**
+   * @param holes raamopeningen [van, tot, onderkant, bovenkant]; van/tot langs de wand, gemeten vanuit het midden
+   *              in de eigen richting van het vlak (naar rechts als je er van binnenuit tegenaan kijkt).
+   */
+  function wall(x: number, z: number, ry: number, len: number, holes: [number, number, number, number][] = []) {
     const t = panelTex.clone();
     t.repeat.set(len, 1);
     t.needsUpdate = true;
-    const m = new THREE.Mesh(
-      new THREE.PlaneGeometry(len, H),
-      new THREE.MeshStandardMaterial({ map: t, roughness: 0.55, metalness: 0.25 }),
-    );
+    let geo: THREE.BufferGeometry = new THREE.PlaneGeometry(len, H);
+    if (holes.length) {
+      const rect = (a: number, b: number, y0: number, y1: number) =>
+        [new THREE.Vector2(a, y0), new THREE.Vector2(b, y0), new THREE.Vector2(b, y1), new THREE.Vector2(a, y1)];
+      const shape = new THREE.Shape(rect(-len / 2, len / 2, -H / 2, H / 2));
+      for (const [a, b, y0, y1] of holes) shape.holes.push(new THREE.Path(rect(a, b, y0 - H / 2, y1 - H / 2)));
+      geo = new THREE.ShapeGeometry(shape);
+      const p = geo.attributes.position;
+      const uv = geo.attributes.uv;
+      for (let i = 0; i < uv.count; i++) uv.setXY(i, p.getX(i) / len + 0.5, p.getY(i) / H + 0.5);
+    }
+    const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: t, roughness: 0.55, metalness: 0.25 }));
     m.position.set(x, H / 2, z);
     m.rotation.y = ry;
     m.receiveShadow = true;
     scene.add(m);
-    const plinth = new THREE.Mesh(new THREE.BoxGeometry(len, 1.2, 0.1), paint('#9a9b96', 0.9, 0));
-    plinth.position.set(x, 0.6, z);
-    plinth.rotation.y = ry;
-    plinth.receiveShadow = true;
-    scene.add(plinth);
+    // Plint: doorlopend, behalve onder een raam dat lager begint dan de plint hoog is
+    const plinthMat = paint('#9a9b96', 0.9, 0);
+    const plinth = (a: number, b: number, h: number) => {
+      if (b - a < 0.001) return;
+      const part = new THREE.Mesh(new THREE.BoxGeometry(b - a, h, 0.1), plinthMat);
+      part.position.set(x + Math.cos(ry) * ((a + b) / 2), h / 2, z - Math.sin(ry) * ((a + b) / 2));
+      part.rotation.y = ry;
+      part.receiveShadow = true;
+      scene.add(part);
+    };
+    let cur = -len / 2;
+    for (const [a, b, y0] of [...holes].sort((p, q) => p[0] - q[0])) {
+      plinth(cur, a, 1.2);
+      plinth(a, b, Math.min(1.2, y0));
+      cur = b;
+    }
+    plinth(cur, len / 2, 1.2);
   }
-  wall(0, -D / 2, 0, W);
+  // Ramen van het kantoor en de kantine: in de dockwand (west) en de noordwand
+  const holesIn = (side: 'west' | 'north', sign: number) =>
+    ROOM_WINDOWS.filter((w) => w.wall === side).map((w): [number, number, number, number] => [
+      Math.min(w.from * sign, w.to * sign),
+      Math.max(w.from * sign, w.to * sign),
+      w.y0,
+      w.y1,
+    ]);
+  wall(0, -D / 2, 0, W, holesIn('north', 1));
   wall(0, D / 2, Math.PI, W);
-  wall(-W / 2, 0, Math.PI / 2, D);
+  wall(-W / 2, 0, Math.PI / 2, D, holesIn('west', -1));
   wall(W / 2, 0, -Math.PI / 2, D);
+
+  // ---------- Kantoor en kantine ----------
+  const rooms = createRooms({ scene, roof, solid, walkX: RACK_MIN_X - 4.8 });
+  colliders.push(rooms.area);
 
   // Kolommen met aanrijbescherming
   const columns = new Batch();
@@ -506,6 +573,16 @@ export function createWarehouse(scene: THREE.Scene) {
   exitSign.position.set(EXIT_X, 2.45, D / 2 - 0.06);
   exitSign.rotation.y = Math.PI;
   scene.add(exitSign);
+
+  const parkSign = new THREE.Mesh(
+    new THREE.PlaneGeometry(2.4, 1.2),
+    new THREE.MeshStandardMaterial({ map: tex.sign('P', '#17346b', '#ffffff', 'HEFTRUCK - POMPWAGEN - ROBOTS'), roughness: 0.7 }),
+  );
+  // midden tussen twee kolommen (om de 7 m langs de wand), zo dicht mogelijk bij het midden van de parkeerplaats
+  const parkMid = (PARKING.area.minX + PARKING.area.maxX) / 2;
+  parkSign.position.set(-W / 2 + (Math.floor((parkMid + W / 2) / 7) + 0.5) * 7, 3.2, D / 2 - 0.07);
+  parkSign.rotation.y = Math.PI;
+  scene.add(parkSign);
 
   // ---------- Voorraad: pallets, dozen en wikkelfolie ----------
   const MAX_PALLETS = 700;
