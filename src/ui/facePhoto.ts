@@ -1,4 +1,4 @@
-import { BRIM_Y, EYES, HEAD, headOutline, photoUV } from './scene/headShape';
+import { EYES, HEAD, headOutline, photoUV } from './scene/headShape';
 
 // Foto van je eigen hoofd voor op je figuur. De foto wordt met de webcam gemaakt in een hoofdvorm (het silhouet van het hoofd van de figuur),
 // sterk verkleind en alleen in deze browser bewaard (localStorage). Net als je naam gaat hij via de
@@ -61,6 +61,7 @@ export function createFacePicker(initial: string | null) {
 
   // De hoofdvorm: het beeld van de camera met daaroverheen het silhouet van het hoofd van de figuur.
   // Wat binnen de vorm valt komt op het hoofd; de rondjes en de kin bepalen dat het gezicht goed past.
+  // Ook het haar hoort binnen de vorm: de figuur neemt het over op de rest van het hoofd (zie scene/headPhoto.ts).
   const VW = 300;
   const VH = 400;
   const frame = document.createElement('div');
@@ -79,8 +80,7 @@ export function createFacePicker(initial: string | null) {
   const eyes = [-1, 1]
     .map((d) => `<ellipse cx="${(0.5 + d * EYES.du) * VW}" cy="${EYES.v * VH}" rx="13" ry="8"/>`)
     .join('');
-  const brimV = photoUV(0, BRIM_Y).v; // onderrand van de helm
-  const chinY = photoUV(0, HEAD.y - HEAD.r * HEAD.sy + 0.012).v * VH; // net boven de onderkant van het hoofd
+  const chinY = photoUV(0, 0.012 - HEAD.hy).v * VH; // net boven de onderkant van het hoofd
   const guide = document.createElement('div');
   guide.style.cssText = 'position:absolute;inset:0;pointer-events:none';
   guide.innerHTML = `<svg viewBox="0 0 ${VW} ${VH}" width="100%" height="100%" style="display:block">
@@ -88,7 +88,6 @@ export function createFacePicker(initial: string | null) {
     <path class="line" d="${outline}" fill="none" stroke="#fff" stroke-width="3"/>
     <g class="marks" fill="none" stroke="#ffd54f" stroke-width="2.5">
       ${eyes}
-      <path d="M${VW * 0.2} ${brimV * VH}H${VW * 0.8}" stroke-dasharray="7 6" opacity=".8"/>
       <path d="M${VW * 0.5 - 22} ${chinY}Q${VW * 0.5} ${chinY + 9} ${VW * 0.5 + 22} ${chinY}"/>
     </g>
   </svg>`;
@@ -130,7 +129,7 @@ export function createFacePicker(initial: string | null) {
     shoot.style.background = live ? '#1e88e5' : '#3a424a';
     remove.style.display = face && !live ? '' : 'none';
     status.textContent =
-      message ?? (live ? 'Vul de vorm met je gezicht: ogen op de gele rondjes, kin op het boogje. Boven de stippellijn komt je helm.' : face ? 'Deze foto staat op het hoofd van je figuur.' : 'Optioneel: zet je eigen gezicht op je figuur.');
+      message ?? (live ? 'Vul de vorm met je hele hoofd: ogen op de gele rondjes, kin op het boogje. Je haar (of je kale hoofd) komt ook op je figuur.' : face ? 'Deze foto staat op het hoofd van je figuur.' : 'Optioneel: zet je eigen gezicht op je figuur.');
   }
 
   async function start() {
