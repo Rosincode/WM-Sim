@@ -3,8 +3,9 @@ import { publish, type Direction, type ProcessEvent, type ScanKind } from './eve
 import { articles, isBlocked, skus } from './catalog';
 import {
   DOCKS, LANE_SLOTS, LOCATIONS, PER_PALLET, POINTS, SLOT_DX,
-  dist, lanePoint, location, shelfLocations, type Dock, type Point,
+  dist, lanePoint, laneSlot, location, shelfLocations, type Dock, type Point,
 } from './layout';
+import { createRobotFleet } from './robots';
 import { offlineGateway, type WmsGateway, type WmsReply } from './wms';
 
 // De fysieke wereld van het magazijn: vrachtwagens, pallets, rolcontainers en wat er in de stellingen staat.
@@ -603,6 +604,87 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     return guard(() => bookMove(id));
   }
 
+  // ========== Geek+-robots: wat zij van de fysieke wereld nodig hebben (src/sim/robots.ts) ==========
+
+  /** De pallet die een robot moet halen: op een inslagbaan of op de vloer in een stelling. Een tekst = dat kan niet. */
+  function robotPallet(palletId: string, fromId: string): { point: Point; take(): Pallet } | string {
+    const d = DOCKS.find((x) => x.inId === fromId);
+    if (d) {
+      const lane = laneIn[d.index];
+      const i = lane.findIndex((p) => p?.id === palletId);
+      const pallet = lane[i];
+      if (!pallet) return `${palletId} staat niet (meer) op ${fromId}`;
+      if (pallet.unlabeled) return `op de pallet op ${fromId} zit nog geen sticker`;
+      return { point: laneSlot(d.laneIn, i), take: () => ((lane[i] = null), pallet) };
+    }
+    const p = racked.get(palletId);
+    const loc = location(fromId);
+    if (!p || !loc || p.locationId !== fromId) return `${palletId} staat niet (meer) op ${fromId}`;
+    if (loc.level !== 1) return `${fromId} ligt niet op de vloer: daar kan een robot niet bij`;
+    if (p.unlabeled) return `op de pallet op ${fromId} zit nog geen sticker`;
+    if (moved.has(palletId)) return `${palletId} is verplaatst en nog niet geboekt`;
+    return {
+      point: { x: loc.x + SLOT_DX[p.slot], z: loc.z },
+      take() {
+        racked.delete(palletId);
+        add(fromId, p.sku, -p.qty);
+        const { locationId: _from, slot: _slot, ...pallet } = p;
+        return pallet;
+      },
+    };
+  }
+
+  const robots = createRobotFleet({
+    authority: () => authority,
+    revision: () => revision,
+    touch: () => touch(),
+    say,
+    ask,
+    pickupSpot(palletId, fromId) {
+      const found = robotPallet(palletId, fromId);
+      return typeof found === 'string' ? found : found.point;
+    },
+    take(palletId, fromId) {
+      const found = robotPallet(palletId, fromId);
+      if (typeof found === 'string') return found;
+      scanned('pallet', palletId, true, fromId); // de robot leest de sticker van de pallet die hij optilt
+      return found.take();
+    },
+    dropSpot(locId, pallet) {
+      const loc = location(locId);
+      if (!loc || loc.type === 'dock') return `${locId} is geen stellinglocatie`;
+      if (loc.level !== 1) return `${locId} ligt niet op de vloer: daar kan een robot niet bij`;
+      if (stockAt(locId).some((s) => s.sku !== pallet.sku)) return `op ${locId} staat al een ander artikel`;
+      const slot = freeSlot(locId);
+      if (slot === undefined) return `${locId} is vol`;
+      return { x: loc.x + SLOT_DX[slot], z: loc.z, slot };
+    },
+    drop(locId, pallet, slot) {
+      add(locId, pallet.sku, pallet.qty);
+      racked.set(pallet.id, { ...pallet, locationId: locId, slot });
+    },
+    inbound: () =>
+      DOCKS.flatMap((d) =>
+        laneIn[d.index].flatMap((p) => (p && !p.unlabeled ? [{ palletId: p.id, sku: p.sku, qty: p.qty, locationId: d.inId, z: d.z }] : [])),
+      ),
+    floorSpace(sku) {
+      const lines = new Map<string, Set<string>>();
+      for (const k of stock.keys()) {
+        const [loc, s] = k.split('|');
+        if (!lines.has(loc)) lines.set(loc, new Set());
+        lines.get(loc)!.add(s);
+      }
+      const used = new Map<string, number>();
+      for (const p of racked.values()) used.set(p.locationId, (used.get(p.locationId) ?? 0) + 1);
+      return shelfLocations().flatMap((l) => {
+        const here = lines.get(l.id);
+        const free = SLOTS.length - (used.get(l.id) ?? 0);
+        if (l.level !== 1 || isBlocked(l.id) || free <= 0 || (here && [...here].some((s) => s !== sku))) return [];
+        return [{ locationId: l.id, free, x: l.x, z: l.z, sameSku: !!here?.size }];
+      });
+    },
+  });
+
   // ========== Interacties rond de speler (E) ==========
 
   type Action = () => Promise<ScanResult> | ScanResult;
@@ -886,6 +968,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     clock += dt;
     driveTruck('in', dt);
     driveTruck('out', dt);
+    robots.update(dt);
     if (!authority) return; // in multiplayer laat alleen de host nieuwe vrachtwagens en testorders ontstaan
     if (!trucks.in && skus().length > 0 && (inTimer -= dt) <= 0) trucks.in = spawnTruck('in');
     const outboundWork = orders.some((o) => ['picking', 'picked', 'staged'].includes(o.status));
@@ -910,6 +993,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
       forks: [...moved],
       pallets: [...racked.values()],
       transit: [...transit],
+      robots: robots.shared(),
       articles: articles(),
       seq: { truckIn: seq.truckIn, truckOut: seq.truckOut },
     });
@@ -945,6 +1029,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     seeding = false;
     transit.clear();
     for (const [id, t] of s.transit ?? []) transit.set(id, t);
+    robots.applyShared(s.robots); // een speler met een oudere versie stuurt geen robots
     seq.truckIn = Math.max(seq.truckIn, s.seq.truckIn);
     seq.truckOut = Math.max(seq.truckOut, s.seq.truckOut);
     // Draag je een order die een ander inmiddels heeft afgehandeld of teruggezet, dan ben je hem kwijt.
@@ -1040,6 +1125,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     moved.clear();
     racked.clear();
     transit.clear();
+    robots.reset();
     carry = null;
     foreign = false; // deze wereld komt uit de eigen WMS
     if (trucks.out) trucks.out.loaded = [];
@@ -1089,6 +1175,8 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     pallets,
     forkliftTake,
     forkliftPlace,
+    /** De Geek+-robots (src/sim/robots.ts). */
+    robots,
     order,
     sharedState,
     applyShared,

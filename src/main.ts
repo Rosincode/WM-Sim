@@ -20,6 +20,7 @@ import { createCharacter, type HandTarget } from './ui/scene/character';
 import { wms } from './integrations/wms';
 import { mountWarehouse } from './ui/warehouse';
 import { mountMultiplayer } from './ui/multiplayer';
+import { mountRobots } from './ui/robots';
 import { SceneRenderPass } from './ui/sceneRenderPass';
 import { menu } from './ui/menu';
 import { createPrompts, esc, type Prompt } from './ui/prompts';
@@ -199,7 +200,7 @@ const view = createPlayerView({
   player,
   hud,
   bounds: BOUNDS,
-  solids: [hall.solids, () => forklift.solids(), () => jack.solids()],
+  solids: [hall.solids, () => forklift.solids(), () => jack.solids(), () => robots.solids()],
   initialMode: params.get('view') === 'overview' ? 'overview' : params.get('view') === 'third' ? 'third' : 'first',
   onModeChange: applyMode,
 });
@@ -289,6 +290,22 @@ warehouse.onReset(() => {
   forklift.applyState({ ...forklift.getState(), load: null, loose: [] });
   jack.applyState({ ...jack.getState(), load: null });
   refreshHall();
+});
+
+// --- Geek+-robots: rijden zelf, op opdrachten uit de WMS; ze stoppen voor de speler, de heftruck en de pompwagen ---
+const robots = mountRobots({
+  scene,
+  hall,
+  ...warehouse.robots,
+  obstacles: () => {
+    const along = (o: THREE.Object3D, offsets: number[], rad: number) =>
+      offsets.map((d) => ({ x: o.position.x + Math.sin(o.rotation.y) * d, z: o.position.z + Math.cos(o.rotation.y) * d, rad }));
+    return [
+      { x: player.position.x, z: player.position.z, rad: 0.4 },
+      ...along(forklift.group, [-0.6, 0.3, 1.2, 2.0], 0.6),
+      ...along(jack.group, [0, 0.7], 0.45),
+    ];
+  },
 });
 const jackDistance = () => Math.hypot(player.position.x - jack.group.position.x, player.position.z - jack.group.position.z);
 const nearJack = () => jackDistance() < 2.2 && player.position.y < 1;
@@ -409,6 +426,7 @@ renderer.setAnimationLoop((now) => {
   radio.update(player.position);
   printer.update(dt, player.position);
   warehouse.update(dt);
+  robots.update(dt);
 
   // Toetsprompts: wat kun je hier doen, en met welke toets
   const list: Prompt[] = [];

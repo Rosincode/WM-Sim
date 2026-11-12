@@ -23,7 +23,14 @@ export type ProcessEvent =
   | { type: 'OrderStaged'; orderId: string; dockId: string }
   | { type: 'OrderLoaded'; orderId: string; truckId: string; dockId: string }
   /** Er is een palletsticker geplakt: de voorraad op die pallet ligt nu onder een barcode vast (docs/wms/07). */
-  | { type: 'PalletLabeled'; palletId: string; sku: string; qty: number; locationId: string };
+  | { type: 'PalletLabeled'; palletId: string; sku: string; qty: number; locationId: string }
+  // --- Geek+-robots: terugmelding op een robotopdracht van de WMS (docs/wms/08) ---
+  /** Een robot begint aan de opdracht. */
+  | { type: 'RobotTaskStarted'; taskId: string; robotId: string; palletId: string; fromLocationId: string; locationId: string }
+  /** De robot staat met de pallet op de doellocatie: de WMS boekt de voorraad om, daarna zet de robot hem neer. */
+  | { type: 'RobotTaskCompleted'; taskId: string; robotId: string; palletId: string; sku: string; qty: number; fromLocationId: string; locationId: string }
+  /** palletOnRobot = de robot had de pallet al opgepakt en wacht ermee op een nieuwe opdracht. */
+  | { type: 'RobotTaskFailed'; taskId: string; robotId?: string; reason: string; palletOnRobot: boolean };
 
 export type ProcessEventType = ProcessEvent['type'];
 
@@ -41,6 +48,9 @@ export const WMS_ACTIONS: Record<ProcessEventType, string> = {
   OrderStaged: 'stage_order',
   OrderLoaded: 'load_order',
   PalletLabeled: 'register_pallet',
+  RobotTaskStarted: 'start_robot_task',
+  RobotTaskCompleted: 'complete_robot_task',
+  RobotTaskFailed: 'fail_robot_task',
 };
 
 /** Wat de WMS met de stap deed. linked = echt in de WMS verwerkt; false = alleen lokaal (nog geen endpoint). */

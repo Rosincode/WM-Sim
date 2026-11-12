@@ -7,6 +7,7 @@ import { createWarehouse, type SharedState, type Warehouse } from '../sim/wareho
 import { menu } from './menu';
 import { createPcScreen } from './pcScreen';
 import { createProcessHud } from './processHud';
+import { createRobotDispatch } from './robotDispatch';
 import { createWarehouseView } from './warehouseView';
 import { createWmsGateway } from './wmsGateway';
 import { compareLocations } from './wmsLocations';
@@ -53,6 +54,8 @@ export function mountWarehouse({
     demoOrders: () => wms.client.mode === 'mock', // met een echte WMS komen orders uit de WMS-app
     perPallet,
   });
+  // De Geek+-robots krijgen hun opdrachten uit de WMS, of nagespeeld zolang de WMS die nog niet uitgeeft.
+  const robotDispatch = createRobotDispatch({ fleet: sim.robots, authority: () => sim.authority, bypass: mockOutOfStep });
   const view = createWarehouseView(scene, player, sim, { rackStock });
   const hud = createProcessHud(sim);
   // Aanmelden bij de WMS-API zit in het menu rechtsboven (K).
@@ -284,7 +287,10 @@ export function mountWarehouse({
     /** Voor de heftruck en de pompwagen: hele pallets uit en in de stellingen. */
     forkliftTake: sim.forkliftTake,
     forkliftPlace: sim.forkliftPlace,
+    /** De Geek+-robots en waar hun opdrachten vandaan komen, voor src/ui/robots.ts. */
+    robots: { fleet: sim.robots, dispatch: robotDispatch },
     update(dt: number) {
+      robotDispatch.update(dt);
       sim.update(dt);
       view.update(dt);
 
