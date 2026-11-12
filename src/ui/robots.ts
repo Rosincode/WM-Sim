@@ -41,9 +41,11 @@ export function mountRobots({
       load: null as THREE.Object3D | null,
       loadKey: '',
       lift: 0,
-      /** Botsvlakken voor de speler: de robot zelf (draait mee) en de pallet erop (blijft recht staan). */
+      /** Botsvlakken voor de speler: de robot zelf (draait mee) en de pallet erop (draait met de robot mee). */
       pose: { x: 0, z: 0, r: 0 },
       loadPose: { x: 0, z: 0, r: 0 },
+      /** Stand van de pallet ten opzichte van de robot: vastgelegd bij het optillen, zodat hij dan niet verspringt. */
+      loadTurn: 0,
     };
   });
 
@@ -107,12 +109,15 @@ export function mountRobots({
             // Geen schaduw: anders moet de schaduwkaart elke frame opnieuw voor een rijdende robot
             v.load.traverse((o) => (o.castShadow = false));
             scene.add(v.load);
+            // De robot rijdt altijd recht onder de pallet (neus naar +z of -z): de pallet staat dus recht of een halve slag gedraaid
+            v.loadTurn = -Math.round(r.r / Math.PI) * Math.PI;
           }
         }
         v.lift = THREE.MathUtils.clamp(v.lift + (r.load ? dt : -dt) / 0.4, 0, 1);
         mesh.setLift(v.lift);
-        // De heftafel draait tegen de robot in: de pallet blijft recht staan, zo past hij in het pad en in de stelling
+        // De pallet staat vast op de robot en draait dus mee; bij het neerzetten staat hij weer recht in de stelling
         v.load?.position.set(r.x, ROBOT_DECK - 0.04 * (1 - v.lift), r.z);
+        if (v.load) v.load.rotation.y = r.r + v.loadTurn;
       }
       if (menu.showing('robots') && (panelRefresh -= dt) <= 0) {
         panelRefresh = 0.4;
@@ -127,7 +132,7 @@ export function mountRobots({
         Object.assign(v.pose, { x: r.x, z: r.z, r: r.r });
         out.push({ pose: v.pose, minX: -ROBOT_HALF.x, maxX: ROBOT_HALF.x, minZ: -ROBOT_HALF.z, maxZ: ROBOT_HALF.z, minY: 0, maxY: ROBOT_DECK });
         if (!r.load) continue;
-        Object.assign(v.loadPose, { x: r.x, z: r.z });
+        Object.assign(v.loadPose, { x: r.x, z: r.z, r: r.r + v.loadTurn });
         out.push({ pose: v.loadPose, minX: -0.6, maxX: 0.6, minZ: -0.5, maxZ: 0.5, minY: ROBOT_DECK, maxY: ROBOT_DECK + hall.loadHeight(r.load.sku, r.load.qty) });
       }
       return out;
