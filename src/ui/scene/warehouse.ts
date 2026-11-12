@@ -1,23 +1,28 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { DOCKS, HALL as FLOOR, LANE_LENGTH, ROW_Z, SECTION_X as BAY_X, SLOT_DX } from '../../sim/layout';
+import { DOCKS, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX } from '../../sim/layout';
 import * as tex from './textures';
 
 // Het magazijngebouw: vloer, wanden, dak, docks, stellingen, pallets en verlichting.
 // Alleen weergave: de pallets in de stellingen komen binnen via setPallets().
 
-// Plattegrond (maten, docks, stellingrijen) komt uit src/sim/layout.ts.
-export const HALL = { ...FLOOR, h: 8.5 };
-const LEVEL_Y = [0, 2, 4];
+// Plattegrond (maten, docks, stellingrijen, aankleding) komt uit het model: src/sim/warehouse.json via src/sim/layout.ts.
+export const HALL = FLOOR;
+const LEVEL_Y = LEVEL_HEIGHTS;
+/** Posities op een vaste afstand van elkaar, gecentreerd over `size` (lampen, lichtstraten, pictogrammen). */
+const spread = (size: number, pitch: number) => {
+  const n = Math.max(1, Math.round(size / pitch));
+  return Array.from({ length: n }, (_, i) => (i - (n - 1) / 2) * pitch);
+};
 /** Stellingstaanders: tussen de secties en aan beide koppen. */
-const FRAME_X = [...BAY_X.map((x) => x - 2), BAY_X[BAY_X.length - 1] + 2];
+const FRAME_X = [...BAY_X.map((x) => x - SECTION_PITCH / 2), BAY_X[BAY_X.length - 1] + SECTION_PITCH / 2];
 const RACK_MIN_X = FRAME_X[0];
 const RACK_MAX_X = FRAME_X[FRAME_X.length - 1];
 const RACK_MID_X = (RACK_MIN_X + RACK_MAX_X) / 2;
 const RACK_LEN = RACK_MAX_X - RACK_MIN_X;
 const PALLET_H = 0.144;
 /** Personeelsdeur / nooduitgang in de zuidgevel (ook de entree aan de buitenkant). */
-export const EXIT_X = 20.5;
+export const EXIT_X = FURNITURE.exitDoor.x;
 
 export type Collider = { minX: number; maxX: number; minZ: number; maxZ: number };
 /**
@@ -180,7 +185,7 @@ export function createWarehouse(scene: THREE.Scene) {
   marking(WALK_X - 0.75, 0, 0.1, D - 4, '#e9e9e2');
   marking(WALK_X + 0.75, 0, 0.1, D - 4, '#e9e9e2');
   const walkIcon = tex.walkwayIcon();
-  for (const z of [-20, -10, 0, 10, 20]) marking(WALK_X, z, 0.9, 0.9, '#ffffff', walkIcon, Math.PI / 2);
+  for (const z of spread(D - 6, 10)) marking(WALK_X, z, 0.9, 0.9, '#ffffff', walkIcon, Math.PI / 2);
   // Per dock: een inslagbaan (blauw) en een uitslagbaan (groen), met de locatiecode op de vloer
   for (const d of DOCKS) {
     const lanes = [
@@ -258,9 +263,11 @@ export function createWarehouse(scene: THREE.Scene) {
   roof.add(rafters.build(UNIT_BOX, steelGrey, false));
 
   const skylightMat = glow(1.7, 1.95, 2.3);
-  const LIGHT_X = [-21, -7, 7, 21];
-  for (const x of [-17.5, -3.5, 10.5, 24.5])
-    for (const z of [-21, -7, 7, 21]) {
+  const LIGHT_X = spread(W, 14);
+  const LIGHT_Z = spread(D, 14);
+  for (const lx of LIGHT_X)
+    for (const z of LIGHT_Z) {
+      const x = lx + 3.5;
       const s = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 7), skylightMat);
       s.rotation.x = Math.PI / 2;
       s.position.set(x, H - 0.01, z);
@@ -296,13 +303,14 @@ export function createWarehouse(scene: THREE.Scene) {
   key.position.set(8, 60, 10);
   key.castShadow = true;
   key.shadow.mapSize.set(4096, 4096);
-  Object.assign(key.shadow.camera, { left: -62, right: 62, top: 62, bottom: -62, near: 5, far: 130 });
+  const reach = Math.max(W, D) / 2 + 34; // de hal plus het terrein eromheen
+  Object.assign(key.shadow.camera, { left: -reach, right: reach, top: reach, bottom: -reach, near: 5, far: 130 });
   key.shadow.bias = -0.0004;
   key.shadow.normalBias = 0.03;
   key.shadow.radius = 4;
   scene.add(key);
-  for (const x of [-18, 0, 18])
-    for (const z of [-21, -7, 7, 21]) {
+  for (const x of spread(W, 18))
+    for (const z of LIGHT_Z) {
       const p = new THREE.PointLight('#fff4e2', 46, 28, 2);
       p.position.set(x, LAMP_Y - 0.4, z);
       scene.add(p);
@@ -372,7 +380,7 @@ export function createWarehouse(scene: THREE.Scene) {
   const guards = new Batch();
   const endGuards = new Batch();
   const decks = new Batch();
-  const POST_H = 5.6;
+  const POST_H = LEVEL_Y[LEVEL_Y.length - 1] + 1.6;
   const signGeo = new THREE.PlaneGeometry(0.7, 0.35);
   // Locatielabels: honderden stuks, daarom samen in één mesh met één textuur (zie tex.locationLabelAtlas).
   const rackLabels: { id: string; arrow: 'up' | 'down' }[] = [];
@@ -391,17 +399,19 @@ export function createWarehouse(scene: THREE.Scene) {
       solid(fx, z0, 0.09, 1.07, 0, POST_H); // staanders met schoren: daar kun je niet tussendoor
     }
     BAY_X.forEach((bx, s) => {
-      for (const y of [LEVEL_Y[1], LEVEL_Y[2]]) {
-        for (const dz of [-0.5, 0.5]) beams.add(bx, y - 0.065, z0 + dz, 3.91, 0.13, 0.05);
-        decks.add(bx, y + 0.004, z0, 3.9, 0.006, 0.95);
-        solid(bx, z0, 3.91, 1.05, y - 0.13, y + 0.007); // liggers met roosterdek: je loopt eronderdoor of staat erop
+      for (const y of LEVEL_Y.slice(1)) {
+        for (const dz of [-0.5, 0.5]) beams.add(bx, y - 0.065, z0 + dz, SECTION_PITCH - 0.09, 0.13, 0.05);
+        decks.add(bx, y + 0.004, z0, SECTION_PITCH - 0.1, 0.006, 0.95);
+        solid(bx, z0, SECTION_PITCH - 0.09, 1.05, y - 0.13, y + 0.007); // liggers met roosterdek: je loopt eronderdoor of staat erop
       }
       const base = `R${r + 1}-${String(s + 1).padStart(2, '0')}`;
-      const spots: [string, number, number, 'up' | 'down'][] = [
-        [`${base}-1`, bx - 0.3, LEVEL_Y[1] - 0.065, 'down'],
-        [`${base}-2`, bx + 0.3, LEVEL_Y[1] - 0.065, 'up'],
-        [`${base}-3`, bx, LEVEL_Y[2] - 0.065, 'up'],
-      ];
+      // Labels op de liggers: niveau 1 en 2 delen de onderste ligger (pijl omlaag / omhoog), daarboven elk zijn eigen ligger
+      const spots = LEVEL_Y.map((_, l): [string, number, number, 'up' | 'down'] => [
+        `${base}-${l + 1}`,
+        bx + (l === 0 ? -0.3 : l === 1 ? 0.3 : 0),
+        LEVEL_Y[Math.max(1, l)] - 0.065,
+        l === 0 ? 'down' : 'up',
+      ]);
       for (const [id, x, y, arrow] of spots) {
         const index = rackLabels.push({ id, arrow }) - 1;
         for (const side of [1, -1]) {
@@ -458,17 +468,15 @@ export function createWarehouse(scene: THREE.Scene) {
   const palletGeo = palletGeometry();
   const stacks = new Batch();
   const r0 = tex.rng(7);
-  const STACK_Z = D / 2 - 1.2;
-  [[23.5, 9], [25.1, 12], [26.7, 6]].forEach(([x, n]) => {
-    solid(x, STACK_Z, 1.2, 1.0, 0, n * PALLET_H);
-    for (let i = 0; i < n; i++) stacks.add(x + (r0() - 0.5) * 0.04, i * PALLET_H, STACK_Z + (r0() - 0.5) * 0.04, 1, 1, 1, 0, (r0() - 0.5) * 0.06, 0);
-  });
+  for (const { x, z, count: n } of FURNITURE.palletStacks) {
+    solid(x, z, 1.2, 1.0, 0, n * PALLET_H);
+    for (let i = 0; i < n; i++) stacks.add(x + (r0() - 0.5) * 0.04, i * PALLET_H, z + (r0() - 0.5) * 0.04, 1, 1, 1, 0, (r0() - 0.5) * 0.06, 0);
+    colliders.push({ minX: x - 0.7, maxX: x + 0.7, minZ: z - 0.6, maxZ: z + 0.6 });
+  }
   scene.add(stacks.build(palletGeo, woodMat));
-  colliders.push({ minX: 22.8, maxX: 27.4, minZ: STACK_Z - 0.6, maxZ: STACK_Z + 0.6 });
 
   // Paktafel met dozen
-  const TX = 24.5; // midden van de paktafel
-  const TZ = -D / 2 + 1.5;
+  const { x: TX, z: TZ } = FURNITURE.packingTable; // midden van de paktafel
   const table = new Batch();
   table.add(TX, 0.9, TZ, 2.2, 0.05, 0.9);
   const legs = new Batch();
@@ -486,7 +494,7 @@ export function createWarehouse(scene: THREE.Scene) {
 
   // Brandblussers en nooduitgang
   const extinguishers = new Batch();
-  for (const [x, z] of [[-14, -D / 2 + 0.4], [14, -D / 2 + 0.4], [-14, D / 2 - 0.4], [0, D / 2 - 0.4], [W / 2 - 0.4, -10], [W / 2 - 0.4, 10]]) extinguishers.add(x, 1.0, z, 0.075, 0.5, 0.075);
+  for (const { x, z } of FURNITURE.fireExtinguishers) extinguishers.add(x, 1.0, z, 0.075, 0.5, 0.075);
   scene.add(extinguishers.build(UNIT_CYL, red));
   const exitDoor = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.1, 0.06), paint('#5d6b63', 0.5, 0.3));
   exitDoor.position.set(EXIT_X, 1.05, D / 2 - 0.04);

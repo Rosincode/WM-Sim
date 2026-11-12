@@ -14,7 +14,7 @@ import { createForklift } from './ui/scene/forklift';
 import { createPalletJack } from './ui/scene/palletJack';
 import { createRadio } from './ui/radio';
 import { createPrinter } from './ui/printer';
-import { POINTS } from './sim/layout';
+import { DESK, START } from './sim/layout';
 import { createExterior } from './ui/scene/exterior';
 import { createCharacter, type HandTarget } from './ui/scene/character';
 import { wms } from './integrations/wms';
@@ -67,8 +67,8 @@ createExterior(scene);
 // --- Speler (zichtbaar in third person en overzicht) ---
 const character = createCharacter();
 const player = character.group;
-player.position.set(-14.8, 0, 2.5);
-player.rotation.y = Math.PI / 2;
+player.position.set(START.player.x, 0, START.player.z); // startplekken komen uit het model (src/sim/warehouse.json)
+player.rotation.y = START.player.r;
 scene.add(player);
 
 // --- Nabewerking: omgevingsschaduw (GTAO), gloed rond lampen, tonemapping ---
@@ -239,21 +239,21 @@ const forklift = createForklift({
   place: warehouse.forkliftPlace,
   onStockChange: refreshHall,
 });
-forklift.group.position.set(-12.6, 0, 2.5); // voor de stellingen, in het middelste gangpad; de speler start er vlak achter
-forklift.group.rotation.y = Math.PI / 2;
+forklift.group.position.set(START.forklift.x, 0, START.forklift.z);
+forklift.group.rotation.y = START.forklift.r;
 scene.add(forklift.group, forklift.marker);
 if (import.meta.env.DEV) Object.assign(window, { wmDebug: { forklift, hall, warehouse, wms, setDriving: (on: boolean) => setDriving(on) } });
 
 // --- Radio op het bureau naast de pc: M schakelt tussen de live zenders ---
 const radio = createRadio();
-radio.group.position.set(POINTS.terminal.x - 0.55, 0.975, POINTS.terminal.z + 0.08);
+radio.group.position.set(DESK.radio.x, 0.975, DESK.radio.z);
 scene.add(radio.group);
 
 if (import.meta.env.DEV) Object.assign((window as unknown as { wmDebug: object }).wmDebug, { radio });
 
 // --- Printer op het bureau rechts van de monitor: B drukt de picklijst af ---
 const printer = createPrinter({ orders: warehouse.orders, carriedOrder: warehouse.carriedOrder, stockList: warehouse.stockList });
-printer.group.position.set(POINTS.terminal.x + 0.56, 0.975, POINTS.terminal.z + 0.12);
+printer.group.position.set(DESK.printer.x, 0.975, DESK.printer.z);
 scene.add(printer.group);
 
 const forkliftDistance = () => player.position.distanceTo(forklift.group.position);
@@ -268,8 +268,8 @@ const jack = createPalletJack({
   onStockChange: refreshHall,
   loose: forklift.loose,
 });
-jack.group.position.set(-13.4, 0, 5.4); // naast het looppad, bij de rolcontainers
-jack.group.rotation.y = Math.PI / 2;
+jack.group.position.set(START.palletJack.x, 0, START.palletJack.z);
+jack.group.rotation.y = START.palletJack.r;
 scene.add(jack.group);
 /** Pompwagen pakken of loslaten; in first person zie je dan je eigen handen op de handgreep. */
 function holdJack(on: boolean) {

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { DOCKS } from '../../sim/layout';
+import { DOCKS, DOCK_PITCH } from '../../sim/layout';
 import logoUrl from '../assets/robodu-logo.jpg';
 import * as tex from './textures';
 import { Batch, EXIT_X, HALL, UNIT_BOX, UNIT_CYL, paint } from './warehouse';
@@ -65,7 +65,7 @@ export function createExterior(scene: THREE.Scene) {
   line(0, ROAD.maxZ - 0.35, ROAD_HALF * 2, 0.15);
   for (let x = -ROAD_HALF + 2; x <= ROAD_HALF - 2; x += 8) line(x, ROAD_Z, 3, 0.15);
   // Dockvakken op het terrein
-  for (let i = 0; i <= DOCKS.length; i++) line(X0 - 10.5, DOCKS[0].z - 2.5 + i * 5, 19, 0.14);
+  for (let i = 0; i <= DOCKS.length; i++) line(X0 - 10.5, DOCKS[0].z - DOCK_PITCH / 2 + i * DOCK_PITCH, 19, 0.14);
   // Parkeervakken: twee rijen met een rijbaan ertussen
   const bays: { x: number; z: number }[] = [];
   for (let x = PARKING.minX + 1.5; x <= PARKING.maxX - 1; x += 2.6) {

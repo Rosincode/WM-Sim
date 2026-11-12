@@ -1,24 +1,47 @@
-// Fysieke layout van het magazijn. Moet gelijk lopen met de seed-data van de WMS
-// (pos_x = x, pos_y = z in de 3D-scène).
+// Fysieke layout van het magazijn. Alles hier is afgeleid van het model in ./warehouse.json:
+// wie de hal anders wil indelen past alleen dat bestand aan (maten in meters, draaiing in graden).
+//
+//   hall            binnenmaat van het gebouw; het midden ligt op (0, 0)
+//   racks           stellingen: rijen (langs z) x secties (langs x) x niveaus (levelHeights = hoogte per niveau,
+//                   minstens twee), met palletsPerLocation palletplekken naast elkaar per locatie
+//   docks           dockdeuren in de westwand (x = -width/2), elk met een inslag- en een uitslagbaan
+//   desk            bureau met de pc; radio en printer staan erop (dx/dz ten opzichte van het bureau)
+//   rollContainers  lege rolcontainers: hier begin je aan een order
+//   equipment       startplek van de heftruck en de pompwagen
+//   playerStart     waar de speler begint
+//   furniture       paktafel, palletstapels, nooduitgang (zuidwand), brandblussers
+//
+// De locaties moeten gelijk lopen met de WMS (pos_x = x, pos_y = z in de 3D-scène); het WMS-paneel
+// laat zien welke locaties van de hal de WMS nog niet kent.
+import model from './warehouse.json';
 
 export type LocationType = 'dock' | 'rack' | 'pick';
 export type SimLocation = { id: string; type: LocationType; x: number; z: number; level: number };
 export type Point = { x: number; z: number };
+/** Plek met kijkrichting (r in radialen, om de verticale as). */
+export type Pose = Point & { r: number };
+
+const { hall, racks, docks, desk } = model;
+const range = (n: number, first: number, pitch: number) => Array.from({ length: n }, (_, i) => first + i * pitch);
+const pose = (p: { x: number; z: number; rotation: number }): Pose => ({ x: p.x, z: p.z, r: (p.rotation * Math.PI) / 180 });
 
 /** Binnenmaat van de hal (m); het midden ligt op (0, 0). De docks zitten in de westwand (x = -w/2). */
-export const HALL = { w: 56, d: 56 };
+export const HALL = { w: hall.width, d: hall.depth, h: hall.height };
 
-/** 7 secties per stelling, 11 stellingen met daartussen 10 paden; elk dock ligt recht voor een pad. */
-export const SECTION_X = [-8, -4, 0, 4, 8, 12, 16];
-export const ROW_Z = Array.from({ length: 11 }, (_, i) => -25 + i * 5);
-export const DOCK_Z = Array.from({ length: 10 }, (_, i) => -22.5 + i * 5);
+/** Secties per stelling (x) en stellingrijen (z); standaard ligt elk dock recht voor een pad. */
+export const SECTION_PITCH = racks.sectionPitch;
+export const SECTION_X = range(racks.sections, racks.firstSectionX, racks.sectionPitch);
+export const ROW_Z = range(racks.rows, racks.firstRowZ, racks.rowPitch);
+export const DOCK_PITCH = docks.pitch;
+export const DOCK_Z = range(docks.count, docks.firstZ, docks.pitch);
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 const WALL_X = -HALL.w / 2;
 /** Midden van de banen (x); elke baan is een rij van LANE_SLOTS palletplekken vanaf het dock de hal in. */
-const LANE_X = WALL_X + 7.7;
-const LANE_PITCH = 1.3;
-export const LANE_SLOTS = 6;
+const LANE_X = WALL_X + docks.lanes.distanceFromWall;
+const LANE_PITCH = docks.lanes.slotPitch;
+const LANE_DZ = docks.lanes.offsetFromDoor;
+export const LANE_SLOTS = docks.lanes.slots;
 export const LANE_LENGTH = LANE_SLOTS * LANE_PITCH;
 
 /** Een dockdeur met zijn eigen inslaglocatie (lossen) en uitslaglocatie (klaarzetten). */
@@ -43,8 +66,8 @@ export const DOCKS: Dock[] = DOCK_Z.map((z, index) => {
     inId: `${id}-IN`,
     outId: `${id}-UIT`,
     truck: { x: WALL_X + 1.5, z },
-    laneIn: { x: LANE_X, z: z - 1.3 },
-    laneOut: { x: LANE_X, z: z + 1.3 },
+    laneIn: { x: LANE_X, z: z - LANE_DZ },
+    laneOut: { x: LANE_X, z: z + LANE_DZ },
   };
 });
 
@@ -56,7 +79,7 @@ export const LOCATIONS: SimLocation[] = (() => {
   }
   ROW_Z.forEach((z, r) =>
     SECTION_X.forEach((x, s) => {
-      for (const level of [1, 2, 3]) {
+      for (let level = 1; level <= racks.levelHeights.length; level++) {
         const id = `R${r + 1}-${pad2(s + 1)}-${level}`;
         locs.push({ id, type: level === 1 ? 'pick' : 'rack', x, z, level });
       }
@@ -70,21 +93,42 @@ const SHELVES = LOCATIONS.filter((l) => l.type !== 'dock');
 export const location = (id: string) => byId.get(id);
 export const shelfLocations = () => SHELVES;
 
-/** Hoogte (y) waarop een pallet staat per niveau; zie de stellingen in src/ui/scene/warehouse.ts. */
-export const LEVEL_Y = [0, 0, 2, 4];
+/** Hoogte (y) van de niveaus, van onder naar boven. */
+export const LEVEL_HEIGHTS = racks.levelHeights;
+/** Hoogte (y) waarop een pallet staat per niveau (niveau 1 = index 1). */
+export const LEVEL_Y = [0, ...LEVEL_HEIGHTS];
 
-/** Een stellinglocatie heeft drie palletplekken naast elkaar; verschuiving (x) van elke plek ten opzichte van het midden. */
-export const SLOT_DX = [-1.3, 0, 1.3];
+/** Een stellinglocatie heeft palletplekken naast elkaar; verschuiving (x) van elke plek ten opzichte van het midden. */
+export const SLOT_DX = Array.from(
+  { length: racks.palletsPerLocation },
+  (_, i) => (i - (racks.palletsPerLocation - 1) / 2) * racks.palletPitch,
+);
 /** Stuks op een volle pallet als de hal niet opgeeft hoeveel er van een artikel op passen. */
 export const PER_PALLET = 20;
 
 /** Interactiepunten op de vloer (naast de docks). */
 export const POINTS = {
   /** De pc met de WMS-app. */
-  terminal: { x: -11.3, z: 0 },
+  terminal: { x: desk.x, z: desk.z },
   /** Lege rolcontainers: hier begin je aan een order. */
-  containers: { x: -11.3, z: 5 },
+  containers: { ...model.rollContainers },
 } satisfies Record<string, Point>;
+
+/** Wat er op het bureau staat. */
+export const DESK = {
+  radio: { x: desk.x + desk.radio.dx, z: desk.z + desk.radio.dz },
+  printer: { x: desk.x + desk.printer.dx, z: desk.z + desk.printer.dz },
+} satisfies Record<string, Point>;
+
+/** Waar de speler en de middelen beginnen. */
+export const START = {
+  player: pose(model.playerStart),
+  forklift: pose(model.equipment.forklift),
+  palletJack: pose(model.equipment.palletJack),
+};
+
+/** Vaste aankleding van de hal. */
+export const FURNITURE = model.furniture;
 
 /** Palletplek i in een baan; plek 0 ligt het dichtst bij de dockdeur. */
 export function laneSlot(lane: Point, i: number): Point {
