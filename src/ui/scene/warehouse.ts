@@ -209,10 +209,10 @@ export function createWarehouse(scene: THREE.Scene) {
       marking(p.x + len / 2 + 0.4, p.z, 1.8, 0.45, color, tex.floorText(code.replace('DOCK-', '')), Math.PI / 2);
     }
   }
-  // Parkeerplaats: een vak voor de heftruck, een voor de pompwagen en vakken voor de robots.
+  // Parkeerplaats: een vak voor de heftruck en een voor de pompwagen.
   // De tekst lees je als je vanuit de hal naar de wand kijkt.
   {
-    const { area, forklift, palletJack, robots } = PARKING;
+    const { area, forklift, palletJack } = PARKING;
     const WHITE = '#e9e9e2';
     const bay = (b: Bay, color: string) => {
       for (const side of [-1, 1]) marking(b.x + (side * b.w) / 2, b.z, 0.08, b.d, color);
@@ -223,12 +223,6 @@ export function createWarehouse(scene: THREE.Scene) {
     label(forklift, 'HEFTRUCK', 2.2);
     bay(palletJack, YELLOW);
     label(palletJack, 'POMPWAGEN', 1.5);
-    for (const b of robots) bay(b, '#2e8bd8');
-    if (robots.length) {
-      const first = robots[0];
-      const last = robots[robots.length - 1];
-      label({ ...first, x: (first.x + last.x) / 2 }, 'ROBOTS', 2.4);
-    }
     // rand van de parkeerplaats aan de kant van de hal
     marking((area.minX + area.maxX) / 2 + 0.3, area.minZ, area.maxX - area.minX - 0.6, 0.1, YELLOW);
     marking(area.maxX, (area.minZ + area.maxZ) / 2, 0.1, area.maxZ - area.minZ, YELLOW);

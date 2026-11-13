@@ -31,7 +31,7 @@
 
   "rooms": { "depth": 7.5, "officeWidth": 6, "canteenWidth": 9 },
 
-  "parking": { "width": 16, "depth": 7.5, "robotBays": 6 },
+  "parking": { "width": 16, "depth": 7.5 },
 
   "equipment": {
     "forklift": { "x": -25.7, "z": 34.2, "rotation": 180 },

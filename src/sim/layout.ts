@@ -9,8 +9,8 @@
 //   rollContainers  lege rolcontainers: hier begin je aan een order
 //   rooms           kantoor en kantine: aanbouw buiten tegen de noordwand, bij de dockwand (het kantoor op de hoek);
 //                   depth is de diepte van de aanbouw, vanuit de hal door een deur in de noordwand te bereiken
-//   parking         parkeerplaats in de andere hoek van de dockwand (zuid): een vak voor de heftruck, een voor
-//                   de pompwagen en robotBays vakken voor robots
+//   parking         parkeerplaats in de andere hoek van de dockwand (zuid): een vak voor de heftruck en een voor
+//                   de pompwagen (de robots staan bij hun laadstation aan het eind van hun pad)
 //   equipment       startplek van de heftruck en de pompwagen (standaard in hun vak op de parkeerplaats)
 //   playerStart     waar de speler begint
 //   furniture       paktafel, palletstapels, nooduitgang (zuidwand), brandblussers
@@ -62,7 +62,6 @@ export function modelError(m: unknown): string | null {
   const { rooms, parking } = m as WarehouseModel;
   if (rooms.depth < 4 || rooms.officeWidth < 4 || rooms.canteenWidth < 6) return 'rooms: kantoor minstens 4 × 4 m, kantine minstens 6 × 4 m';
   if (parking.width < 6.2 || parking.depth < 5) return 'parking: minstens 6,2 m breed en 5 m diep';
-  if (!Number.isInteger(parking.robotBays) || parking.robotBays < 0 || parking.robotBays > 40) return 'parking.robotBays: een geheel getal van 0 t/m 40';
   return null;
 }
 
@@ -223,19 +222,17 @@ export const ROOMS = (() => {
   return { office, canteen };
 })();
 
-/** Parkeerplaats tegen de zuidwand bij de docks: vakken voor de heftruck, de pompwagen en de robots. */
+/** Parkeerplaats tegen de zuidwand bij de docks: vakken voor de heftruck en de pompwagen. */
 export const PARKING = (() => {
-  const { width, depth, robotBays } = model.parking;
+  const { width, depth } = model.parking;
   const maxZ = HALL.d / 2;
   const area: Rect = { minX: WALL_X, maxX: WALL_X + width, minZ: maxZ - depth, maxZ };
   /** Vak met zijn achterkant 0,3 m van de wand. */
   const bay = (x: number, w: number, d: number): Bay => ({ x, z: maxZ - 0.3 - d / 2, w, d });
-  const fits = Math.max(0, Math.floor((width - 6.2) / 1.6));
   return {
     area,
     forklift: bay(WALL_X + 2.3, 2.6, 4.3),
     palletJack: bay(WALL_X + 4.7, 1.4, 2.4),
-    robots: Array.from({ length: Math.min(robotBays, fits) }, (_, i) => bay(WALL_X + 7 + i * 1.6, 1.6, 1.8)),
   };
 })();
 

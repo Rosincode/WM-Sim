@@ -6,7 +6,8 @@ import { robotApi } from './wmsGateway';
 // - Kent de WMS-client de robotacties (docs/wms/08), dan komen de opdrachten uit de WMS: die is leidend.
 // - Zolang dat niet zo is (de mock, of een WMS waar de robots nog niet in zitten) speelt dit bestand de
 //   robotsturing van de WMS na: elke pallet met sticker op een inslagbaan krijgt een opdracht naar een vrije
-//   vloerlocatie in de stellingen. Het wegzetten zelf wordt dan in de WMS geboekt met confirm_putaway.
+//   locatie in de stellingen (eerst de vloer, dan hoger), en een lege vloerlocatie wordt aangevuld met een pallet
+//   van erboven. Het verplaatsen zelf wordt dan in de WMS geboekt met confirm_putaway.
 // In multiplayer doet alleen de host dit; de andere spelers krijgen de robots via de gedeelde wereld.
 
 const POLL_SECONDS = 2;
@@ -49,7 +50,7 @@ export function createRobotDispatch({
     avoid.get(task.palletId)!.add(task.toLocationId);
   });
 
-  /** De robotsturing van de WMS nagespeeld: pallets op de inslagbanen naar een vrije vloerlocatie. */
+  /** De robotsturing van de WMS nagespeeld: pallets op de inslagbanen naar een vrije locatie, en lege vloerlocaties aanvullen. */
   function plan(): RobotTask[] {
     const tasks = fleet.tasks();
     const waiting: RobotTask[] = tasks.filter((t) => !t.robotId).map(({ robotId: _robot, ...t }) => t);
@@ -58,23 +59,32 @@ export function createRobotDispatch({
     for (const t of tasks) targeted.set(t.toLocationId, (targeted.get(t.toLocationId) ?? 0) + 1);
     // Eerst de pallets die na een mislukte opdracht nog op een robot staan, dan de inslagbanen
     const work = [
-      ...fleet.stranded().map((s) => ({ ...s, locationId: s.fromLocationId, z: fleet.robots.find((r) => r.id === s.robotId)?.z ?? 0 })),
-      ...fleet.inbound(),
+      ...fleet.stranded().map((s) => ({ ...s, locationId: s.fromLocationId, floorOnly: s.kind !== 'fork', z: fleet.robots.find((r) => r.id === s.robotId)?.z ?? 0 })),
+      ...fleet.inbound().map((p) => ({ ...p, floorOnly: false })),
     ];
+    const add = (palletId: string, fromLocationId: string, toLocationId: string) => {
+      const task = { id: `RT-${stamp}-${String(seq++).padStart(3, '0')}`, palletId, fromLocationId, toLocationId };
+      issued.set(task.id, task);
+      waiting.push(task);
+      planned.add(palletId);
+      targeted.set(toLocationId, (targeted.get(toLocationId) ?? 0) + 1);
+    };
     for (const w of work) {
       if (waiting.length >= MAX_WAITING) break;
       if (planned.has(w.palletId)) continue;
       const spot = fleet
-        .floorSpace(w.sku)
-        .filter((s) => s.free > (targeted.get(s.locationId) ?? 0) && !avoid.get(w.palletId)?.has(s.locationId))
-        // zo dicht mogelijk bij het dock, en dan bij voorkeur bij hetzelfde artikel
-        .sort((a, b) => Math.abs(a.z - w.z) - Math.abs(b.z - w.z) || Number(b.sameSku) - Number(a.sameSku) || a.x - b.x)[0];
-      if (!spot) continue;
-      const task = { id: `RT-${stamp}-${String(seq++).padStart(3, '0')}`, palletId: w.palletId, fromLocationId: w.locationId, toLocationId: spot.locationId };
-      issued.set(task.id, task);
-      waiting.push(task);
-      planned.add(w.palletId);
-      targeted.set(spot.locationId, (targeted.get(spot.locationId) ?? 0) + 1);
+        .space(w.sku)
+        // een pallet die op een tilrobot staat kan alleen naar de vloer
+        .filter((s) => (!w.floorOnly || s.level === 1) && s.free > (targeted.get(s.locationId) ?? 0) && !avoid.get(w.palletId)?.has(s.locationId))
+        // zo dicht mogelijk bij het dock, eerst de vloer, en dan bij voorkeur bij hetzelfde artikel
+        .sort((a, b) => Math.abs(a.z - w.z) - Math.abs(b.z - w.z) || a.level - b.level || Number(b.sameSku) - Number(a.sameSku) || a.x - b.x)[0];
+      if (spot) add(w.palletId, w.locationId, spot.locationId);
+    }
+    // Een lege vloerlocatie (de pickplek) aanvullen: een robot-heftruck haalt de pallet van erboven naar beneden
+    for (const f of fleet.refill()) {
+      if (waiting.length >= MAX_WAITING) break;
+      if (planned.has(f.palletId) || targeted.get(f.toLocationId) || avoid.get(f.palletId)?.has(f.toLocationId)) continue;
+      add(f.palletId, f.fromLocationId, f.toLocationId);
     }
     return waiting;
   }

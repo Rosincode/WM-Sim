@@ -1,27 +1,41 @@
 import type { ProcessEvent } from './events';
-import { HALL, ROW_Z, SECTION_PITCH, SECTION_X, dist, type Point } from './layout';
+import { HALL, LEVEL_Y, ROW_Z, SECTION_PITCH, SECTION_X, dist, type Point } from './layout';
 import type { Pallet } from './warehouse';
 import type { WmsReply } from './wms';
 
-// De Geek+-robots: lage rijdende robots die onder een pallet rijden, hem optillen en wegbrengen.
+// De Geek+-robots. Er zijn twee soorten:
+// - de tilrobot (lift): een lage robot die onder een pallet rijdt, hem optilt en wegbrengt. Hij komt alleen bij
+//   wat op de vloer staat: de inslagbanen bij de docks en de onderste laag van de stellingen.
+// - de robot-heftruck (fork): een onbemande stapelaar met een mast. Hij pakt een pallet vanuit het pad met zijn
+//   vorken en komt daarmee ook bij de hogere niveaus van de stellingen.
 // De WMS stuurt ze aan met robotopdrachten (breng pallet X van locatie A naar locatie B). De game speelt de
 // vlootsturing en de robots zelf: hij wijst een opdracht toe aan een vrije robot, laat die rijden en meldt
 // elke stap terug aan de WMS (gestart, afgerond, mislukt). Zoals overal in de sim geldt: eerst de WMS, dan
 // fysiek. Pas als de WMS het afronden heeft geaccepteerd zet de robot de pallet neer.
 //
-// De robots komen alleen bij wat op de vloer staat: de inslagbanen bij de docks en de onderste laag van de
-// stellingen. Ze rijden over de paden tussen de stellingen (één robot per pad tegelijk) en wisselen van pad
-// via de robotbaan aan de oostkant van de hal, waar ook de laadstations staan.
+// Elk pad tussen de stellingen heeft zijn eigen robot (om en om een tilrobot en een robot-heftruck), met een
+// laadstation aan het eind van dat pad tegen de oostwand. Ze rijden over de paden (één robot per pad tegelijk)
+// en wisselen van pad via de robotbaan aan de oostkant van de hal.
 // Multiplayer: iedereen laat de robots lokaal rijden; alleen de host beslist (oppakken, neerzetten, de WMS vragen).
 
 /** Een opdracht van de WMS: breng deze pallet van de ene locatie naar de andere. */
 export type RobotTask = { id: string; palletId: string; fromLocationId: string; toLocationId: string };
 /** idle = bij het laadstation; home = onderweg daarheen. */
 export type RobotPhase = 'idle' | 'toPickup' | 'toDrop' | 'home';
-/** a = het pad waarin de robot is zodra hij dit punt bereikt (-1 = robotbaan of laadstation). */
-type Waypoint = Point & { a: number; detour?: boolean };
+export type RobotKind = 'lift' | 'fork';
+/**
+ * a = het pad waarin de robot is zodra hij dit punt bereikt (-1 = robotbaan of laadstation).
+ * h = hoogte (m) van de vorken voordat de robot-heftruck naar dit punt rijdt (standaard 0: rijhoogte).
+ * back = achteruit naar dit punt rijden: de robot-heftruck rijdt zo een stelling uit en zijn laadstation in.
+ */
+type Waypoint = Point & { a: number; detour?: boolean; h?: number; back?: boolean };
+/** Een palletplek met zijn niveau in de stelling (1 = op de vloer). */
+export type RobotSpot = Point & { level: number };
 export type Robot = {
   id: string;
+  kind: RobotKind;
+  /** Hoogte (m) van de vorken van een robot-heftruck; 0 bij een tilrobot. */
+  fork: number;
   x: number;
   z: number;
   /** Rijrichting (radialen om de verticale as); vooruit = (sin r, cos r). */
@@ -54,22 +68,29 @@ export interface RobotWorld {
   say(text: string, kind?: 'info' | 'ok' | 'err'): void;
   ask(e: ProcessEvent): Promise<WmsReply>;
   /** Waar de pallet staat, of waarom de robot hem daar niet kan halen. */
-  pickupSpot(palletId: string, fromLocationId: string): Point | string;
+  pickupSpot(palletId: string, fromLocationId: string): RobotSpot | string;
   /** Haalt de pallet fysiek van zijn plek; een tekst = dat kan niet (meer). */
   take(palletId: string, fromLocationId: string): Pallet | string;
   /** De vrije palletplek op de locatie, of waarom de pallet daar niet kan staan. */
-  dropSpot(locationId: string, pallet: Pallet): (Point & { slot: number }) | string;
+  dropSpot(locationId: string, pallet: Pallet): (RobotSpot & { slot: number }) | string;
+  /** Het niveau van een locatie (1 = op de vloer, ook voor de banen bij de docks). */
+  level(locationId: string): number;
   drop(locationId: string, pallet: Pallet, slot: number): void;
   /** Pallets met sticker op de inslagbanen: werk dat een robot kan doen. */
   inbound(): { palletId: string; sku: string; qty: number; locationId: string; z: number }[];
-  /** Vloerlocaties in de stellingen waar nog een pallet van dit artikel bij kan (free = aantal vrije plekken). */
-  floorSpace(sku: string): { locationId: string; free: number; x: number; z: number; sameSku: boolean }[];
+  /** Stellinglocaties waar nog een pallet van dit artikel bij kan (free = aantal vrije plekken). */
+  space(sku: string): { locationId: string; level: number; free: number; x: number; z: number; sameSku: boolean }[];
+  /** Lege vloerlocaties met voorraad erboven: de pallet die naar beneden kan om de pickplek aan te vullen. */
+  refill(): { palletId: string; fromLocationId: string; toLocationId: string }[];
 }
 
-const FLEET_SIZE = 3;
 /** Rijsnelheid (m/s) en draaisnelheid (rad/s). */
 const SPEED = 1.8;
 const TURN = 3.5;
+/** Hefsnelheid (m/s) van de vorken van een robot-heftruck. */
+const LIFT_SPEED = 0.9;
+/** Zo ver (m) voor het midden van een robot-heftruck staat de pallet op zijn vorken. */
+export const ROBOT_FORK_REACH = 0.75;
 /** Onder dit percentage neemt een robot geen nieuwe opdracht aan: eerst laden. */
 const LOW_BATTERY = 25;
 const RACK_MAX_X = SECTION_X[SECTION_X.length - 1] + SECTION_PITCH / 2;
@@ -82,10 +103,18 @@ const LANE = 0.55;
 const HOLD = 1.3;
 /** Past de vloot in deze hal? Er moet een pad zijn, en ruimte voor de robotbaan naast de stellingen. */
 const FITS = ROBOT_AISLES.length > 0 && ROBOT_CORRIDOR_X >= RACK_MAX_X + 1.4;
-/** De laadstations tegen de oostwand; elke robot heeft zijn eigen station. */
-export const ROBOT_CHARGERS: Point[] = FITS
-  ? Array.from({ length: FLEET_SIZE }, (_, i) => ({ x: HALL.w / 2 - 1.2, z: (i - (FLEET_SIZE - 1) / 2) * 1.6 }))
-  : [];
+/** De laadstations tegen de oostwand: één per pad, aan het eind van dat pad. Elk pad heeft zijn eigen robot. */
+export const ROBOT_CHARGERS: Point[] = FITS ? ROBOT_AISLES.map((z) => ({ x: HALL.w / 2 - 1.2, z })) : [];
+/** De soort robot per pad: om en om een tilrobot en een robot-heftruck. */
+export const ROBOT_KINDS: RobotKind[] = ROBOT_CHARGERS.map((_, i) => (i % 2 ? 'fork' : 'lift'));
+/**
+ * Waar robot i bij zijn laadstation staat. De tilrobot staat er met zijn neus tegenaan; de robot-heftruck
+ * staat er met zijn rug tegenaan, de vorken naar de hal.
+ */
+const parkPose = (i: number) =>
+  ROBOT_KINDS[i] === 'fork'
+    ? { x: ROBOT_CHARGERS[i].x - 0.25, z: ROBOT_CHARGERS[i].z, r: -Math.PI / 2 }
+    : { ...ROBOT_CHARGERS[i], r: Math.PI / 2 };
 
 const angle = (to: number, from: number) => Math.atan2(Math.sin(to - from), Math.cos(to - from));
 const nearestAisle = (z: number) => ROBOT_AISLES.reduce((best, az, i) => (Math.abs(az - z) < Math.abs(ROBOT_AISLES[best] - z) ? i : best), 0);
@@ -98,9 +127,10 @@ function aislesFor(p: Point): number[] {
 
 export function createRobotFleet(world: RobotWorld) {
   const parked = (i: number): Robot => ({
-    id: `GKP-${String(i + 1).padStart(2, '0')}`,
-    ...ROBOT_CHARGERS[i],
-    r: Math.PI / 2,
+    id: `${ROBOT_KINDS[i] === 'fork' ? 'GKF' : 'GKP'}-${String(i + 1).padStart(2, '0')}`,
+    kind: ROBOT_KINDS[i],
+    fork: 0,
+    ...parkPose(i),
     aisle: -1,
     phase: 'idle',
     path: [],
@@ -125,23 +155,38 @@ export function createRobotFleet(world: RobotWorld) {
 
   // ========== Route ==========
 
-  /** Route over de paden en de robotbaan naar een punt (of, zonder punt, naar het eigen laadstation). */
-  function route(r: Robot, goal: Point | null): Waypoint[] {
+  /**
+   * Route over de paden en de robotbaan naar een palletplek (of, zonder plek, naar het eigen laadstation).
+   * Een tilrobot rijdt tot onder de pallet; een robot-heftruck stopt ervoor, met de vorken op de hoogte van de plek.
+   */
+  function route(r: Robot, goal: RobotSpot | null): Waypoint[] {
     const path: Waypoint[] = [];
+    const fork = r.kind === 'fork';
     const goalAisles = goal ? aislesFor(goal) : [];
+    /** Het laatste stuk: vanaf het midden van het pad naar de pallet. */
+    const reach = (a: number): Waypoint[] => {
+      if (!goal) return [];
+      const az = ROBOT_AISLES[a];
+      if (!fork) return [{ x: goal.x, z: az, a }, { x: goal.x, z: goal.z, a }];
+      const side = goal.z >= az ? 1 : -1;
+      return [{ x: goal.x, z: az, a }, { x: goal.x, z: goal.z - side * ROBOT_FORK_REACH, a, h: LEVEL_Y[goal.level] ?? 0 }];
+    };
     let z = r.z;
     const corridor = (toZ: number) => ROBOT_CORRIDOR_X + (toZ >= z ? LANE : -LANE);
     if (r.aisle >= 0) {
       const az = ROBOT_AISLES[r.aisle];
-      if (Math.abs(r.z - az) > 0.01) path.push({ x: r.x, z: az, a: r.aisle }); // eerst terug naar het midden van het pad
-      if (goal && goalAisles.includes(r.aisle)) {
-        path.push({ x: goal.x, z: az, a: r.aisle }, { ...goal, a: r.aisle });
-        return path;
+      if (Math.abs(r.z - az) > 0.01) {
+        // Eerst terug naar het midden van het pad. Een robot-heftruck rijdt achteruit de stelling uit en laat
+        // daar zijn vorken zakken voordat hij draait.
+        if (fork) path.push({ x: r.x, z: az, a: r.aisle, back: true, h: r.fork }, { x: r.x, z: az, a: r.aisle, back: true });
+        else path.push({ x: r.x, z: az, a: r.aisle });
       }
+      if (goal && goalAisles.includes(r.aisle)) return [...path, ...reach(r.aisle)];
       z = az;
     }
     const ga = goal ? goalAisles.reduce((best, a) => (Math.abs(ROBOT_AISLES[a] - z) < Math.abs(ROBOT_AISLES[best] - z) ? a : best)) : -1;
-    const toZ = goal ? ROBOT_AISLES[ga] : ROBOT_CHARGERS[robots.indexOf(r)].z;
+    const home = parkPose(robots.indexOf(r));
+    const toZ = goal ? ROBOT_AISLES[ga] : home.z;
     const laneX = corridor(toZ);
     const dir = toZ >= z ? 1 : -1;
     const far = Math.abs(toZ - z) > 2 * HOLD;
@@ -151,24 +196,31 @@ export function createRobotFleet(world: RobotWorld) {
     if (goal) {
       // Wachten op een vrij pad doet de robot naast de ingang, niet ervoor: zo kan de robot die eruit komt erlangs
       if (far) path.push({ x: laneX, z: toZ - dir * HOLD, a: -1 });
-      path.push({ x: laneX, z: toZ, a: ga }, { x: goal.x, z: toZ, a: ga }, { ...goal, a: ga });
+      path.push({ x: laneX, z: toZ, a: ga }, ...reach(ga));
     } else {
-      path.push({ x: laneX, z: toZ, a: -1 }, { ...ROBOT_CHARGERS[robots.indexOf(r)], a: -1 });
+      path.push({ x: laneX, z: toZ, a: -1 }, { x: home.x, z: home.z, a: -1, back: fork });
     }
     return path;
   }
 
   // ========== Rijden (bij elke speler) ==========
 
-  /** Staat er iets in de weg? along = afstand vooruit, side = hoe ver naast de rijlijn (+ = rechts). */
-  function ahead(r: Robot, p: Point, rad: number) {
-    const hx = Math.sin(r.r);
-    const hz = Math.cos(r.r);
+  /**
+   * Staat er iets in de weg? along = afstand in de rijrichting, side = hoe ver naast de rijlijn (+ = rechts).
+   * @param back de robot rijdt achteruit
+   */
+  function ahead(r: Robot, p: Point, rad: number, back = false) {
+    const way = back ? -1 : 1;
+    const hx = Math.sin(r.r) * way;
+    const hz = Math.cos(r.r) * way;
     const dx = p.x - r.x;
     const dz = p.z - r.z;
     const along = dx * hx + dz * hz;
     const side = dx * hz - dz * hx;
-    return along > 0 && along < 0.7 + rad && Math.abs(side) < 0.4 + rad ? { along, side } : null;
+    // Een robot-heftruck is langer (de vorken steken vooruit) en met een pallet ook breder
+    const reach = r.kind === 'fork' ? (back ? 0.95 : 1.5) : 0.7;
+    const width = r.kind === 'fork' ? 0.55 : 0.4;
+    return along > 0 && along < reach + rad && Math.abs(side) < width + rad ? { along, side } : null;
   }
 
   function drive(r: Robot, dt: number) {
@@ -184,18 +236,31 @@ export function createRobotFleet(world: RobotWorld) {
     const dx = wp.x - r.x;
     const dz = wp.z - r.z;
     const d = Math.hypot(dx, dz);
-    if (d > 0.02) {
-      const turn = angle(Math.atan2(dx, dz), r.r);
+    const moving = d > 0.02;
+    const back = !!wp.back;
+    if (moving) {
+      // Achteruit rijden: de rug naar het doel
+      const turn = angle(Math.atan2(dx, dz) + (back ? Math.PI : 0), r.r);
       r.r += Math.max(-TURN * dt, Math.min(TURN * dt, turn));
       if (Math.abs(turn) > 0.25) return; // eerst op de plaats draaien, dan rijden
+    }
+    // De robot-heftruck zet zijn vorken op hoogte voordat hij verder rijdt
+    const h = wp.h ?? 0;
+    if (r.kind === 'fork' && r.fork !== h) {
+      r.fork += Math.max(-LIFT_SPEED * dt, Math.min(LIFT_SPEED * dt, h - r.fork));
+      return;
+    }
+    if (moving) {
       // Voorrang: een robot wacht op een robot met een lager nummer (tenzij die zelf op een vrij pad wacht)
-      if (robots.some((o) => o !== r && o.id < r.id && state(o).wait !== 'pad bezet' && ahead(r, o, 0.5))) return void (l.wait = 'robot voor');
+      if (robots.some((o) => o !== r && o.id < r.id && state(o).wait !== 'pad bezet' && ahead(r, o, 0.5, back))) return void (l.wait = 'robot voor');
       const list = obstacles();
-      const hit = list.map((o) => ahead(r, o, o.rad)).find(Boolean);
+      const hit = list.map((o) => ahead(r, o, o.rad, back)).find(Boolean);
       if (hit) {
         l.wait = 'obstakel';
         l.blocked += dt;
-        if (wp.detour) {
+        if (back) {
+          // achteruit rijdt de robot nergens omheen: hij wacht tot de weg vrij is
+        } else if (wp.detour) {
           // Ook de omweg zit dicht: opnieuw proberen vanaf hier
           if (l.blocked > 6) {
             r.path = r.path.filter((p) => !p.detour);
@@ -254,9 +319,10 @@ export function createRobotFleet(world: RobotWorld) {
   function goDrop(r: Robot) {
     const spot = world.dropSpot(r.task!.toLocationId, r.load!);
     if (typeof spot === 'string') return void fail(r, spot);
+    if (spot.level > 1 && r.kind !== 'fork') return void fail(r, `${r.task!.toLocationId} ligt niet op de vloer: daar kan alleen een robot-heftruck bij`);
     r.phase = 'toDrop';
     r.slot = spot.slot;
-    r.path = route(r, { x: spot.x, z: spot.z });
+    r.path = route(r, spot);
     decided(r);
   }
 
@@ -313,9 +379,17 @@ export function createRobotFleet(world: RobotWorld) {
           void fail(null, spot, task);
           continue;
         }
-        robot = robots
+        // Hoger dan de vloer kan alleen een robot-heftruck; werk op de vloer gaat eerst naar een tilrobot
+        const high = spot.level > 1 || world.level(task.toLocationId) > 1;
+        const able = robots.filter((r) => !high || r.kind === 'fork');
+        if (!able.length) {
+          open = open.filter((t) => t !== task);
+          void fail(null, 'er is geen robot-heftruck: de tilrobots komen alleen bij de vloer', task);
+          continue;
+        }
+        robot = able
           .filter((r) => free(r) && !r.load && r.battery >= LOW_BATTERY)
-          .sort((a, b) => dist(a, spot) - dist(b, spot))[0];
+          .sort((a, b) => (high ? 0 : Number(a.kind === 'fork') - Number(b.kind === 'fork')) || dist(a, spot) - dist(b, spot))[0];
       }
       if (!robot) continue;
       open = open.filter((t) => t !== task);
@@ -328,7 +402,7 @@ export function createRobotFleet(world: RobotWorld) {
     const task = r.task;
     if (r.phase === 'home') {
       r.phase = 'idle';
-      r.r = Math.PI / 2;
+      r.r = parkPose(robots.indexOf(r)).r;
       return decided(r);
     }
     if (!task) return;
@@ -445,9 +519,10 @@ export function createRobotFleet(world: RobotWorld) {
     stranded: () =>
       robots
         .filter((r) => r.load && !r.task && !state(r).busy)
-        .map((r) => ({ robotId: r.id, palletId: r.load!.id, sku: r.load!.sku, fromLocationId: r.loadFrom ?? '' })),
+        .map((r) => ({ robotId: r.id, kind: r.kind, palletId: r.load!.id, sku: r.load!.sku, fromLocationId: r.loadFrom ?? '' })),
     inbound: world.inbound,
-    floorSpace: world.floorSpace,
+    space: world.space,
+    refill: world.refill,
     statusText,
     /** Wacht de robot ergens op (obstakel, bezet pad, de WMS)? */
     waiting: (r: Robot) => !!state(r).wait || state(r).busy,

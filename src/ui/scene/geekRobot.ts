@@ -3,7 +3,8 @@ import { onTop } from './style';
 import { UNIT_BOX, paint } from './warehouse';
 import { canvasTexture } from './textures';
 
-// De Geek+-robot: een lage, platte robot die onder een pallet rijdt en hem optilt. Vooruit is +z.
+// De Geek+-tilrobot: een lage, platte robot die onder een pallet rijdt en hem optilt. Vooruit is +z.
+// De robot-heftruck staat in ./forkRobot.ts; het laadstation hier is voor allebei.
 // Alleen weergave; wat de robots doen staat in src/sim/robots.ts.
 
 /** Hoogte (m) waarop een opgetilde pallet op de robot staat. */
@@ -33,6 +34,12 @@ function makeParts() {
     logo: onTop(new THREE.MeshStandardMaterial({ map: logo, roughness: 0.35, metalness: 0.2 })),
     logoGeo: new THREE.PlaneGeometry(0.44, 0.11),
   };
+}
+
+/** De Geek+-sticker, ook voor de robot-heftruck. */
+export function robotLogo() {
+  const p = (parts ??= makeParts());
+  return { geometry: p.logoGeo, material: p.logo };
 }
 
 export function createGeekRobot() {
@@ -81,8 +88,12 @@ export function createGeekRobot() {
   };
 }
 
-/** Laadstation tegen de oostwand; de robot staat er met zijn neus tegenaan (hij kijkt naar +x). */
-export function createRobotCharger() {
+/**
+ * Laadstation tegen de oostwand. De tilrobot staat er met zijn neus tegenaan (hij kijkt naar +x); de
+ * robot-heftruck met zijn rug, en heeft een langer vak op de vloer.
+ * @param long vak voor een robot-heftruck
+ */
+export function createRobotCharger(long = false) {
   const p = (parts ??= makeParts());
   const g = new THREE.Group();
   const part = (mat: THREE.Material, w: number, h: number, d: number, x: number, y: number, z: number) => {
@@ -97,11 +108,11 @@ export function createRobotCharger() {
   part(p.black, 0.08, 0.05, 0.3, 0.62, 0.12, 0); // laadcontacten
   part(new THREE.MeshBasicMaterial({ color: '#3ddc84' }), 0.01, 0.03, 0.12, 0.655, 0.36, 0);
   const mark = new THREE.Mesh(
-    new THREE.PlaneGeometry(1.5, 1.0),
+    new THREE.PlaneGeometry(long ? 2.3 : 1.5, long ? 1.3 : 1.0),
     onTop(new THREE.MeshStandardMaterial({ color: '#1769e0', transparent: true, opacity: 0.3, depthWrite: false })),
   );
   mark.rotation.x = -Math.PI / 2;
-  mark.position.set(-0.05, 0.015, 0);
+  mark.position.set(long ? -0.5 : -0.05, 0.015, 0);
   g.add(mark);
   return g;
 }

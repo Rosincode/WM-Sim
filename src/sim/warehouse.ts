@@ -606,8 +606,8 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
 
   // ========== Geek+-robots: wat zij van de fysieke wereld nodig hebben (src/sim/robots.ts) ==========
 
-  /** De pallet die een robot moet halen: op een inslagbaan of op de vloer in een stelling. Een tekst = dat kan niet. */
-  function robotPallet(palletId: string, fromId: string): { point: Point; take(): Pallet } | string {
+  /** De pallet die een robot moet halen: op een inslagbaan of in een stelling. Een tekst = dat kan niet. */
+  function robotPallet(palletId: string, fromId: string): { point: Point & { level: number }; take(): Pallet } | string {
     const d = DOCKS.find((x) => x.inId === fromId);
     if (d) {
       const lane = laneIn[d.index];
@@ -615,16 +615,15 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
       const pallet = lane[i];
       if (!pallet) return `${palletId} staat niet (meer) op ${fromId}`;
       if (pallet.unlabeled) return `op de pallet op ${fromId} zit nog geen sticker`;
-      return { point: laneSlot(d.laneIn, i), take: () => ((lane[i] = null), pallet) };
+      return { point: { ...laneSlot(d.laneIn, i), level: 1 }, take: () => ((lane[i] = null), pallet) };
     }
     const p = racked.get(palletId);
     const loc = location(fromId);
     if (!p || !loc || p.locationId !== fromId) return `${palletId} staat niet (meer) op ${fromId}`;
-    if (loc.level !== 1) return `${fromId} ligt niet op de vloer: daar kan een robot niet bij`;
     if (p.unlabeled) return `op de pallet op ${fromId} zit nog geen sticker`;
     if (moved.has(palletId)) return `${palletId} is verplaatst en nog niet geboekt`;
     return {
-      point: { x: loc.x + SLOT_DX[p.slot], z: loc.z },
+      point: { x: loc.x + SLOT_DX[p.slot], z: loc.z, level: loc.level },
       take() {
         racked.delete(palletId);
         add(fromId, p.sku, -p.qty);
@@ -653,12 +652,12 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     dropSpot(locId, pallet) {
       const loc = location(locId);
       if (!loc || loc.type === 'dock') return `${locId} is geen stellinglocatie`;
-      if (loc.level !== 1) return `${locId} ligt niet op de vloer: daar kan een robot niet bij`;
       if (stockAt(locId).some((s) => s.sku !== pallet.sku)) return `op ${locId} staat al een ander artikel`;
       const slot = freeSlot(locId);
       if (slot === undefined) return `${locId} is vol`;
-      return { x: loc.x + SLOT_DX[slot], z: loc.z, slot };
+      return { x: loc.x + SLOT_DX[slot], z: loc.z, slot, level: loc.level };
     },
+    level: (locId) => location(locId)?.level || 1,
     drop(locId, pallet, slot) {
       add(locId, pallet.sku, pallet.qty);
       racked.set(pallet.id, { ...pallet, locationId: locId, slot });
@@ -667,7 +666,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
       DOCKS.flatMap((d) =>
         laneIn[d.index].flatMap((p) => (p && !p.unlabeled ? [{ palletId: p.id, sku: p.sku, qty: p.qty, locationId: d.inId, z: d.z }] : [])),
       ),
-    floorSpace(sku) {
+    space(sku) {
       const lines = new Map<string, Set<string>>();
       for (const k of stock.keys()) {
         const [loc, s] = k.split('|');
@@ -679,8 +678,26 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
       return shelfLocations().flatMap((l) => {
         const here = lines.get(l.id);
         const free = SLOTS.length - (used.get(l.id) ?? 0);
-        if (l.level !== 1 || isBlocked(l.id) || free <= 0 || (here && [...here].some((s) => s !== sku))) return [];
-        return [{ locationId: l.id, free, x: l.x, z: l.z, sameSku: !!here?.size }];
+        if (isBlocked(l.id) || free <= 0 || (here && [...here].some((s) => s !== sku))) return [];
+        return [{ locationId: l.id, level: l.level, free, x: l.x, z: l.z, sameSku: !!here?.size }];
+      });
+    },
+    refill() {
+      const at = (l: { x: number; z: number }) => `${l.x}|${l.z}`;
+      const occupied = new Set([...stock.keys()].map((k) => k.split('|')[0]));
+      for (const p of racked.values()) occupied.add(p.locationId);
+      /** Per sectie de laagste pallet boven de vloer die een robot kan pakken. */
+      const above = new Map<string, StoredPallet & { level: number }>();
+      for (const p of racked.values()) {
+        const l = location(p.locationId);
+        if (!l || l.level === 1 || p.unlabeled || moved.has(p.id) || isBlocked(l.id)) continue;
+        const best = above.get(at(l));
+        if (!best || l.level < best.level) above.set(at(l), { ...p, level: l.level });
+      }
+      return shelfLocations().flatMap((l) => {
+        const p = above.get(at(l));
+        if (l.level !== 1 || !p || occupied.has(l.id) || isBlocked(l.id)) return [];
+        return [{ palletId: p.id, fromLocationId: p.locationId, toLocationId: l.id }];
       });
     },
   });
