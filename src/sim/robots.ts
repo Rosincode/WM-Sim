@@ -20,7 +20,7 @@ import type { WmsReply } from './wms';
 //
 // Elk pad tussen de stellingen heeft twee robots voor pallets: een tilrobot voor alles op de vloer (wegzetten en
 // halen) en een robot-heftruck voor alles op de hogere niveaus. De
-// laadstations staan in één strakke rij tegen de oostwand, soort bij soort en op gelijke afstand van elkaar. De
+// laadstations staan op één lijn tegen de oostwand: de twee van een pad naast elkaar aan de kop van dat pad. De
 // robots rijden over de paden (één robot per pad tegelijk) en wisselen van pad via de robotbaan aan de oostkant
 // van de hal. Bij de docks rijden ze niet tussen de pallets door: ze komen via de vrije strook midden voor een
 // dock bij een baan, en de pickrobot rijdt achteruit de uitslagbaan in vanaf de halkant. Robots rijden nergens
@@ -181,19 +181,28 @@ export const ROBOT_KINDS: RobotKind[] = FITS
   : [];
 /** Het pad waar robot i bij hoort (-1 = bij geen enkel pad: de pickrobots en de voorraadteller). */
 const homeAisle = (i: number) => (i < 2 * ROBOT_AISLES.length ? i % ROBOT_AISLES.length : -1);
-/** De volgorde in de rij laadstations: soort bij soort. */
-const ROW_ORDER: RobotKind[] = ['lift', 'fork', 'pick', 'count'];
-const ROW = ROBOT_KINDS.map((_, i) => i).sort((a, b) => ROW_ORDER.indexOf(ROBOT_KINDS[a]) - ROW_ORDER.indexOf(ROBOT_KINDS[b]) || a - b);
-/** Afstand (m) tussen twee laadstations in de rij. */
-export const ROBOT_CHARGER_PITCH = Math.min(2.2, (HALL.d - 8) / Math.max(1, ROBOT_KINDS.length));
+/** Afstand (m) tussen twee paden. */
+const AISLE_PITCH = ROBOT_AISLES.length > 1 ? Math.abs(ROBOT_AISLES[1] - ROBOT_AISLES[0]) : HALL.d;
+/** Afstand (m) tussen de twee laadstations van een pad; er past er nog een tussen twee paden in. */
+export const ROBOT_CHARGER_PITCH = Math.min(2.2, AISLE_PITCH / 3);
 /**
- * De laadstations: één strakke rij tegen de oostwand, midden in de hal, allemaal op dezelfde lijn en op gelijke
- * afstand van elkaar. Ze staan vóór de kolommen langs de wand (er staat er dus nooit een in een kolom).
+ * De laadstations: allemaal op één lijn tegen de oostwand, vóór de kolommen langs de wand. Elk pad heeft er twee
+ * aan zijn eigen kopse kant: links de tilrobot, rechts de robot-heftruck van dat pad. De overige robots (de
+ * pickrobots en de voorraadteller) staan ertussenin, midden tussen twee paden; past dat niet, dan na het laatste pad.
  */
-export const ROBOT_CHARGERS: Point[] = ROBOT_KINDS.map((_, i) => ({
-  x: HALL.w / 2 - 1.35,
-  z: +((ROW.indexOf(i) - (ROBOT_KINDS.length - 1) / 2) * ROBOT_CHARGER_PITCH).toFixed(3),
-}));
+export const ROBOT_CHARGERS: Point[] = ROBOT_KINDS.map((kind, i) => {
+  const a = homeAisle(i);
+  const n = ROBOT_AISLES.length;
+  let z: number;
+  if (a >= 0) z = ROBOT_AISLES[a] + (kind === 'fork' ? 0.5 : -0.5) * ROBOT_CHARGER_PITCH;
+  else {
+    const j = i - 2 * n;
+    const gaps = n - 1;
+    const first = Math.max(0, Math.floor((gaps - EXTRA.length) / 2));
+    z = j < gaps ? (ROBOT_AISLES[first + j] + ROBOT_AISLES[first + j + 1]) / 2 : ROBOT_AISLES[n - 1] + (1.5 + j - gaps) * ROBOT_CHARGER_PITCH;
+  }
+  return { x: HALL.w / 2 - 1.35, z: +z.toFixed(3) };
+});
 const PREFIX: Record<RobotKind, string> = { lift: 'GKP', fork: 'GKF', pick: 'PCK', count: 'INV' };
 /** Het nummer van robot i: dat van zijn pad, of het volgnummer binnen zijn soort. */
 const robotId = (i: number) => {

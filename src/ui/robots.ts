@@ -14,7 +14,7 @@ import type { SoundSource } from './sounds';
 import { dropLoad, loadTop, type OrderLoads } from './warehouseView';
 
 // De Geek+-robots in beeld: de tilrobots, de robot-heftrucks, de pickrobots en de voorraadteller, wat ze dragen,
-// hun laadstations (één strakke rij tegen de oostwand) en het onderdeel 'Robots' in het menu.
+// hun laadstations (per pad twee naast elkaar tegen de oostwand) en het onderdeel 'Robots' in het menu.
 // Leest alleen de sim (src/sim/robots.ts); de palletopdrachten komen via src/ui/robotDispatch.ts.
 
 const LED = { free: '#3ddc84', busy: '#35a7ff', waiting: '#ffa000' };
