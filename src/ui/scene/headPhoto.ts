@@ -7,6 +7,10 @@ import { EYES, HEAD, NOSE_V, OLD_PHOTO, PHOTO, halfWidth, headSurface, headY } f
 // foto heeft. Is er geen haar te zien, dan is het hoofd kaal; staat er alleen haar opzij (kale kruin), dan loopt
 // er een krans rond het achterhoofd.
 //
+// Wat de foto niet laat zien wordt aangevuld met wat er aan de rand van de foto wél staat: de structuur van de
+// bovenkant van het hoofd (haar, of de kale huid) loopt door over de kruin en het achterhoofd, de huid van de
+// zijkant van het gezicht loopt achter de oren langs, en de kin (met of zonder baard) loopt door tot de nek.
+//
 // Waar het haar zit staat in het masker dat bij het maken van de foto is meegegeven (zie faceCapture.ts). Foto's
 // zonder masker (oude foto's, of gemaakt zonder gezichtsherkenning) worden op kleur bekeken: alles boven en naast
 // het gezicht dat geen huidskleur heeft telt als haar.
@@ -269,6 +273,43 @@ export function readPhoto(image: HTMLImageElement | HTMLCanvasElement): HeadLook
     drape = { halfWidth: clamp(halfWidth(-0.02) + thick, 0.082, 0.125), bottom: low >= MH - 2 ? -HEAD.hy - 0.2 : rowY(low), depth: thick };
   }
 
+  // Huid aan de rand van het gezicht, links en rechts op de foto: die kleur loopt achter de oren langs.
+  const sideSkin = [-1, 1].map((s) => {
+    const avg = average((c, r) => {
+      const x = colX(c) * s;
+      const y = rowY(r);
+      return y > -0.035 && y < 0.01 && x > 0.66 * halfWidth(y) && x < 0.9 * halfWidth(y) && mask[r * MW + c] < 0.3;
+    });
+    return avg && avg.count >= 6 ? avg.rgb : skinRGB;
+  });
+  // Waar houdt het hoofd bovenaan op? Per kolom van de bovenrand van de foto omlaag: zolang de kleur die van de
+  // achtergrond blijft, is het nog geen hoofd. Boven die grens telt de foto niet mee (anders komt de achtergrond
+  // op de kruin); is de grens niet te vinden, dan geldt er geen.
+  const headTop = new Float32Array(MW).fill(Infinity);
+  const c0 = col(-0.065);
+  const c1 = col(0.065);
+  {
+    const lowest = row(0.07);
+    const found: number[] = [];
+    for (let c = c0; c <= c1; c++) {
+      const bg = [small[c * 4], small[c * 4 + 1], small[c * 4 + 2]];
+      let r = 1;
+      for (let off = 0; r <= lowest; r++) {
+        const i = (r * MW + c) * 4;
+        if (mask[r * MW + c] > 0.5 || Math.hypot(small[i] - bg[0], small[i + 1] - bg[1], small[i + 2] - bg[2]) > 34) {
+          if (++off > 1) break;
+        } else {
+          off = 0;
+          for (let ch = 0; ch < 3; ch++) bg[ch] += (small[i + ch] - bg[ch]) * 0.2;
+        }
+      }
+      found.push(r > lowest ? Infinity : rowY(r - 1));
+    }
+    for (let c = c0; c <= c1; c++) headTop[c] = median(found.slice(Math.max(0, c - c0 - 2), c - c0 + 3));
+  }
+  const topAt = (x: number) => headTop[clamp(col(x), c0, c1)];
+  const skullTop = Math.min(HEAD.hy, median(Array.from(headTop.slice(col(-0.03), col(0.03) + 1))));
+
   // Zachte overgang tussen haar en huid (ruim een centimeter): het haar ligt als één vloeiende vorm op het hoofd
   const tmp = new Float32Array(MW * MH);
   for (let pass = 0; pass < 8; pass++) {
@@ -328,8 +369,71 @@ export function readPhoto(image: HTMLImageElement | HTMLCanvasElement): HeadLook
   };
   const hairAt = (dx: number, dy: number, dz: number) => locate(dx, dy, dz).thick;
 
-  // Kleur van het hele hoofd: de foto op de voorkant, naar achteren overlopend in effen haar of huid. Waar haar
-  // zit wordt de foto gelezen op de plek van het haar zelf (buiten de schedel), zodat de haardos van de foto past.
+  /**
+   * Stukje van de foto (midden cx, cy en w × h, in meters op het hoofd) als vulling voor de rest van het hoofd:
+   * de gemiddelde kleur, en de fijne structuur zonder licht en schaduw, die gespiegeld herhaald kan worden.
+   */
+  const patch = (cx: number, cy: number, w: number, h: number) => {
+    const step = PHOTO.h / H;
+    const pw = Math.max(8, Math.round(w / step));
+    const ph = Math.max(8, Math.round(h / step));
+    const raw = new Float32Array(pw * ph * 3);
+    for (let j = 0; j < ph; j++) {
+      for (let i = 0; i < pw; i++) {
+        const u = 0.5 + (cx + ((i + 0.5) / pw - 0.5) * w) / PHOTO.w;
+        const v = PHOTO.top + (HEAD.hy - cy - (0.5 - (j + 0.5) / ph) * h) / PHOTO.h;
+        for (let ch = 0; ch < 3; ch++) raw[(j * pw + i) * 3 + ch] = sample(px, W, H, 4, ch, u, v);
+      }
+    }
+    // gemiddelde, in de tweede ronde zonder uitschieters (glans, een verdwaald stukje achtergrond)
+    let mean = [0, 0, 0];
+    for (let pass = 0; pass < 2; pass++) {
+      const sum = [0, 0, 0];
+      let n = 0;
+      for (let i = 0; i < raw.length; i += 3) {
+        if (pass && Math.hypot(raw[i] - mean[0], raw[i + 1] - mean[1], raw[i + 2] - mean[2]) > 50) continue;
+        for (let ch = 0; ch < 3; ch++) sum[ch] += raw[i + ch];
+        n++;
+      }
+      if (n) mean = sum.map((v) => v / n);
+    }
+    // structuur = het stukje min zijn vervaagde versie (eerst opzij vervaagd, dan omlaag)
+    const blur = raw.slice();
+    const line = new Float32Array(Math.max(pw, ph) * 3);
+    for (const [n, m, stride, other] of [
+      [pw, ph, 3, pw * 3],
+      [ph, pw, pw * 3, 3],
+    ]) {
+      for (let k = 0; k < m; k++) {
+        for (let a = 0; a < n; a++) for (let ch = 0; ch < 3; ch++) line[a * 3 + ch] = blur[k * other + a * stride + ch];
+        for (let a = 0; a < n; a++) {
+          for (let ch = 0; ch < 3; ch++) {
+            let sum = 0;
+            for (let d = -5; d <= 5; d++) sum += line[clamp(a + d, 0, n - 1) * 3 + ch];
+            blur[k * other + a * stride + ch] = sum / 11;
+          }
+        }
+      }
+    }
+    for (let i = 0; i < raw.length; i++) raw[i] = clamp(raw[i] - blur[i], -40, 40);
+    const tri = (q: number) => {
+      q = ((q % 2) + 2) % 2;
+      return q > 1 ? 2 - q : q;
+    };
+    /** Structuur op plek (s, t) in meters, eindeloos herhaald (om en om gespiegeld, dus zonder naden). */
+    const detail = (s: number, t: number, ch: number) => raw[(Math.min(ph - 1, (tri(t / h) * ph) | 0) * pw + Math.min(pw - 1, (tri(s / w) * pw) | 0)) * 3 + ch];
+    return { mean, detail };
+  };
+  // Bovenkant van het hoofd op de foto: het haar zelf, of bij een kaal hoofd de huid net onder de kruin.
+  const TOP_W = 0.06;
+  const topEdge = crown ? HEAD.hy + topThick - 0.008 : Math.min(HEAD.hy - 0.02, skullTop - 0.012);
+  const top = patch(0, topEdge - 0.012, TOP_W, 0.024);
+  const chin = patch(0, 0.018 - HEAD.hy, 0.05, 0.022);
+
+  // Kleur van het hele hoofd: de foto op de voorkant, en daarbuiten de foto doorgetrokken: de structuur van de
+  // bovenkant over de kruin en het achterhoofd (haar tot de verzonnen haargrens in de nek, of kale huid), de huid
+  // van de zijkant achter de oren langs, de kin tot de nek. Waar haar zit wordt de foto gelezen op de plek van
+  // het haar zelf (buiten de schedel), zodat de haardos van de foto past.
   const canvas = document.createElement('canvas');
   canvas.width = TW;
   canvas.height = TH;
@@ -345,24 +449,45 @@ export function readPhoto(image: HTMLImageElement | HTMLCanvasElement): HeadLook
       const dz = Math.sin(phi) * Math.sin(theta);
       const p = locate(dx, dy, dz);
       const o = (j * TW + i) * 4;
-      if (p.w > 0) {
+      let w = p.w;
+      let u = 0;
+      let v = 0;
+      let real = 1;
+      if (w > 0) {
         // plek op de foto: op het haar een eind naar buiten langs de normaal
         const nx = dx / HEAD.hx;
         const ny = dy / HEAD.hy;
         const nz = dz / (dz >= 0 ? HEAD.front : HEAD.back);
         const l = (0.75 * p.thick) / Math.hypot(nx, ny, nz);
+        const x = pt.x + nx * l;
         const y = pt.y + ny * l;
         const reach = p.hair > 0.5 ? Infinity : INSET * halfWidth(y);
-        const u = 0.5 + clamp(pt.x + nx * l, -reach, reach) / PHOTO.w;
-        const v = clamp(PHOTO.top + (HEAD.hy - y) / PHOTO.h, 0.01, PHOTO.chin - 0.004);
+        u = 0.5 + clamp(x, -reach, reach) / PHOTO.w;
+        v = clamp(PHOTO.top + (HEAD.hy - y) / PHOTO.h, 0.01, PHOTO.chin - 0.004);
         // op het haar alleen de foto gebruiken waar daar ook echt haar staat (niet de achtergrond)
-        const real = p.hair > 0.5 && hasMask ? smoothstep(sample(mask, MW, MH, 1, 0, u, v), 0.3, 0.6) : 1;
-        for (let ch = 0; ch < 3; ch++) {
-          const flat = skinRGB[ch] + (hairC[ch] - skinRGB[ch]) * p.hair;
-          const seen = hairC[ch] + (sample(px, W, H, 4, ch, u, v) - hairC[ch]) * real;
-          out.data[o + ch] = flat + (seen - flat) * p.w;
-        }
-      } else for (let ch = 0; ch < 3; ch++) out.data[o + ch] = skinRGB[ch] + (hairC[ch] - skinRGB[ch]) * p.hair;
+        if (p.hair > 0.5 && hasMask) real = smoothstep(sample(mask, MW, MH, 1, 0, u, v), 0.3, 0.6);
+        // op de huid telt de foto niet bovenop het hoofd (daar rekt hij uit) en niet boven de rand van het hoofd op de foto
+        const bare = 1 - smoothstep(p.hair, 0.2, 0.6);
+        const edge = topAt(x);
+        w *= (1 - bare * smoothstep(dy, 0.75, 0.95)) * (1 - bare * smoothstep(y, edge - 0.012, edge - 0.004));
+      }
+      // Vulling buiten de foto. De structuur ligt bovenop plat op het hoofd en loopt opzij rond het hoofd
+      // (precies vier keer heen en terug, dus zonder naad achterop).
+      const flat = smoothstep(dy, 0.45, 0.8);
+      const round = ((i + 0.5) / TW) * 8 * TOP_W;
+      const right = smoothstep(pt.x, -0.04, 0.04);
+      const up = crown ? 0 : smoothstep(pt.y, 0.03, 0.085); // kaal: naar boven toe de kleur van de kruin
+      const under = smoothstep(-pt.y, HEAD.hy - 0.02, HEAD.hy - 0.006) * smoothstep(dz, -0.25, 0.05) * (1 - p.hair); // onder de kin, tot de nek
+      for (let ch = 0; ch < 3; ch++) {
+        const d = top.detail(pt.x, pt.z, ch) * flat + top.detail(round, pt.y, ch) * (1 - flat);
+        const side = sideSkin[0][ch] + (sideSkin[1][ch] - sideSkin[0][ch]) * right;
+        const skinFill = side + (top.mean[ch] - side) * up + (crown ? 0 : d);
+        const hairFill = hairC[ch] + (crown ? d : 0);
+        let c = skinFill + (hairFill - skinFill) * p.hair;
+        if (w > 0) c += (hairC[ch] + (sample(px, W, H, 4, ch, u, v) - hairC[ch]) * real - c) * w;
+        c += (chin.mean[ch] + chin.detail(pt.x, pt.z, ch) - c) * under;
+        out.data[o + ch] = c;
+      }
       out.data[o + 3] = 255;
     }
   }
