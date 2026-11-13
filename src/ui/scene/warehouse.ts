@@ -807,6 +807,96 @@ export function createWarehouse(scene: THREE.Scene) {
     return g;
   }
 
+  /** Zo hoog (m) wordt de lading op een orderpallet hooguit gestapeld. */
+  const ORDER_STACK_H = 1.3;
+  /**
+   * De indeling van een orderpallet: elk artikel in zijn eigen blok van stapels, de blokken in stroken naast
+   * elkaar op het palletdek (1,2 × 1,0 m). `shrink` halveert de dozen, net als bij een overvolle stellingpallet.
+   */
+  function orderPlan(lines: { sku: string; qty: number }[], shrink: number) {
+    const blocks = lines
+      .map((l) => {
+        const s = stacking(l.sku, shrink);
+        const cols = Math.ceil(l.qty / Math.max(1, Math.floor(ORDER_STACK_H / s.ch)));
+        const colsZ = Math.min(s.nz, cols);
+        const colsX = Math.ceil(cols / colsZ);
+        return { ...l, cw: s.cw, ch: s.ch, cd: s.cd, colsX, colsZ, w: colsX * s.cw, d: colsZ * s.cd };
+      })
+      .sort((a, b) => b.d - a.d || b.w - a.w);
+    const strips: { w: number; d: number; blocks: typeof blocks }[] = [];
+    for (const b of blocks) {
+      const strip = strips.find((s) => s.d + b.d <= 1.0 + 1e-6);
+      if (!strip) strips.push({ w: b.w, d: b.d, blocks: [b] });
+      else {
+        strip.blocks.push(b);
+        strip.d += b.d;
+        strip.w = Math.max(strip.w, b.w);
+      }
+    }
+    return { strips, width: strips.reduce((n, s) => n + s.w, 0) };
+  }
+
+  /**
+   * De pallet van een order (op de uitslagbaan, op de pompwagen van de chauffeur, in de vrachtwagen): dezelfde
+   * pallet en dozen als in de stelling, met van elk artikel precies het aantal dat voor de order is gepickt.
+   * De lange kant van de pallet ligt langs x.
+   */
+  function buildOrderLoad(lines: { sku: string; qty: number }[], jitterKey: string) {
+    const g = new THREE.Group();
+    const base = new THREE.Mesh(palletGeo, woodMat);
+    base.castShadow = base.receiveShadow = true;
+    g.add(base);
+    const want = lines.map((l) => ({ sku: l.sku, qty: Math.floor(l.qty) })).filter((l) => l.qty > 0);
+    let plan = orderPlan(want, 0);
+    for (let k = 1; k <= MAX_SHRINK && plan.width > 1.2 + 1e-6; k++) plan = orderPlan(want, k);
+    const j = tex.rng(tex.hashString(jitterKey));
+    const list: Carton[] = [];
+    let x0 = -Math.min(plan.width, 1.2) / 2;
+    for (const strip of plan.strips) {
+      let z0 = -strip.d / 2;
+      for (const b of strip.blocks) {
+        // zelfde tint als dit artikel in de stelling heeft (zie loadLayout)
+        const r = tex.rng(tex.hashString(b.sku));
+        r();
+        const shade = 0.78 + r() * 0.22;
+        const warm = r() * 0.08;
+        const cols = b.colsX * b.colsZ;
+        for (let k = 0; k < b.qty; k++) {
+          // laag voor laag over de stapels van het blok: zo blijft de bovenkant vlak
+          const col = k % cols;
+          const x = x0 + (Math.floor(col / b.colsZ) + 0.5) * b.cw;
+          if (x + b.cw / 2 > 0.6 + 1e-6) continue; // past ook met de kleinste dozen niet meer op de pallet
+          const v = shade * (0.94 + j() * 0.06);
+          list.push({
+            x: x + (j() - 0.5) * 0.012,
+            y: PALLET_H + (Math.floor(k / cols) + 0.5) * b.ch,
+            z: z0 + ((col % b.colsZ) + 0.5) * b.cd + (j() - 0.5) * 0.012,
+            sx: b.cw - 0.008,
+            sy: b.ch - 0.003,
+            sz: b.cd - 0.008,
+            ry: (j() - 0.5) * 0.03,
+            r: v + warm,
+            g: v,
+            b: v - warm,
+          });
+        }
+        z0 += b.d;
+      }
+      x0 += strip.w;
+    }
+    if (list.length === 0) return g;
+    const boxes = new THREE.InstancedMesh(UNIT_BOX, cartonMats, list.length);
+    list.forEach((c, i) => {
+      q.setFromEuler(euler.set(0, c.ry, 0));
+      boxes.setMatrixAt(i, m4.compose(pos.set(c.x, c.y, c.z), q, scl.set(c.sx, c.sy, c.sz)));
+      boxes.setColorAt(i, tint.setRGB(c.r, c.g, c.b));
+    });
+    boxes.frustumCulled = false;
+    boxes.castShadow = boxes.receiveShadow = true;
+    g.add(boxes);
+    return g;
+  }
+
   let stockSignature = '';
   let rackPallets: RackPallet[] = [];
   let solids: Solid[] = fixedSolids;
@@ -941,6 +1031,7 @@ export function createWarehouse(scene: THREE.Scene) {
     nearestFreeSlot,
     inRack,
     buildLoad,
+    buildOrderLoad,
     palletCapacity,
   };
 }

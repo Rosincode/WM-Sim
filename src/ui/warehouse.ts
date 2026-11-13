@@ -53,6 +53,7 @@ export function mountWarehouse({
   player,
   rackStock = true,
   perPallet,
+  orderLoad,
   desks = [],
   onPcOpen,
 }: {
@@ -63,6 +64,8 @@ export function mountWarehouse({
   rackStock?: boolean;
   /** Stuks op een volle pallet van een artikel. */
   perPallet?: (sku: string) => number;
+  /** Bouwt de pallet van een order, met van elk artikel het aantal dozen (de hal). */
+  orderLoad?: (lines: { sku: string; qty: number }[], key: string) => THREE.Object3D;
   /** Werkplekken met de WMS-app naast de pc in de hal (de bureaus in het kantoor). */
   desks?: PcDesk[];
   /** De speler opent het scherm van zo'n werkplek (E): daar gaat hij bijvoorbeeld bij zitten. */
@@ -82,7 +85,7 @@ export function mountWarehouse({
   });
   // De Geek+-robots krijgen hun opdrachten uit de WMS, of nagespeeld zolang de WMS die nog niet uitgeeft.
   const robotDispatch = createRobotDispatch({ fleet: sim.robots, authority: () => sim.authority, bypass: mockOutOfStep });
-  const view = createWarehouseView(scene, player, sim, { rackStock });
+  const view = createWarehouseView(scene, player, sim, { rackStock, orderLoad });
   const dockCounter = mountDockCounter(scene, sim.counter);
   const hud = createProcessHud(sim);
   // Aanmelden bij de WMS-API zit in het menu rechtsboven (K).
@@ -374,6 +377,8 @@ export function mountWarehouse({
     docks: {
       drivers: sim.drivers,
       trucks: () => [sim.trucks.in, sim.trucks.out, ...sim.deliveries].filter((t): t is NonNullable<typeof t> => !!t),
+      /** De pallet van een order, voor op de pompwagen van de chauffeur. */
+      orderLoads: view.orderLoads,
     },
     update(dt: number) {
       robotDispatch.update(dt);

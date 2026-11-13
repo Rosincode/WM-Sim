@@ -824,6 +824,8 @@ export function createWarehouse({
       },
       async stage(id, dock) {
         const d = DOCKS[dock];
+        // Staat hij al klaar (teruggezet bij het laden van een bewaarde wereld), dan niet nog een keer
+        if (order(id)?.status === 'staged' && laneOut.some((lane) => lane.includes(id))) return null;
         const r = await ask({ type: 'OrderStaged', orderId: id, dockId: d.outId });
         scanned('location', d.outId, r.ok, d.outId);
         if (!r.ok) return `de WMS weigert: ${r.error}`;
@@ -968,6 +970,13 @@ export function createWarehouse({
     takeStaged(dock, slot) {
       const id = laneOut[dock][slot];
       const o = id ? order(id) : undefined;
+      if (id && (!o || o.status === 'loaded' || o.status === 'shipped')) {
+        // Een order die niet meer bestaat of al in een wagen staat: de plek vrijgeven, anders blijft de
+        // chauffeur hem proberen te pakken
+        laneOut[dock][slot] = null;
+        touch();
+        return null;
+      }
       if (!o) return null;
       laneOut[dock][slot] = null;
       o.status = 'picked';
@@ -978,6 +987,7 @@ export function createWarehouse({
     async loaded(truckId, orderId) {
       const t = truck(truckId);
       if (!t) return false;
+      if (t.loaded.includes(orderId)) return true; // staat al in de wagen: de WMS zou het een tweede keer weigeren
       const r = await ask({ type: 'OrderLoaded', orderId, truckId, dockId: t.dockId });
       scanned('order', orderId, r.ok, t.dockId);
       if (!r.ok) return (say(`WMS weigert het laden van ${orderId} in ${truckId}: ${r.error}`, 'err'), false);
@@ -1536,6 +1546,8 @@ export function createWarehouse({
     for (const o of orders) {
       if (o.status === 'picking') o.status = 'open'; // de rolcontainer staat weer bij de andere, met wat er al in lag
       else if (o.status === 'picked') {
+        // Staat hij op de pompwagen van een chauffeur, dan laadt die hem gewoon verder in
+        if (drivers.drivers.some((d) => d.order === o.id)) continue;
         const lane = laneOut[outDock]?.includes(null) ? laneOut[outDock] : laneOut.find((l) => l.includes(null));
         if (!lane) continue;
         lane[lane.indexOf(null)] = o.id;

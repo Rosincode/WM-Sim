@@ -138,6 +138,11 @@ export function createDrivers(world: DriverWorld) {
   /** Chauffeurs voor wie een vraag bij de WMS loopt. */
   const busy = new Set<string>();
   let resets = 0;
+  /**
+   * Een nieuwe chauffeur begint boven de stand van elke chauffeur die er eerder was: anders houden andere
+   * spelers na een reset de oude chauffeur van dezelfde wagen aan, die dan blijft staan waar hij was.
+   */
+  let floor = 0;
   let snapshot: Driver[] = [];
   let snapshotAt = -1;
 
@@ -165,6 +170,10 @@ export function createDrivers(world: DriverWorld) {
    * en dan recht de wagen, de baan of de parkeerplek in. @param back achteruit het laatste stuk in (parkeren)
    */
   function drive(d: Driver, target: Point, back = false): Waypoint[] {
+    // Staat hij al in de wagen of op de baan waar hij moet zijn, dan rijdt hij er recht heen (achteruit als het
+    // achter hem ligt) in plaats van eerst terug naar de rijlijn en weer naar binnen.
+    if (Math.abs(d.z - target.z) < 0.01 && (d.x - INSIDE_X) * (target.x - INSIDE_X) > 0)
+      return [{ ...target, back: back || (target.x - d.x) * Math.sin(d.r) < 0 }];
     const path: Waypoint[] = [];
     // ligt de rijlijn achter de pompwagen, dan rijdt hij er achteruit naartoe
     if (Math.abs(d.x - INSIDE_X) > 0.01) path.push({ x: INSIDE_X, z: d.z, back: (INSIDE_X - d.x) * Math.sin(d.r) < 0 });
@@ -285,6 +294,8 @@ export function createDrivers(world: DriverWorld) {
       case 'lifting':
         if (d.direction === 'in') d.load = world.takeCargo(d.id);
         else d.order = world.takeStaged(d.dock, d.target);
+        // Niets te pakken (iemand was hem voor): even blijven staan en dan opnieuw kijken, niet meteen wegrijden
+        if (!d.load && !d.order) return go(d, 'waiting', [], 1.5);
         return next(d);
       case 'toLane': {
         const pallet = d.load;
@@ -338,13 +349,14 @@ export function createDrivers(world: DriverWorld) {
       const dock = DOCKS[t.dock];
       drivers.push({
         id: t.id, dock: t.dock, direction: t.direction, ...cab(dock), r: -Math.PI / 2,
-        phase: 'toScreen', path: walkIn(dock), jack: false, load: null, order: null, door: false, target: 0, timer: 0.8, waited: 0, v: 0,
+        phase: 'toScreen', path: walkIn(dock), jack: false, load: null, order: null, door: false, target: 0, timer: 0.8, waited: 0, v: floor,
       });
       world.touch();
     }
     for (let i = drivers.length - 1; i >= 0; i--) {
       const t = trucks.find((x) => x.id === drivers[i].id);
       if (t && (t.status === 'waiting' || t.status === 'checkedIn')) continue;
+      floor = Math.max(floor, drivers[i].v + 1);
       drivers.splice(i, 1);
       world.touch();
     }
@@ -394,6 +406,7 @@ export function createDrivers(world: DriverWorld) {
       for (let i = drivers.length - 1; i >= 0; i--) if (!list.some((s) => s.id === drivers[i].id)) drivers.splice(i, 1);
       for (const s of list) {
         if (!Array.isArray(s.path)) continue;
+        floor = Math.max(floor, s.v + 1);
         const d = drivers.find((x) => x.id === s.id);
         if (!d) drivers.push(structuredClone(s));
         else if (s.v > d.v) Object.assign(d, structuredClone(s), dist(d, s) < 1.5 ? { x: d.x, z: d.z, r: d.r } : null); // niet verspringen
@@ -404,6 +417,7 @@ export function createDrivers(world: DriverWorld) {
     reset() {
       resets++;
       busy.clear();
+      for (const d of drivers) floor = Math.max(floor, d.v + 1);
       drivers.length = 0;
       snapshotAt = -1;
     },

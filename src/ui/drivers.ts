@@ -6,7 +6,7 @@ import type { Truck } from '../sim/warehouse';
 import { createCharacter, type HandTarget } from './scene/character';
 import { createDockScreen, type DockScreenState } from './scene/dockScreen';
 import { createElectricJack } from './scene/electricJack';
-import { pallet, setPalletColor, skuColor, tote } from './warehouseView';
+import { dropLoad, pallet, setPalletColor, skuColor, type OrderLoads } from './warehouseView';
 
 // De chauffeurs in beeld: de figuur zelf, de elektrische pompwagen bij elk dock, het aanraakscherm naast elke
 // dockdeur, en de deuren die voor hem open en dicht gaan. Leest alleen de sim (src/sim/drivers.ts).
@@ -23,6 +23,7 @@ export function mountDrivers({
   exterior,
   drivers,
   trucks,
+  orderLoads,
 }: {
   scene: THREE.Scene;
   hall: { setDockDoor(i: number, open: number): void; setDriverDoor(i: number, open: number): void };
@@ -30,19 +31,20 @@ export function mountDrivers({
   drivers: Drivers;
   /** De vrachtwagens die nu op het terrein zijn. */
   trucks: () => Truck[];
+  /** De pallet van een order (met de gepickte dozen), voor op de vorken. */
+  orderLoads: OrderLoads;
 }) {
   // Per dock: de pompwagen met wat erop staat, het scherm en hoe ver de deur open is
   const docks = DOCKS.map((d) => {
     const jack = createElectricJack();
     const load = pallet();
-    const cage = tote();
-    load.visible = cage.visible = false;
+    load.visible = false;
     const screen = createDockScreen();
     const at = dockScreen(d);
     screen.group.position.set(at.x + 0.035, SCREEN_Y, at.z);
     screen.group.rotation.y = Math.PI / 2;
-    scene.add(jack.group, load, cage, screen.group);
-    return { jack, load, cage, screen, open: 0, lift: 0 };
+    scene.add(jack.group, load, screen.group);
+    return { jack, load, order: null as THREE.Object3D | null, orderKey: '', screen, open: 0, lift: 0 };
   });
   const doors = DRIVER_DOORS.map(() => 0);
 
@@ -92,18 +94,32 @@ export function mountDrivers({
     const carrying = !!held && (!!held.load || !!held.order);
     v.lift = THREE.MathUtils.clamp(v.lift + (carrying ? dt : -dt) / 0.5, 0, 1);
     v.jack.setLift(v.lift);
-    // Wat er op de vorken staat: de pallet uit de wagen, of de rolcontainer van een order
+    // Wat er op de vorken staat: de pallet uit de wagen, of de pallet van een order
     v.load.visible = !!held?.load;
-    v.cage.visible = !!held?.order;
-    const carried = held?.load ? v.load : held?.order ? v.cage : null;
-    if (carried && held) {
-      const x = held.x + fx * JACK_REACH;
-      carried.position.set(x, dockFloorY(x) + 0.05 + 0.09 * v.lift, held.z + fz * JACK_REACH);
-      carried.rotation.y = held.r;
-      if (held.load) {
-        setPalletColor(v.load, skuColor(held.load.sku));
-        (v.load.userData.sticker as THREE.Object3D).visible = !held.load.unlabeled;
+    const orderKey = held?.order ? orderLoads.key(held.order) : '';
+    if (orderKey !== v.orderKey) {
+      v.orderKey = orderKey;
+      if (v.order) dropLoad(v.order);
+      v.order = held?.order ? orderLoads.build(held.order) : null;
+      if (v.order) {
+        // Geen schaduw: anders moet de schaduwkaart elke frame opnieuw voor een rijdende pompwagen
+        v.order.traverse((o) => (o.castShadow = false));
+        scene.add(v.order);
       }
+    }
+    if (!held) return;
+    const x = held.x + fx * JACK_REACH;
+    const z = held.z + fz * JACK_REACH;
+    if (held.load) {
+      v.load.position.set(x, dockFloorY(x) + 0.05 + 0.09 * v.lift, z);
+      v.load.rotation.y = held.r;
+      setPalletColor(v.load, skuColor(held.load.sku));
+      (v.load.userData.sticker as THREE.Object3D).visible = !held.load.unlabeled;
+    }
+    if (v.order) {
+      // de vorken steken onder de dwarsplanken van de pallet; zijn lange kant ligt in de rijrichting
+      v.order.position.set(x, dockFloorY(x) + 0.012 + 0.09 * v.lift, z);
+      v.order.rotation.y = held.r - Math.PI / 2;
     }
   }
 

@@ -300,6 +300,7 @@ const warehouse = mountWarehouse({
   player,
   rackStock: false,
   perPallet: hall.palletCapacity,
+  orderLoad: hall.buildOrderLoad,
   desks: hall.desks.map((d) => ({ ...d, radius: 1.3, label: () => (chair ? 'Pc gebruiken: WMS openen' : 'Gaan zitten en de WMS openen') })),
   onPcOpen: (desk) => sitDown(hall.desks.find((d) => d.display === desk.display)!.seat),
 });
