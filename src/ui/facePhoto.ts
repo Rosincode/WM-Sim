@@ -6,7 +6,7 @@ import { EYES, HEAD, headOutline, photoUV } from './scene/headShape';
 
 // Foto van je eigen hoofd voor op je figuur. De foto wordt met de webcam gemaakt: gezichtsherkenning (in de
 // browser, zie faceCapture.ts) trekt hem recht en op maat, zodat je gezicht precies op het hoofd van de figuur
-// past en je haar wordt overgenomen. Hij wordt alleen in deze browser bewaard (localStorage). Net als je naam
+// past. Hij wordt alleen in deze browser bewaard (localStorage). Net als je naam
 // gaat hij via de publieke broker naar de andere spelers in de kamer: iedereen in de kamer kan hem dus zien.
 
 const FACE_KEY = 'wm-sim.face';
@@ -221,7 +221,7 @@ export function createFacePicker(initial: string | null) {
             : 'Vul de vorm met je hoofd: ogen op de gele rondjes, kin op het boogje. Je haar mag buiten de vorm vallen.'
         : face
           ? 'Deze foto staat op het hoofd van je figuur. Hiernaast zie je hoe dat eruitziet.'
-          : 'Optioneel: zet je eigen gezicht en haar op je figuur.');
+          : 'Optioneel: zet je eigen gezicht op je figuur.');
   }
 
   /** Aanwijzingen terwijl de camera loopt. */

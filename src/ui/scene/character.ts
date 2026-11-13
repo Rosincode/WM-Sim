@@ -5,8 +5,8 @@ import { EYES, HEAD, MOUTH_V, halfWidth, headFront, headSurface, headY } from '.
 
 // Magazijnmedewerker: gelede figuur op ware grootte (hesje, werkhandschoenen, veiligheidsschoenen) met procedurele
 // loopanimatie. Voorkant wijst naar +Z, voeten op y = 0. Geen modelbestanden of skinning: de vorm zit in
-// draaiprofielen (ledematen, romp) en een gevormd hoofd. Zonder foto draagt hij een helm; met een foto is het
-// hoofd dat van de speler: gezicht, huidskleur en haar (of kaal) komen van de foto, zie headPhoto.ts.
+// draaiprofielen (ledematen, romp) en een gevormd hoofd. Iedereen draagt een veiligheidshelm; met een foto komen
+// het gezicht en de huidskleur van de speler, zie headPhoto.ts.
 
 const HIP_HEIGHT = 0.916; // heupen (draaipunt van de figuur) boven de grond als hij rechtop staat
 const HIP_DROP = 0.02; // de heupgewrichten zitten iets onder dat draaipunt
@@ -221,36 +221,19 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   neck.rotation.x = 0.1;
   neck.scale.z = 1.08;
 
-  // Hoofd: een bol die tot hoofd is gevormd (headShape.ts). De richting van elk punt vanuit het midden blijft
-  // bewaard, zodat de vorm opnieuw kan worden opgebouwd als er haar bij komt.
+  // Hoofd: een bol die tot hoofd is gevormd (headShape.ts).
   const head = pivot(torso, 0, 0.62, 0);
   const skull = pivot(head, 0, HEAD.y, HEAD.z);
   const SEG_W = 112;
   const SEG_H = 80;
   const headGeo = new THREE.SphereGeometry(1, SEG_W, SEG_H, -Math.PI / 2); // naad achterop
-  const dirs = headGeo.attributes.position.array.slice();
-  const pt = { x: 0, y: 0, z: 0 };
-  function shapeHead(hairAt?: HeadLook['hairAt']) {
+  {
     const pos = headGeo.attributes.position;
+    const pt = { x: 0, y: 0, z: 0 };
     for (let i = 0; i < pos.count; i++) {
-      const dx = dirs[i * 3];
-      const dy = dirs[i * 3 + 1];
-      const dz = dirs[i * 3 + 2];
-      headSurface(dx, dy, dz, pt);
-      const h = hairAt ? hairAt(dx, dy, dz) : 0;
-      if (h > 0) {
-        // haar ligt op het hoofd: naar buiten langs de normaal
-        const nx = dx / HEAD.hx;
-        const ny = dy / HEAD.hy;
-        const nz = dz / (dz >= 0 ? HEAD.front : HEAD.back);
-        const l = h / Math.hypot(nx, ny, nz);
-        pt.x += nx * l;
-        pt.y += ny * l;
-        pt.z += nz * l;
-      }
+      headSurface(pos.getX(i), pos.getY(i), pos.getZ(i), pt);
       pos.setXYZ(i, pt.x, pt.y, pt.z);
     }
-    pos.needsUpdate = true;
     headGeo.computeVertexNormals();
     // Naad en polen: punten op dezelfde plek krijgen dezelfde normaal, anders is er een vouw te zien.
     const nor = headGeo.attributes.normal;
@@ -263,20 +246,17 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
       n.normalize();
       for (const i of same) nor.setXYZ(i, n.x, n.y, n.z);
     }
-    nor.needsUpdate = true;
     headGeo.computeBoundingSphere();
   }
-  shapeHead();
   const skinColor = skin.color.clone();
   const headMat = new THREE.MeshStandardMaterial({ color: skinColor, roughness: 0.65 });
   mesh(headGeo, headMat, skull);
 
   // Oren
-  const ears = [1, -1].map((side) => {
+  [1, -1].forEach((side) => {
     const ear = ball(1, skin, skull, side * halfWidth(-0.012) * 0.98, -0.012, -0.012);
     ear.scale.set(0.011, 0.031, 0.019);
     ear.rotation.set(0.12, side * 0.4, 0);
-    return ear;
   });
   // Het gewone gezicht (zonder foto): ogen, wenkbrauwen en mond; de neus zit in de vorm van het hoofd.
   const features: THREE.Object3D[] = [];
@@ -296,14 +276,35 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   const mouth = mesh(new THREE.CapsuleGeometry(0.0035, 0.03, 4, 8), mat('#9a5c4c', 0.7), skull, lips.x, lips.y, lips.z);
   mouth.rotation.z = Math.PI / 2;
   features.push(mouth);
-  // Lang haar valt achter de nek tot op de schouders
-  const hairMat = mat('#2a2018', 0.8);
-  const drape = lathe([[0.001, -0.1], [1, 0]], hairMat, skull); // de vorm volgt uit de foto, zie setFace
-  drape.visible = false;
-  // Helm (alleen zonder foto: met een foto is het eigen haar te zien)
-  const helm = pivot(skull, 0, 0.048, -0.004);
-  mesh(new THREE.SphereGeometry(0.106, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), helmet, helm).scale.set(0.86, 0.92, 1.08);
-  mesh(new THREE.CylinderGeometry(0.108, 0.111, 0.01, 24), helmet, helm, 0, 0, 0.026).scale.set(0.87, 1, 1.2);
+  // Veiligheidshelm, op elk hoofd: een volle schaal met een opstaande rand rondom, een klep voor, een kam over
+  // het midden met een lagere ribbel aan weerszijden, en binnenin de draagband die achter onder de rand uitkomt.
+  const helm = pivot(skull, 0, 0.05, -0.004);
+  const HELM = { w: 0.089, d: 0.107, h: 0.09 }; // halve breedte, halve diepte en hoogte van de schaal
+  const dome: [number, number][] = [[0.95, 0.001], [1.02, -0.003], [1.045, 0.002], [1.035, 0.008], [1, 0.013]];
+  for (let k = 1; k <= 14; k++) {
+    const a = (k / 14) * (Math.PI / 2);
+    dome.push([Math.max(0.001, Math.cos(a) ** 0.72), 0.013 + (HELM.h - 0.013) * Math.sin(a)]);
+  }
+  const domeGeo = new THREE.LatheGeometry(dome.map(([r, y]) => new THREE.Vector2(r, y)), 40);
+  const helmetShell = helmet.clone();
+  helmetShell.side = THREE.DoubleSide; // van onderen kijk je in de schaal
+  mesh(domeGeo, helmetShell, helm).scale.set(HELM.w, 1, HELM.d);
+  // kam en ribbels: dezelfde schaal, smal en net iets hoger, zodat ze er een paar millimeter bovenuit komen
+  const ridgeGeo = new THREE.LatheGeometry(dome.slice(4).map(([r, y]) => new THREE.Vector2(r, y)), 40);
+  mesh(ridgeGeo, helmet, helm).scale.set(0.012, 1.045, HELM.d * 1.012);
+  for (const side of [1, -1]) {
+    const rib = mesh(ridgeGeo, helmet, helm, side * 0.03, -0.004, 0);
+    rib.scale.set(0.008, 1, HELM.d * 0.93);
+    rib.rotation.z = -side * 0.3;
+  }
+  // klep: een platte, ronde lip die schuin naar voren afloopt
+  const peak = mesh(new THREE.SphereGeometry(1, 24, 10), helmet, helm, 0, 0.001, HELM.d * 0.86);
+  peak.scale.set(HELM.w * 0.8, 0.0045, 0.045);
+  peak.rotation.x = 0.22;
+  // draagband met stelknop in de nek
+  const strap = mesh(new THREE.CylinderGeometry(1, 1, 0.016, 32, 1, true), dark, helm, 0, -0.012, -0.004);
+  strap.scale.set(0.077, 1, 0.093);
+  mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.008, 16), dark, helm, 0, -0.012, -0.099).rotation.x = Math.PI / 2;
 
   /** Ledemaat dat vanaf het draaipunt naar beneden hangt: draaiprofiel [straal, y] met een ronde bovenkant. */
   const limb = (pts: [number, number][], m: THREE.Material, parent: THREE.Object3D, sx = 1, sz = 1) => {
@@ -671,8 +672,8 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   }
 
   /**
-   * Foto van de speler op het hoofd zetten (null = het gewone gezicht met helm). Gezicht, huidskleur en haar komen
-   * van de foto: het haar dat erop te zien is loopt door over het hele hoofd; zonder haar is het hoofd kaal.
+   * Foto van de speler op het hoofd zetten (null = het gewone gezicht). Het gezicht en de huidskleur komen van de
+   * foto; de rest van het hoofd krijgt die huidskleur. De helm blijft op.
    */
   let look: HeadLook | null = null;
   function setFace(image: HTMLImageElement | HTMLCanvasElement | null) {
@@ -683,24 +684,6 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
     headMat.needsUpdate = true;
     skin.color.copy(look?.skin ?? skinColor);
     for (const f of features) f.visible = !look;
-    helm.visible = !look;
-    if (look?.hair) hairMat.color.copy(look.hair);
-    drape.visible = !!look?.drape;
-    if (look?.drape) {
-      // Gordijn van haar naast en achter de nek, van onder het haar op het hoofd tot waar het op de foto reikt:
-      // bovenaan smal (het verdwijnt in het haar op het hoofd), onderaan rond afgewerkt.
-      const { halfWidth: w, bottom, depth } = look.drape;
-      const top: [number, number][] = [[1, -0.1], [0.97, -0.065], [0.86, -0.03], [0.6, 0.01], [0.3, 0.03]];
-      const end: [number, number][] = [[0.001, bottom], [0.55, bottom + 0.006], [0.84, bottom + 0.022], [0.97, bottom + 0.05]];
-      const points = [...end, ...top.filter(([, y]) => y > bottom + 0.07)];
-      drape.geometry.dispose();
-      drape.geometry = new THREE.LatheGeometry(points.map(([r, y]) => new THREE.Vector2(r, y)), 28);
-      drape.scale.set(w, 1, 0.062 + 0.5 * depth);
-      drape.position.set(0, 0, -0.03 - 0.5 * depth);
-    }
-    shapeHead(look?.hairAt);
-    // oren verdwijnen onder haar dat eroverheen valt
-    ears.forEach((ear, i) => (ear.visible = !look || look.hairAt(i ? -0.99 : 0.99, -0.1, -0.1) < 0.003));
   }
 
   /** First person in de heftruck: het hoofd niet tekenen, de camera zit op die plek. */
