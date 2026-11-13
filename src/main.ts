@@ -388,10 +388,16 @@ function holdJack(on: boolean) {
   pushing = on;
   view.setBody(on); // roept ook applyMode aan
 }
-// Reset van de hal naar de WMS: ook wat op de vorken of los op de vloer staat verdwijnt
+// De stand bij het begin: leeg in hun eigen vak op de parkeerplaats, vorken omlaag
+const forkliftHome = forklift.getState();
+const jackHome = jack.getState();
+// Reset van de hal naar de WMS: wat op de vorken of los op de vloer staat verdwijnt, en de heftruck en de
+// pompwagen staan weer in hun vak. Wie erop zit of hem vasthoudt stapt eerst uit of laat los.
 warehouse.onReset(() => {
-  forklift.applyState({ ...forklift.getState(), load: null, loose: [] });
-  jack.applyState({ ...jack.getState(), load: null });
+  setDriving(false);
+  if (jack.held) holdJack(false);
+  forklift.applyState(forkliftHome);
+  jack.applyState(jackHome);
   refreshHall();
 });
 
