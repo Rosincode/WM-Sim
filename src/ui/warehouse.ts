@@ -343,6 +343,8 @@ export function mountWarehouse({
     solids: () => [...view.solids(), ...dockCounter.solids()],
     /** Waar de speler buiten tegenaan loopt: de vrachtwagens op het terrein. */
     truckSolids: view.truckSolids,
+    /** Hoe ver de slagboom van het terrein open moet staan (0..1): omhoog als er een vrachtwagen aankomt. */
+    gateOpen: view.gateOpen,
     /** Vaste obstakels voor de heftruck (die rijdt nergens onderdoor): het bureau. */
     colliders: view.colliders,
     /** De telrobot bij de inslagbanen: waar hij staat en waar hij voor stopt. */

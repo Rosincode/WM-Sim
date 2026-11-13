@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { DOCKS, LANE_LENGTH, LANE_SLOTS, LEVEL_Y, POINTS, laneSlot, type Point } from '../sim/layout';
 import { TRUCK, cargoSpot } from '../sim/drivers';
 import type { Truck, Warehouse } from '../sim/warehouse';
+import { atGate, truckPose } from '../sim/yard';
 import { createPcMesh } from './scene/pc';
 import { createTruck } from './scene/truck';
 import { onTop } from './scene/style';
@@ -213,15 +214,22 @@ export function createWarehouseView(
 
   const forward = new THREE.Vector3();
   let time = 0;
+  /** Staat er een vrachtwagen bij de slagboom van het terrein, en hoe ver die open is (0..1). */
+  let gateWanted = false;
+  let gate = 0;
 
   function placeTruck(view: TruckView, text: ReturnType<typeof label>, t: Truck | null) {
     view.mesh.visible = !!t;
     text.set(truckText(t));
     if (!t) return;
     const dock = DOCKS[t.dock];
-    const eased = 1 - (1 - t.t) ** 2;
-    view.mesh.position.set(TRUCK.rear - (1 - eased) * 34, 0, dock.z); // achterkant van de laadbak tegen de dockdeur
-    view.setDoors(THREE.MathUtils.clamp((t.t - 0.5) / 0.25, 0, 1)); // de achterdeuren gaan open voordat hij tegen het dock staat
+    // Over de weg het terrein op, steken en achteruit tegen de dockdeur (de route staat in src/sim/yard.ts);
+    // de achterdeuren gaan open voordat hij het dock in rijdt
+    const pose = truckPose(t.dock, t.status === 'departing', t.t);
+    view.mesh.position.set(pose.x, 0, pose.z);
+    view.mesh.rotation.y = pose.r;
+    view.setDoors(pose.doors);
+    if (atGate(pose)) gateWanted = true;
     // Wat er in de laadruimte staat: de pallets die nog gelost moeten worden, of de orders die al geladen zijn
     const n = Math.max(view.slots(), t.cargo.length, t.loaded.length);
     for (let i = 0; i < n; i++) {
@@ -230,7 +238,9 @@ export function createWarehouseView(
       if (p) view.cargoAt(i, palletLoads.key(p), () => palletLoads.build(p));
       else view.cargoAt(i, id ? orderLoads.key(id) : '', () => orderLoads.build(id!));
     }
-    text.sprite.position.set(dock.truck.x + 1, 4.3, dock.z);
+    // het label hangt boven de achterkant van de wagen (aan het dock: boven de dockdeur) en rijdt mee
+    const back = dock.truck.x + 1 - TRUCK.rear;
+    text.sprite.position.set(pose.x + Math.cos(pose.r) * back, 4.3, pose.z - Math.sin(pose.r) * back);
   }
 
   const truckText = (t: Truck | null) => {
@@ -260,6 +270,7 @@ export function createWarehouseView(
 
   function update(dt: number) {
     time += dt;
+    gateWanted = false;
 
     placeTruck(trucks.in, labels.truckIn, sim.trucks.in);
     placeTruck(trucks.out, labels.truckOut, sim.trucks.out);
@@ -270,6 +281,8 @@ export function createWarehouseView(
       deliveryTrucks.set(t.dock, made);
     }
     for (const [dock, v] of deliveryTrucks) placeTruck(v.truck, v.text, sim.deliveries.find((t) => t.dock === dock) ?? null);
+
+    gate = THREE.MathUtils.clamp(gate + (gateWanted ? dt : -dt) / 1.2, 0, 1);
 
     const open = sim.orders.filter((o) => o.status === 'open').length;
     labels.stack.set(open ? `Lege pallets · ${open} order${open === 1 ? '' : 's'}` : '');
@@ -338,7 +351,7 @@ export function createWarehouseView(
       }));
   }
 
-  return { update, pcDisplay: pc.screen, palletLoads, orderLoads, solids, truckSolids, colliders, carryLabel, carryMesh };
+  return { update, gateOpen: () => gate, pcDisplay: pc.screen, palletLoads, orderLoads, solids, truckSolids, colliders, carryLabel, carryMesh };
 }
 
 /** Zo ver (m) voor de speler staat het midden van de pallet die hij draagt, en de halve maat van die pallet. */

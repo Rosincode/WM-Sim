@@ -613,6 +613,7 @@ renderer.setAnimationLoop((now) => {
   radio.update(player.position);
   printer.update(dt, player.position);
   warehouse.update(dt);
+  exterior.setGate(warehouse.gateOpen());
   robots.update(dt);
   drivers.update(dt);
   // De nooduitgang gaat open voor wie ervoor staat, binnen of buiten

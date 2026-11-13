@@ -309,15 +309,25 @@ export function createExterior(scene: THREE.Scene) {
   const lodgeRoof = new Batch();
   lodgeRoof.add(YARD_DRIVE.maxX + 2.2, 2.9, gateZ, 3.6, 0.2, 4);
   const barrier = new Batch();
-  barrier.add(gateX, 1.05, gateZ, YARD_DRIVE.maxX - YARD_DRIVE.minX - 0.6, 0.12, 0.12);
   barrier.add(YARD_DRIVE.maxX - 0.2, 0.6, gateZ, 0.3, 1.2, 0.3);
+  // De boom zelf scharniert aan zijn paal en gaat omhoog als er een vrachtwagen aankomt (setGate)
+  const barrierMat = paint('#c8231c', 0.5, 0.2);
+  const boomLength = YARD_DRIVE.maxX - YARD_DRIVE.minX - 0.6;
+  const boom = new THREE.Group();
+  boom.position.set(YARD_DRIVE.maxX - 0.2, 1.05, gateZ);
+  const boomArm = new THREE.Mesh(UNIT_BOX, barrierMat);
+  boomArm.scale.set(boomLength, 0.12, 0.12);
+  boomArm.position.x = gateX - boom.position.x;
+  boomArm.castShadow = boomArm.receiveShadow = true;
+  boom.add(boomArm);
+  root.add(boom);
   solid(YARD_DRIVE.maxX + 2.2, gateZ, 3, 3.4, 0, 3);
   solid(gateX, gateZ, YARD_DRIVE.maxX - YARD_DRIVE.minX - 0.6, 0.3, 0.9, 1.11); // de slagboom: daar loop je niet onderdoor
   solid(YARD_DRIVE.maxX - 0.2, gateZ, 0.3, 0.3, 0, 1.2);
   root.add(
     lodge.build(UNIT_BOX, paint('#e2e5e8', 0.7, 0.1)),
     lodgeRoof.build(UNIT_BOX, paint(NAVY, 0.5, 0.3)),
-    barrier.build(UNIT_BOX, paint('#c8231c', 0.5, 0.2)),
+    barrier.build(UNIT_BOX, barrierMat),
   );
 
   // ---------- Lantaarnpalen ----------
@@ -382,6 +392,10 @@ export function createExterior(scene: THREE.Scene) {
     solids,
     /** Staat dit punt in de open lucht (niet in de hal of de aanbouw)? */
     isOutside: (x: number, z: number) => !within(building, x, z) && !within(ANNEX, x, z),
+    /** De slagboom bij de inrit van het terrein. @param open 0 = dicht, 1 = omhoog */
+    setGate(open: number) {
+      boom.rotation.z = -open * 1.4;
+    },
     /** @param open 0 = dockdeur dicht, 1 = open */
     setDockDoor(i: number, open: number) {
       if (dockDoors[i]) dockDoors[i].scale.y = 1 - 0.97 * open;

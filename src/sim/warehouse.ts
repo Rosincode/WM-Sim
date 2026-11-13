@@ -9,6 +9,7 @@ import { createCounter } from './counter';
 import { createDrivers, dockScreen } from './drivers';
 import { createRobotFleet } from './robots';
 import { offlineGateway, type WmsGateway, type WmsReply } from './wms';
+import { truckSeconds } from './yard';
 
 // De fysieke wereld van het magazijn: vrachtwagens, pallets, de pallets van orders en wat er in de stellingen staat.
 // Die wereld is van de game en voor alle spelers dezelfde. De WMS is de administratie ervan: hij hoort wat
@@ -44,7 +45,7 @@ export type Truck = {
   /** Index in DOCKS van de deur waar de wagen staat. */
   dock: number;
   status: TruckStatus;
-  /** 0 = op de weg, 1 = tegen de dockdeur. */
+  /** 0 = ver weg op de openbare weg, 1 = tegen de dockdeur; de route ertussen staat in yard.ts (truckPose). */
   t: number;
   cargo: Pallet[];
   loaded: string[];
@@ -75,7 +76,6 @@ export type Objective = { point?: Point; level?: number; text: string };
 /** Uitkomst van een scan of handeling, voor het scherm van de scanner. */
 export type ScanResult = { ok: boolean; text: string };
 
-const DRIVE_SECONDS = 4;
 const DEMO_ORDER_INTERVAL = 45;
 const DEMO_MAX_OPEN_ORDERS = 2;
 /** Zo dichtbij (m) moet je staan om op een gescande locatie iets neer te zetten of te pakken. */
@@ -1361,13 +1361,13 @@ export function createWarehouse({
     const t = trucks[slot];
     if (!t) return;
     if (t.status === 'arriving') {
-      t.t = Math.min(1, t.t + dt / DRIVE_SECONDS);
+      t.t = Math.min(1, t.t + dt / truckSeconds(t.dock, false));
       if (t.t === 1) {
         t.status = 'waiting';
         say(`${t.id} staat aan ${t.dockId}: aanmelden.`);
       }
     } else if (t.status === 'departing') {
-      t.t = Math.max(0, t.t - dt / DRIVE_SECONDS);
+      t.t = Math.max(0, t.t - dt / truckSeconds(t.dock, true));
       if (t.t === 0) {
         trucks[slot] = null;
         for (const id of t.loaded) {
@@ -1406,12 +1406,12 @@ export function createWarehouse({
     for (let i = deliveries.length - 1; i >= 0; i--) {
       const t = deliveries[i];
       if (t.status === 'arriving') {
-        t.t = Math.min(1, t.t + dt / DRIVE_SECONDS);
+        t.t = Math.min(1, t.t + dt / truckSeconds(t.dock, false));
         if (t.t < 1) continue;
         t.status = 'checkedIn'; // de WMS heeft hem al aangemeld
         say(`${t.id} staat aan ${t.dockId}, aangemeld door de WMS (${plural(t.cargo.length, 'pallet')}).`);
       } else if (t.status === 'departing') {
-        t.t = Math.max(0, t.t - dt / DRIVE_SECONDS);
+        t.t = Math.max(0, t.t - dt / truckSeconds(t.dock, true));
         if (t.t > 0) continue;
         departed.add(t.id);
         deliveries.splice(i, 1);
