@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { AISLE_Z, DOCKS, DOCK_PITCH, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROW_FACE, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, WALKWAY_X, location, rackLocationId, rowBehind, rowName, type Bay } from '../../sim/layout';
+import { DOCK_RAMP, DRIVER_DOORS, TRUCK } from '../../sim/drivers';
 import { createRooms, ROOM_DOORS } from './rooms';
-import { onTop } from './style';
+import { STYLE, onTop } from './style';
 import * as tex from './textures';
 
 // Het magazijngebouw: vloer, wanden, dak, docks, stellingen, pallets en verlichting.
@@ -283,7 +284,12 @@ export function createWarehouse(scene: THREE.Scene) {
   // Deuren naar het kantoor en de kantine: open gaten in de noordwand
   wall(0, -D / 2, 0, W, ROOM_DOORS.map((d): [number, number, number, number] => [d.from, d.to, 0, d.height]));
   wall(0, D / 2, Math.PI, W);
-  wall(-W / 2, 0, Math.PI / 2, D);
+  // Dockwand: open gaten voor de dockdeuren (de deur zelf gaat open en dicht) en de chauffeursdeuren.
+  // Langs deze wand loopt de eigen richting van het vlak naar -z.
+  wall(-W / 2, 0, Math.PI / 2, D, [
+    ...DOCKS.map((d): [number, number, number, number] => [-d.z - 1.5, -d.z + 1.5, 0, 3.5]),
+    ...DRIVER_DOORS.map((z): [number, number, number, number] => [-z - 0.5, -z + 0.5, 0, 2.1]),
+  ]);
   wall(W / 2, 0, -Math.PI / 2, D);
 
   // ---------- Kantoor en kantine: aanbouw buiten tegen de noordwand ----------
@@ -376,18 +382,40 @@ export function createWarehouse(scene: THREE.Scene) {
   const doorMat = paint('#c3c8cc', 0.5, 0.35);
   const windowMat = onTop(glow(2.4, 2.8, 3.3));
   const leveller = onTop(new THREE.MeshStandardMaterial({ map: tex.treadPlate(), roughness: 0.45, metalness: 0.75 }));
-  const dockParts = new Batch();
   const dockHazard = new Batch();
+  /** Per dock de deur (rolt omhoog) en de laadklep (kantelt omhoog naar de laadvloer van de vrachtwagen). */
+  const dockDoors: { door: THREE.Group; ramp: THREE.Group }[] = [];
+  const rampLength = Math.hypot(DOCK_RAMP.low - DOCK_RAMP.high, TRUCK.floor);
+  const rampGeo = new THREE.BoxGeometry(rampLength, 0.03, 1.7);
   const bollards = new Batch();
   DOCKS.forEach(({ z, inId, outId }, i) => {
     const x0 = -W / 2;
-    for (let s = 0; s < 4; s++) dockParts.add(x0 + 0.09, 0.44 + s * 0.875, z, 0.05, 0.86, 3.0);
+    // De deur hangt aan zijn bovenkant: bij het openen rolt hij daar op
+    const door = new THREE.Group();
+    door.position.set(x0 + 0.09, 3.5, z);
+    for (let s = 0; s < 4; s++) {
+      const panel = new THREE.Mesh(UNIT_BOX, doorMat);
+      panel.scale.set(0.05, 0.86, 3.0);
+      panel.position.y = 0.44 + s * 0.875 - 3.5;
+      panel.castShadow = panel.receiveShadow = true;
+      door.add(panel);
+    }
     for (const dz of [-0.9, 0, 0.9]) {
       const win = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.28), windowMat);
       win.rotation.y = Math.PI / 2;
-      win.position.set(x0 + 0.12, 2.2, z + dz);
-      scene.add(win);
+      win.position.set(0.03, 2.2 - 3.5, dz);
+      door.add(win);
     }
+    // De laadklep scharniert in de halvloer en komt omhoog tot op de laadvloer van de vrachtwagen
+    const ramp = new THREE.Group();
+    ramp.position.set(DOCK_RAMP.low, 0.012, z);
+    const plateUp = new THREE.Mesh(rampGeo, STYLE.steel);
+    plateUp.position.x = -rampLength / 2;
+    plateUp.receiveShadow = true;
+    ramp.add(plateUp);
+    ramp.visible = false;
+    scene.add(door, ramp);
+    dockDoors.push({ door, ramp });
     for (const dz of [-1.6, 1.6]) dockHazard.add(x0 + 0.12, 1.8, z + dz, 0.14, 3.6, 0.14);
     dockHazard.add(x0 + 0.12, 3.67, z, 0.14, 0.14, 3.34);
     for (const dz of [-2.0, 2.0]) bollards.add(x0 + 0.8, 0.5, z + dz, 0.08, 1, 0.08);
@@ -423,8 +451,37 @@ export function createWarehouse(scene: THREE.Scene) {
     // de deur zelf is dicht: je loopt er niet doorheen
     scene.add(lamp);
   });
+  /** @param open 0 = dockdeur dicht, 1 = open met de laadklep op de vrachtwagen */
+  function setDockDoor(i: number, open: number) {
+    const d = dockDoors[i];
+    if (!d) return;
+    d.door.scale.y = 1 - 0.97 * open;
+    d.ramp.visible = open > 0.02;
+    d.ramp.rotation.z = -Math.atan2(TRUCK.floor, DOCK_RAMP.low - DOCK_RAMP.high) * open;
+  }
+  // Chauffeursdeuren: hierdoor komen de chauffeurs van de vrachtwagens de hal in
+  const driverDoorMat = paint('#5d6b63', 0.5, 0.3);
+  const driverDoors = DRIVER_DOORS.map((z) => {
+    const hinge = new THREE.Group();
+    hinge.position.set(-W / 2 - 0.015, 0, z - 0.5);
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.05, 2.08, 0.98), driverDoorMat);
+    leaf.position.set(0, 1.04, 0.49);
+    leaf.castShadow = leaf.receiveShadow = true;
+    hinge.add(leaf);
+    const board = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.0, 0.5),
+      onTop(new THREE.MeshStandardMaterial({ map: tex.sign('CHAUFFEURS', '#17346b', '#ffffff'), roughness: 0.5 })),
+    );
+    board.rotation.y = Math.PI / 2;
+    board.position.set(-W / 2 + 0.02, 2.5, z);
+    scene.add(hinge, board);
+    return hinge;
+  });
+  /** @param open 0 = chauffeursdeur dicht, 1 = open (de hal in) */
+  function setDriverDoor(i: number, open: number) {
+    if (driverDoors[i]) driverDoors[i].rotation.y = open * 1.45;
+  }
   scene.add(
-    dockParts.build(UNIT_BOX, doorMat),
     dockHazard.build(UNIT_BOX, hazard),
     bollards.build(UNIT_CYL, safetyYellow),
   );
@@ -866,6 +923,8 @@ export function createWarehouse(scene: THREE.Scene) {
     colliders,
     /** Waar de speler buiten de hal mag lopen: de deuren naar en de kamers van de aanbouw (kantoor, kantine). */
     walkable: rooms.walkable,
+    setDockDoor,
+    setDriverDoor,
     /** De bureaus in het kantoor: monitor met de WMS-app en de stoel waarop je ervoor gaat zitten. */
     desks: rooms.desks,
     /** Alles waar de speler tegenaan loopt of op kan staan: stellingen, pallets in de stellingen en vaste aankleding. */

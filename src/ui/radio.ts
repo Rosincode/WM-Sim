@@ -12,9 +12,9 @@ const STATIONS = [
 ];
 /** Binnen deze afstand bedien je de radio met M. */
 const NEAR = 2.5;
-/** Volumeknop: stand 0 (stil) t/m 10 (voluit). */
+/** Volumeknop: stand 0 (stil) t/m 10 (voluit). Het volume loopt kwadratisch op, zodat de lage standen echt zacht zijn. */
 const MAX_LEVEL = 10;
-const DEFAULT_LEVEL = 6;
+const DEFAULT_LEVEL = 8;
 
 export function createRadio() {
   const group = new THREE.Group();
@@ -189,7 +189,7 @@ export function createRadio() {
     update(listener: THREE.Vector3) {
       group.getWorldPosition(world);
       distance = Math.hypot(listener.x - world.x, listener.z - world.z);
-      if (station >= 0) audio.volume = (level / MAX_LEVEL) * THREE.MathUtils.clamp(6 / Math.max(distance, 1), 0.35, 1); // in de hele hal goed te horen
+      if (station >= 0) audio.volume = (level / MAX_LEVEL) ** 2 * THREE.MathUtils.clamp(6 / Math.max(distance, 1), 0.35, 1); // in de hele hal goed te horen
     },
   };
 }

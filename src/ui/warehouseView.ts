@@ -1,7 +1,9 @@
 import * as THREE from 'three';
-import { DOCKS, HALL, LANE_LENGTH, LANE_SLOTS, LEVEL_Y, POINTS, laneSlot, shelfLocations, type Point } from '../sim/layout';
+import { DOCKS, LANE_LENGTH, LANE_SLOTS, LEVEL_Y, POINTS, laneSlot, shelfLocations, type Point } from '../sim/layout';
+import { TRUCK, cargoSpot } from '../sim/drivers';
 import type { Truck, Warehouse } from '../sim/warehouse';
 import { createPcMesh } from './scene/pc';
+import { createTruck } from './scene/truck';
 import { onTop } from './scene/style';
 import { palletSticker } from './scene/textures';
 
@@ -31,7 +33,7 @@ function box(w: number, h: number, d: number, color: string) {
 
 let stickerMat: THREE.Material | null = null;
 
-function pallet(color = '#a5784a') {
+export function pallet(color = '#a5784a') {
   const g = new THREE.Group();
   const base = box(1, 0.12, 1, '#8d6e4a');
   base.position.y = 0.06;
@@ -52,12 +54,12 @@ function pallet(color = '#a5784a') {
   return g;
 }
 
-function setPalletColor(g: THREE.Object3D, color: string) {
+export function setPalletColor(g: THREE.Object3D, color: string) {
   ((g.userData.load as THREE.Mesh).material as THREE.MeshStandardMaterial).color.set(color);
 }
 
 /** Rolcontainer voor een orderpick. */
-function tote() {
+export function tote() {
   const g = new THREE.Group();
   const cage = new THREE.Mesh(
     new THREE.BoxGeometry(0.8, 1.2, 0.7),
@@ -114,27 +116,29 @@ function floorMark(p: Point, w: number, d: number, color: string) {
   return m;
 }
 
-function truckMesh(direction: Truck['direction']) {
-  const g = new THREE.Group();
-  const trailer = box(8, 3, 2.5, direction === 'in' ? '#3b6ea5' : '#2e7d32');
-  trailer.position.set(-4, 2, 0);
-  const cab = box(2.2, 2.6, 2.4, '#eceff1');
-  cab.position.set(-9.3, 1.6, 0);
-  const window = box(0.05, 0.9, 2, '#263238');
-  window.position.set(-10.42, 2.2, 0);
-  g.add(trailer, cab, window);
-  for (const x of [-1.5, -2.8, -8.8]) for (const z of [-1.1, 1.1]) {
-    const wheel = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.45, 0.45, 0.3, 16),
-      new THREE.MeshStandardMaterial({ color: '#111' }),
-    );
-    wheel.rotation.x = Math.PI / 2;
-    wheel.position.set(x, 0.45, z);
-    g.add(wheel);
-  }
-  g.visible = false;
-  return g;
+/** Een vrachtwagen met wat er in de laadruimte staat: pallets (lossen) of rolcontainers (laden). */
+function truckView(direction: Truck['direction']) {
+  const truck = createTruck(direction);
+  const cargo: THREE.Group[] = [];
+  return {
+    mesh: truck.group,
+    setDoors: truck.setDoors,
+    /** Zet op plek i in de laadruimte een pallet of rolcontainer, of haalt hem weg. */
+    cargoAt(i: number, sku: string | null) {
+      if (!cargo[i]) {
+        if (sku === null) return;
+        cargo[i] = direction === 'in' ? pallet() : tote();
+        const spot = cargoSpot(0, i);
+        cargo[i].position.set(spot.x - TRUCK.rear, TRUCK.floor, spot.z);
+        truck.group.add(cargo[i]);
+      }
+      cargo[i].visible = sku !== null;
+      if (sku && direction === 'in') setPalletColor(cargo[i], skuColor(sku));
+    },
+    slots: () => cargo.length,
+  };
 }
+type TruckView = ReturnType<typeof truckView>;
 
 export function createWarehouseView(
   scene: THREE.Scene,
@@ -175,10 +179,10 @@ export function createWarehouseView(
   });
 
   // --- Vrachtwagens ---
-  const trucks = { in: truckMesh('in'), out: truckMesh('out') };
-  root.add(trucks.in, trucks.out);
+  const trucks = { in: truckView('in'), out: truckView('out') };
+  root.add(trucks.in.mesh, trucks.out.mesh);
   /** Leveringen die de WMS heeft aangemeld: hooguit één vrachtwagen per dock, pas gemaakt als er een komt. */
-  const deliveryTrucks = new Map<number, { mesh: THREE.Group; text: ReturnType<typeof label> }>();
+  const deliveryTrucks = new Map<number, { truck: TruckView; text: ReturnType<typeof label> }>();
 
   // --- Pallets en rolcontainers in de banen ---
   const laneInMeshes = DOCKS.map((d) =>
@@ -232,13 +236,17 @@ export function createWarehouseView(
   const forward = new THREE.Vector3();
   let time = 0;
 
-  function placeTruck(mesh: THREE.Group, text: ReturnType<typeof label>, t: Truck | null) {
-    mesh.visible = !!t;
+  function placeTruck(view: TruckView, text: ReturnType<typeof label>, t: Truck | null) {
+    view.mesh.visible = !!t;
     text.set(truckText(t));
     if (!t) return;
     const dock = DOCKS[t.dock];
     const eased = 1 - (1 - t.t) ** 2;
-    mesh.position.set(-HALL.w / 2 - 0.4 - (1 - eased) * 34, 0, dock.z); // achterkant trailer tegen de dockdeur
+    view.mesh.position.set(TRUCK.rear - (1 - eased) * 34, 0, dock.z); // achterkant trailer tegen de dockdeur
+    view.setDoors(THREE.MathUtils.clamp((t.t - 0.5) / 0.25, 0, 1)); // de achterdeuren gaan open voordat hij tegen het dock staat
+    // Wat er in de laadruimte staat: de pallets die nog gelost moeten worden, of de orders die al geladen zijn
+    const n = Math.max(view.slots(), t.cargo.length, t.loaded.length);
+    for (let i = 0; i < n; i++) view.cargoAt(i, t.direction === 'in' ? (t.cargo[i]?.sku ?? null) : i < t.loaded.length ? '' : null);
     text.sprite.position.set(dock.truck.x + 1, 4.3, dock.z);
   }
 
@@ -259,11 +267,11 @@ export function createWarehouseView(
     placeTruck(trucks.out, labels.truckOut, sim.trucks.out);
     for (const t of sim.deliveries) {
       if (deliveryTrucks.has(t.dock)) continue;
-      const made = { mesh: truckMesh('in'), text: label(4.5) };
-      root.add(made.mesh, made.text.sprite);
+      const made = { truck: truckView('in'), text: label(4.5) };
+      root.add(made.truck.mesh, made.text.sprite);
       deliveryTrucks.set(t.dock, made);
     }
-    for (const [dock, v] of deliveryTrucks) placeTruck(v.mesh, v.text, sim.deliveries.find((t) => t.dock === dock) ?? null);
+    for (const [dock, v] of deliveryTrucks) placeTruck(v.truck, v.text, sim.deliveries.find((t) => t.dock === dock) ?? null);
 
     const open = sim.orders.filter((o) => o.status === 'open').length;
     labels.containers.set(open ? `Rolcontainers · ${open} order${open === 1 ? '' : 's'}` : '');

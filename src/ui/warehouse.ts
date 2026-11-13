@@ -370,6 +370,11 @@ export function mountWarehouse({
         return total ? lines.reduce((n, l) => n + l.picked, 0) / total : 0;
       },
     },
+    /** De chauffeurs en de vrachtwagens op het terrein, voor src/ui/drivers.ts. */
+    docks: {
+      drivers: sim.drivers,
+      trucks: () => [sim.trucks.in, sim.trucks.out, ...sim.deliveries].filter((t): t is NonNullable<typeof t> => !!t),
+    },
     update(dt: number) {
       robotDispatch.update(dt);
       sim.update(dt);

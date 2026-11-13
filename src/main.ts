@@ -22,6 +22,7 @@ import { wms } from './integrations/wms';
 import { mountWarehouse } from './ui/warehouse';
 import { mountMultiplayer } from './ui/multiplayer';
 import { mountRobots } from './ui/robots';
+import { mountDrivers } from './ui/drivers';
 import { SceneRenderPass } from './ui/sceneRenderPass';
 import { menu } from './ui/menu';
 import { createPrompts, esc, type Prompt } from './ui/prompts';
@@ -65,7 +66,7 @@ scene.add(camera); // nodig omdat scanner/tablet aan de camera hangen
 
 // --- Magazijn ---
 const hall = createWarehouse(scene);
-createExterior(scene);
+const exterior = createExterior(scene);
 
 
 // --- Speler (zichtbaar in third person en overzicht) ---
@@ -214,8 +215,45 @@ const view = createPlayerView({
 editor = createEditor({ scene, camera, canvas: renderer.domElement, controls, toOverview: () => view.setMode('overview') });
 if (params.has('edit') || editor.resume) editor.open(); // ?edit, of de bewerkmodus stond open voor het herladen
 
+// --- Plek van de speler onthouden: wie de game verlaat en later terugkomt, staat weer waar hij stond ---
+// Alleen in deze browser (localStorage). Zat je in de heftruck of aan een bureau, dan sta je ernaast.
+const PLACE_KEY = 'wm-sim.player-place';
+try {
+  const p = JSON.parse(localStorage.getItem(PLACE_KEY) ?? 'null') as { x: number; y: number; z: number; r: number } | null;
+  if (p && [p.x, p.y, p.z, p.r].every(Number.isFinite) && p.y >= 0 && p.y < 20) {
+    player.position.set(p.x, p.y, p.z); // buiten het loopbare gebied of in een obstakel: de besturing zet je er weer naast
+    player.rotation.y = p.r;
+  }
+} catch {
+  // niets (leesbaars) bewaard: de startplek uit het model
+}
+let savedPlace = '';
+function savePlace() {
+  let { x, y, z } = player.position;
+  let r = player.rotation.y;
+  if (chair) {
+    ({ x, z } = behindChair(chair));
+    y = 0;
+    r = chair.rotation.y;
+  } else if (driving) {
+    ({ x, z } = forkliftExit());
+    y = 0;
+    r = forklift.group.rotation.y;
+  }
+  const text = JSON.stringify({ x: +x.toFixed(2), y: +y.toFixed(2), z: +z.toFixed(2), r: +r.toFixed(3) });
+  if (text === savedPlace) return;
+  savedPlace = text;
+  try {
+    localStorage.setItem(PLACE_KEY, text);
+  } catch {
+    // geen opslag beschikbaar: dan begin je de volgende keer op de startplek
+  }
+}
+setInterval(savePlace, 2000); // ook als de browser zonder afscheid stopt
+window.addEventListener('pagehide', savePlace);
+
 // Handig bij testen: ?at=x,z,draaiing(graden) en ?tool=2
-const at = params.get('at')?.split(',').map(Number);
+const at =params.get('at')?.split(',').map(Number);
 if (at && at.length >= 2 && at.every(Number.isFinite)) {
   player.position.set(at[0], 0, at[1]);
   player.rotation.y = THREE.MathUtils.degToRad(at[2] ?? 0);
@@ -270,8 +308,13 @@ function standUp() {
   warehouse.closePc();
   view.setVehicle(null);
   // achter de stoel gaan staan, met het gezicht naar het bureau
-  player.position.set(seat.position.x - Math.sin(seat.rotation.y) * 0.6, 0, seat.position.z - Math.cos(seat.rotation.y) * 0.6);
+  const spot = behindChair(seat);
+  player.position.set(spot.x, 0, spot.z);
   player.rotation.y = seat.rotation.y;
+}
+/** De plek achter een bureaustoel, waar je staat na het opstaan. */
+function behindChair(seat: THREE.Object3D) {
+  return { x: seat.position.x - Math.sin(seat.rotation.y) * 0.6, z: seat.position.z - Math.cos(seat.rotation.y) * 0.6 };
 }
 warehouse.onWmsData((data) => handheld.setData(data)); // wat de scanner over een locatie laat zien komt uit de WMS
 const refreshHall = () => {
@@ -344,11 +387,15 @@ const robots = mountRobots({
       offsets.map((d) => ({ x: o.position.x + Math.sin(o.rotation.y) * d, z: o.position.z + Math.cos(o.rotation.y) * d, rad }));
     return [
       { x: player.position.x, z: player.position.z, rad: 0.4 },
+      ...drivers.obstacles(),
       ...along(forklift.group, [-0.6, 0.3, 1.2, 2.0], 0.6),
       ...along(jack.group, [0, 0.7], 0.45),
     ];
   },
 });
+
+// --- Chauffeurs: lossen en laden hun vrachtwagen zelf, met de elektrische pompwagen die bij elk dock staat ---
+const drivers = mountDrivers({ scene, hall, exterior, ...warehouse.docks });
 // --- Geluid van alles wat rijdt: motor, wielen, hydrauliek en piepers (src/ui/sounds.ts) ---
 const sounds = createSounds();
 sounds.add('forklift', objectSource(forklift.group, () => forklift.forkHeight));
@@ -394,19 +441,22 @@ function setDriving(on: boolean) {
   driving = on;
   forklift.setDriving(on);
   if (!on) {
-    // uitstappen: links naast de truck, of rechts als daar iets in de weg staat
-    const f = forklift.group;
-    const side = (dir: number) => new THREE.Vector3(f.position.x + Math.cos(f.rotation.y) * 1.5 * dir, 0, f.position.z - Math.sin(f.rotation.y) * 1.5 * dir);
-    const free = (p: THREE.Vector3) =>
-      p.x > BOUNDS.minX && p.x < BOUNDS.maxX && p.z > BOUNDS.minZ && p.z < BOUNDS.maxZ &&
-      !hall.colliders.some((c) => p.x > c.minX - 0.45 && p.x < c.maxX + 0.45 && p.z > c.minZ - 0.45 && p.z < c.maxZ + 0.45);
-    const spot = [side(1), side(-1)].find(free) ?? side(1);
+    const spot = forkliftExit();
     view.setVehicle(null);
     player.position.copy(spot);
-    player.rotation.y = f.rotation.y;
+    player.rotation.y = forklift.group.rotation.y;
   } else {
     view.setVehicle({ object: forklift.group, seat: forklift.seat, eye: forklift.eye });
   }
+}
+/** Waar je staat na het uitstappen: links naast de truck, of rechts als daar iets in de weg staat. */
+function forkliftExit() {
+  const f = forklift.group;
+  const side = (dir: number) => new THREE.Vector3(f.position.x + Math.cos(f.rotation.y) * 1.5 * dir, 0, f.position.z - Math.sin(f.rotation.y) * 1.5 * dir);
+  const free = (p: THREE.Vector3) =>
+    p.x > BOUNDS.minX && p.x < BOUNDS.maxX && p.z > BOUNDS.minZ && p.z < BOUNDS.maxZ &&
+    !hall.colliders.some((c) => p.x > c.minX - 0.45 && p.x < c.maxX + 0.45 && p.z > c.minZ - 0.45 && p.z < c.maxZ + 0.45);
+  return [side(1), side(-1)].find(free) ?? side(1);
 }
 
 window.addEventListener('resize', () => {
@@ -478,6 +528,7 @@ renderer.setAnimationLoop((now) => {
   printer.update(dt, player.position);
   warehouse.update(dt);
   robots.update(dt);
+  drivers.update(dt);
   // In het overzicht luister je op de plek waar je naar kijkt, anders vanuit de camera
   if (view.mode === 'overview') ear.copy(controls.target);
   else camera.getWorldPosition(ear);

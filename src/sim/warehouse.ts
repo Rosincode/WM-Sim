@@ -6,6 +6,7 @@ import {
   dist, lanePoint, laneSlot, location, shelfLocations, type Dock, type Point,
 } from './layout';
 import { createCounter } from './counter';
+import { createDrivers } from './drivers';
 import { createRobotFleet } from './robots';
 import { offlineGateway, type WmsGateway, type WmsReply } from './wms';
 
@@ -25,6 +26,8 @@ export type Pallet = {
   id: string; sku: string; qty: number; unlabeled?: boolean;
   /** Op de inslagbaan geteld door de telrobot: pas daarna zetten de robots hem weg. */
   counted?: boolean;
+  /** Gelost, maar de chauffeur heeft nog niet gemeld dat hij klaar is met lossen: de telrobot wacht daarop. */
+  unloading?: boolean;
 };
 /** Een pallet in een stelling: op welke locatie, en op welke van de palletplekken daar (0 = links). */
 export type StoredPallet = Pallet & { locationId: string; slot: number };
@@ -115,6 +118,11 @@ export function createWarehouse({
   const deliveries: Truck[] = [];
   /** Leveringen die hier al zijn afgemeld: een stand uit de WMS van net daarvoor mag ze niet terugbrengen. */
   const departed = new Set<string>();
+  /**
+   * Per dock de levering waarvan het lossen is afgemeld en die de telrobot nu controleert. Pas als alle pallets
+   * zijn geteld en de telling is bevestigd, zetten de robots ze weg.
+   */
+  const checking = new Map<number, { truckId: string; busy?: boolean }>();
   /** De pallets in de stellingen, op het nummer van hun sticker. Samen zijn ze gelijk aan `stock`: zie palletize(). */
   const racked = new Map<string, StoredPallet>();
   /**
@@ -717,17 +725,13 @@ export function createWarehouse({
       scanned('pallet', pallet.id, r.ok, laneId);
       return r;
     },
-    unload: () =>
-      inbound().flatMap((t) =>
-        t.status === 'checkedIn'
-          ? t.cargo.map((p) => ({ palletId: p.id, fromLocationId: t.dockId, toLocationId: DOCKS[t.dock].inId, free: laneRoom(t.dock) }))
-          : [],
-      ),
+    unload: () => [], // lossen doet de chauffeur van de wagen zelf (src/sim/drivers.ts)
     laneRoom: (laneId) => laneRoom(DOCKS.findIndex((d) => d.inId === laneId)),
     inbound: () =>
       DOCKS.flatMap((d) =>
         laneIn[d.index].flatMap((p) =>
-          p && !p.unlabeled && p.counted ? [{ palletId: p.id, sku: p.sku, qty: p.qty, locationId: d.inId, z: d.z }] : [],
+          // pas wegzetten als de telling van de hele levering is bevestigd
+          p && !p.unlabeled && p.counted && !checking.has(d.index) ? [{ palletId: p.id, sku: p.sku, qty: p.qty, locationId: d.inId, z: d.z }] : [],
         ),
       ),
     space(sku) {
@@ -902,31 +906,123 @@ export function createWarehouse({
     revision: () => revision,
     enabled: automation,
     touch: () => touch(),
+    // De telrobot begint pas als de chauffeur heeft gemeld dat hij klaar is met lossen (of als de baan vol staat:
+    // anders kan de chauffeur niet verder)
     uncounted: () =>
-      DOCKS.flatMap((d) => laneIn[d.index].flatMap((p, i) => (p && !p.counted ? [{ palletId: p.id, ...laneSlot(d.laneIn, i) }] : []))),
+      DOCKS.flatMap((d) =>
+        laneIn[d.index].flatMap((p, i) =>
+          p && !p.counted && (!p.unloading || laneRoom(d.index) === 0) ? [{ palletId: p.id, ...laneSlot(d.laneIn, i) }] : [],
+        ),
+      ),
     count: countPallet,
   });
 
-  // ========== Automatisch: aanmelden en afmelden van inkomende vrachtwagens ==========
+  // ========== De chauffeurs: lossen en laden zelf (src/sim/drivers.ts) ==========
 
-  /** Per vrachtwagen: tot wanneer (clock) we na een weigering van de WMS wachten met opnieuw proberen. */
-  const autoRetry = new Map<string, number>();
-  let autoBusy = false;
-  /** Staat de robotsturing aan, dan meldt de hal een inkomende wagen zelf aan, en af zodra hij leeg is. */
-  function automate() {
-    if (autoBusy) return;
-    const run = (id: string, action: Promise<ScanResult>) => {
-      autoBusy = true;
-      void action
-        .then((r) => !r.ok && autoRetry.set(id, clock + 30))
-        .finally(() => (autoBusy = false));
-    };
-    for (const t of inbound()) {
-      if ((autoRetry.get(t.id) ?? 0) > clock) continue;
-      if (t.status === 'waiting') return run(t.id, checkIn(t.id));
-      // Leeg, en geen robot meer onderweg met een pallet uit deze wagen
-      const busy = robots.robots.some((r) => r.task?.fromLocationId === t.dockId || r.loadFrom === t.dockId);
-      if (t.status === 'checkedIn' && t.cargo.length === 0 && !busy) return run(t.id, checkOut(t.id));
+  const drivers = createDrivers({
+    authority: () => authority,
+    revision: () => revision,
+    touch: () => touch(),
+    trucks: () => [trucks.in, trucks.out, ...deliveries].filter((t): t is Truck => !!t),
+    async checkIn(truckId) {
+      const t = truck(truckId);
+      if (t?.status === 'checkedIn') return true; // een levering uit de WMS is daar al aangemeld
+      return (await checkIn(truckId)).ok;
+    },
+    takeCargo(truckId) {
+      const pallet = truck(truckId)?.cargo.pop() ?? null;
+      if (pallet) scanned('pallet', pallet.id, true, truck(truckId)!.dockId);
+      return pallet;
+    },
+    laneInSlot: (dock) => laneIn[dock].lastIndexOf(null), // doorschuiven: de eerste pallet staat het verst de hal in
+    async received(truckId, pallet, slot) {
+      const t = truck(truckId);
+      if (!t) return false;
+      const { inId } = DOCKS[t.dock];
+      // Een levering uit de WMS is daar al ontvangen (op de dockdeur); anders boekt het lossen de ontvangst.
+      const r: WmsReply = t.wms
+        ? { ok: true, linked: false }
+        : await ask({ type: 'GoodsReceived', sku: pallet.sku, qty: pallet.qty, dockId: inId, palletId: pallet.id });
+      scanned('pallet', pallet.id, r.ok, inId);
+      if (!r.ok) return (say(`WMS weigert de ontvangst van ${what(pallet)} op ${inId}: ${r.error}`, 'err'), false);
+      const lane = laneIn[t.dock];
+      lane[lane[slot] ? lane.lastIndexOf(null) : slot] = { ...pallet, unloading: true };
+      touch();
+      say(`Chauffeur ${truckId}: ${what(pallet)} gelost op ${inId} (nog ${t.cargo.length} in de wagen).`);
+      return true;
+    },
+    async unloadDone(truckId) {
+      const t = truck(truckId);
+      if (!t) return false;
+      const d = DOCKS[t.dock];
+      const pallets = laneIn[t.dock].filter((p) => p?.unloading).length;
+      const r = await ask({ type: 'UnloadCompleted', truckId, dockId: d.id, pallets });
+      if (!r.ok) return (say(`WMS weigert 'klaar met lossen' van ${truckId}: ${r.error}`, 'err'), false);
+      for (const p of laneIn[t.dock]) if (p) delete p.unloading;
+      if (laneIn[t.dock].some((p) => p)) checking.set(t.dock, { truckId });
+      touch();
+      say(`${truckId} is klaar met lossen op ${d.inId}: ${plural(pallets, 'pallet')}. De telrobot controleert de aantallen.`, 'ok');
+      return true;
+    },
+    staged: (dock) => laneOut[dock].findIndex((id) => id),
+    takeStaged(dock, slot) {
+      const id = laneOut[dock][slot];
+      const o = id ? order(id) : undefined;
+      if (!o) return null;
+      laneOut[dock][slot] = null;
+      o.status = 'picked';
+      scanned('order', o.id, true, DOCKS[dock].outId);
+      touch();
+      return o.id;
+    },
+    async loaded(truckId, orderId) {
+      const t = truck(truckId);
+      if (!t) return false;
+      const r = await ask({ type: 'OrderLoaded', orderId, truckId, dockId: t.dockId });
+      scanned('order', orderId, r.ok, t.dockId);
+      if (!r.ok) return (say(`WMS weigert het laden van ${orderId} in ${truckId}: ${r.error}`, 'err'), false);
+      const o = order(orderId);
+      const now = truck(truckId);
+      if (!o || !now) return false;
+      now.loaded.push(orderId);
+      o.status = 'loaded';
+      touch();
+      say(`Chauffeur ${truckId}: ${orderId} ingeladen.`);
+      return true;
+    },
+    async loadDone(truckId) {
+      const t = truck(truckId);
+      if (!t) return false;
+      const r = await ask({ type: 'LoadCompleted', truckId, dockId: t.dockId, orderIds: [...t.loaded] });
+      if (!r.ok) return (say(`WMS weigert 'klaar met laden' van ${truckId}: ${r.error}`, 'err'), false);
+      say(`${truckId} is klaar met laden: ${plural(t.loaded.length, 'order')}.`, 'ok');
+      return true;
+    },
+    checkOut: async (truckId) => (await checkOut(truckId)).ok,
+  });
+
+  /** Heeft de telrobot alle pallets van een geloste levering geteld, dan is de telling bevestigd: de robots mogen ze wegzetten. */
+  function confirmCounts() {
+    for (const [dock, c] of checking) {
+      const lane = laneIn[dock].filter((p): p is Pallet => !!p);
+      if (c.busy || lane.some((p) => !p.counted)) continue;
+      if (lane.length === 0) {
+        checking.delete(dock);
+        continue;
+      }
+      c.busy = true;
+      const d = DOCKS[dock];
+      const qty = lane.reduce((n, p) => n + p.qty, 0);
+      void ask({ type: 'CountConfirmed', truckId: c.truckId, dockId: d.id, pallets: lane.length, qty }).then((r) => {
+        if (checking.get(dock) !== c) return; // intussen is de hal gereset
+        if (!r.ok) {
+          say(`WMS weigert de telling van ${c.truckId}: ${r.error}`, 'err');
+          return void setTimeout(() => (c.busy = false), 15000); // straks opnieuw
+        }
+        checking.delete(dock);
+        touch();
+        say(`Telling van ${c.truckId} klopt: ${plural(lane.length, 'pallet')}, ${qty} stuks op ${d.inId}. De robots zetten ze weg.`, 'ok');
+      });
     }
   }
 
@@ -967,6 +1063,9 @@ export function createWarehouse({
   function truckInteraction(t: Truck | null): Interaction | null {
     if (!t || t.status === 'arriving' || t.status === 'departing') return null;
     const i = (label: string, action?: Action) => interaction(label, DOCKS[t.dock].truck, action);
+    // De chauffeur regelt zijn wagen zelf: aanmelden, lossen of laden en afmelden
+    const driver = drivers.at(t.dock);
+    if (driver) return i(`Chauffeur ${t.id} ${drivers.statusText(driver)}`);
     if (t.status === 'waiting') return i(`Scan ${t.id}: aanmelden`, () => checkIn(t.id));
     if (carry?.kind === 'pallet') return i('Zet eerst je pallet weg');
 
@@ -1122,8 +1221,6 @@ export function createWarehouse({
   // ========== Volgende stap voor de speler ==========
 
   function objective(): Objective | null {
-    const ti = trucks.in;
-    const to = trucks.out;
     const o = carriedOrder();
     if (carry?.kind === 'pallet') {
       const { pallet } = carry;
@@ -1136,7 +1233,6 @@ export function createWarehouse({
         : { text: `Meld ${o.id} af: scan een stellinglocatie` };
     }
     if (o?.status === 'picked') {
-      if (to?.status === 'checkedIn') return { point: DOCKS[to.dock].truck, text: `Laad ${o.id} in ${to.id} (${to.dockId})` };
       const d = laneOut[outDock].includes(null) ? DOCKS[outDock] : DOCKS.find((x) => laneOut[x.index].includes(null));
       return d ? { point: d.laneOut, text: `Zet ${o.id} klaar op ${d.outId}` } : null;
     }
@@ -1148,12 +1244,17 @@ export function createWarehouse({
         : `Scan de sticker van ${unbooked[0]} op ${unbooked[1].at} om de verplaatsing te boeken`;
       return { point: at, level: at?.level, text };
     }
+    // De vrachtwagens regelen de chauffeurs zelf; staat er geen chauffeur bij, dan doet de speler het
+    const mine = (t: Truck | null) => (t && !drivers.at(t.dock) ? t : null);
+    const ti = mine(trucks.in);
+    const to = mine(trucks.out);
     const inPoint = ti ? DOCKS[ti.dock].truck : undefined;
     const outPoint = to ? DOCKS[to.dock].truck : undefined;
     if (ti?.status === 'waiting') return { point: inPoint, text: `Meld ${ti.id} aan bij ${ti.dockId}` };
     if (ti?.status === 'checkedIn' && ti.cargo.length && laneIn[ti.dock].includes(null))
       return { point: inPoint, text: `Los ${ti.id} (${plural(ti.cargo.length, 'pallet')})` };
-    const full = DOCKS.find((d) => laneIn[d.index].some((p) => p));
+    // Staan de robots aan, dan tellen zij de pallets op de inslagbanen en zetten ze weg
+    const full = automation() ? undefined : DOCKS.find((d) => laneIn[d.index].some((p) => p));
     if (full)
       return {
         point: full.laneIn,
@@ -1261,8 +1362,9 @@ export function createWarehouse({
     }
     robots.update(dt);
     counter.update(dt);
+    drivers.update(dt);
     if (!authority) return; // in multiplayer laat alleen de host nieuwe vrachtwagens en testorders ontstaan
-    if (automation()) automate();
+    confirmCounts();
     // Meldt de WMS zelf leveringen aan, dan komen de inkomende wagens daarvandaan (syncDeliveries)
     if (!trucks.in && !deliveryFeed() && skus().length > 0 && (inTimer -= dt) <= 0) trucks.in = spawnTruck('in');
     const outboundWork = orders.some((o) => ['picking', 'picked', 'staged'].includes(o.status));
@@ -1290,6 +1392,7 @@ export function createWarehouse({
       transit: [...transit],
       robots: robots.shared(),
       counter: counter.shared(),
+      drivers: drivers.shared(),
       articles: articles(),
       seq: { truckIn: seq.truckIn, truckOut: seq.truckOut },
     });
@@ -1326,6 +1429,7 @@ export function createWarehouse({
       return cur ? { ...next, t: cur.t } : next; // rijdt hier al: niet verspringen
     }));
     counter.applyShared(s.counter);
+    drivers.applyShared(s.drivers); // een speler met een oudere versie stuurt geen chauffeurs
     outDock = s.outDock;
     moved.clear();
     for (const [id, f] of s.forks ?? []) moved.set(id, { ...f, locationId: currentLocationId(f.locationId), at: f.at && currentLocationId(f.at) });
@@ -1454,10 +1558,11 @@ export function createWarehouse({
     transit.clear();
     robots.reset();
     counter.reset();
+    drivers.reset();
+    checking.clear();
     // Leveringen die in de WMS nog zijn aangemeld komen bij de volgende stand opnieuw aanrijden
     deliveries.length = 0;
     departed.clear();
-    autoRetry.clear();
     carry = null;
     foreign = false; // deze wereld komt uit de eigen WMS
     if (trucks.out) trucks.out.loaded = [];
@@ -1496,6 +1601,8 @@ export function createWarehouse({
     get deliveries(): readonly Truck[] { return deliveries; },
     /** De telrobot bij de inslagbanen (src/sim/counter.ts). */
     counter,
+    /** De chauffeurs die hun wagen zelf lossen en laden (src/sim/drivers.ts). */
+    drivers,
     dropCarried,
     get trucks() { return trucks; },
     get laneIn() { return laneIn; },

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { DRIVER_DOORS } from '../../sim/drivers';
 import { DOCKS, DOCK_PITCH, ROOMS } from '../../sim/layout';
 import logoUrl from '../assets/robodu-logo.jpg';
 import { onTop } from './style';
@@ -99,14 +100,30 @@ export function createExterior(scene: THREE.Scene) {
 
   // ---------- Gevels ----------
   const panelTex = tex.wallPanel();
-  /** Gevelvlak met het midden op (x, z), van hoogte `from` tot de dakrand. */
-  function facade(x: number, z: number, ry: number, len: number, from = 0) {
+  /**
+   * Gevelvlak met het midden op (x, z), van hoogte `from` tot de dakrand.
+   * @param holes openingen (deuren) [van, tot, bovenkant], langs de gevel gemeten vanuit het midden
+   */
+  function facade(x: number, z: number, ry: number, len: number, from = 0, holes: [number, number, number][] = []) {
     const t = panelTex.clone();
     t.repeat.set(len, (TOP - from) / TOP);
     t.offset.y = from / TOP;
     t.needsUpdate = true;
+    const h = TOP - from;
+    let geo: THREE.BufferGeometry = new THREE.PlaneGeometry(len, h);
+    if (holes.length) {
+      const rect = (a: number, b: number, y0: number, y1: number) =>
+        [new THREE.Vector2(a, y0), new THREE.Vector2(b, y0), new THREE.Vector2(b, y1), new THREE.Vector2(a, y1)];
+      const shape = new THREE.Shape(rect(-len / 2, len / 2, -h / 2, h / 2));
+      // het gat blijft 2 mm boven de onderrand, anders deelt het een zijde met de omtrek
+      for (const [a, b, top] of holes) shape.holes.push(new THREE.Path(rect(a, b, 0.002 - h / 2, top - from - h / 2)));
+      geo = new THREE.ShapeGeometry(shape);
+      const p = geo.attributes.position;
+      const uv = geo.attributes.uv;
+      for (let i = 0; i < uv.count; i++) uv.setXY(i, p.getX(i) / len + 0.5, p.getY(i) / h + 0.5);
+    }
     const m = new THREE.Mesh(
-      new THREE.PlaneGeometry(len, TOP - from),
+      geo,
       new THREE.MeshStandardMaterial({ map: t, color: '#eef1f4', roughness: 0.55, metalness: 0.25 }),
     );
     m.position.set(x, (TOP + from) / 2, z);
@@ -114,7 +131,12 @@ export function createExterior(scene: THREE.Scene) {
     m.receiveShadow = true;
     root.add(m);
   }
-  facade(X0 - 0.03, 0, -Math.PI / 2, D);
+  // Dockgevel: open gaten voor de dockdeuren en de chauffeursdeuren (langs deze gevel loopt het vlak naar +z)
+  const openings: [number, number, number][] = [
+    ...DOCKS.map((d): [number, number, number] => [d.z - 1.5, d.z + 1.5, 3.5]),
+    ...DRIVER_DOORS.map((z): [number, number, number] => [z - 0.5, z + 0.5, 2.1]),
+  ].sort((a, b) => a[0] - b[0]);
+  facade(X0 - 0.03, 0, -Math.PI / 2, D, 0, openings);
   facade(W / 2 + 0.03, 0, Math.PI / 2, D);
   facade(0, D / 2 + 0.03, 0, W);
   // Noordgevel: waar de aanbouw (kantoor en kantine) ertegenaan staat begint de gevel pas boven het dak daarvan
@@ -136,7 +158,14 @@ export function createExterior(scene: THREE.Scene) {
     trimBlue.add(x, TOP - 0.72, z, thin(sx, 0.8), 0.16, thin(sz, 0.8));
     // de plint van de noordgevel loopt alleen naast de aanbouw: erachter zitten de deuren naar de hal
     if (z < 0 && sx > 1) plinth.add((ANNEX.maxX + W / 2 + 0.15) / 2, 0.25, z, W / 2 + 0.15 - ANNEX.maxX, 0.5, thin(sz, 0.7));
-    else plinth.add(x, 0.25, z, thin(sx, 0.7), 0.5, thin(sz, 0.7));
+    else if (x < 0 && sz > 1) {
+      // de plint van de dockgevel loopt niet door voor de deuren langs
+      let from = -thin(sz, 0.7) / 2;
+      for (const [a, b] of [...openings, [thin(sz, 0.7) / 2, 0]]) {
+        if (a - from > 0.01) plinth.add(x, 0.25, (from + a) / 2, thin(sx, 0.7), 0.5, a - from);
+        from = b;
+      }
+    } else plinth.add(x, 0.25, z, thin(sx, 0.7), 0.5, thin(sz, 0.7));
   }
   root.add(
     trimNavy.build(UNIT_BOX, paint(NAVY, 0.5, 0.3)),
@@ -167,11 +196,23 @@ export function createExterior(scene: THREE.Scene) {
   logo(-6, 5.8, D / 2 + 0.14, 0, 6.6); // voorgevel (zuid)
 
   // ---------- Docks van buiten: deur, afdichting, stootblokken, nummer ----------
-  const doors = new Batch();
+  const doorMat = paint('#c3c8cc', 0.5, 0.35);
+  /** Per dock de deur: hij hangt aan zijn bovenkant en rolt daar op. */
+  const dockDoors: THREE.Group[] = [];
   const seals = new Batch();
   const signGeo = new THREE.PlaneGeometry(1.3, 0.65);
   DOCKS.forEach((d, i) => {
-    for (let s = 0; s < 4; s++) doors.add(X0 - 0.08, 0.44 + s * 0.875, d.z, 0.06, 0.86, 3.0);
+    const door = new THREE.Group();
+    door.position.set(X0 - 0.08, 3.5, d.z);
+    for (let s = 0; s < 4; s++) {
+      const panel = new THREE.Mesh(UNIT_BOX, doorMat);
+      panel.scale.set(0.06, 0.86, 3.0);
+      panel.position.y = 0.44 + s * 0.875 - 3.5;
+      panel.castShadow = panel.receiveShadow = true;
+      door.add(panel);
+    }
+    root.add(door);
+    dockDoors.push(door);
     for (const dz of [-1.72, 1.72]) seals.add(X0 - 0.3, 1.95, d.z + dz, 0.5, 3.9, 0.36);
     seals.add(X0 - 0.3, 3.9, d.z, 0.5, 0.45, 3.8);
     for (const dz of [-1.05, 1.05]) seals.add(X0 - 0.16, 0.32, d.z + dz, 0.22, 0.45, 0.3);
@@ -183,7 +224,7 @@ export function createExterior(scene: THREE.Scene) {
     s.position.set(X0 - 0.1, 4.45, d.z);
     root.add(s);
   });
-  root.add(doors.build(UNIT_BOX, paint('#c3c8cc', 0.5, 0.35)), seals.build(UNIT_BOX, paint('#17181a', 0.9, 0)));
+  root.add(seals.build(UNIT_BOX, paint('#17181a', 0.9, 0)));
 
   // ---------- Entree en kantoorramen in de voorgevel ----------
   const glass = new THREE.MeshStandardMaterial({ color: '#27425e', roughness: 0.12, metalness: 0.7 });
@@ -301,5 +342,11 @@ export function createExterior(scene: THREE.Scene) {
   crownTints.forEach((c, i) => crownMesh.setColorAt(i, c));
   root.add(trunks.build(UNIT_CYL, paint('#5b4532', 0.95, 0)), crownMesh);
 
-  return { root };
+  return {
+    root,
+    /** @param open 0 = dockdeur dicht, 1 = open */
+    setDockDoor(i: number, open: number) {
+      if (dockDoors[i]) dockDoors[i].scale.y = 1 - 0.97 * open;
+    },
+  };
 }
