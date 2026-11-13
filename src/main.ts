@@ -38,10 +38,19 @@ const params = new URLSearchParams(location.search);
 // --- Renderer, scène, camera ---
 // Renderschaal (pixels per CSS-pixel): past zich tijdens het spelen aan de framerate aan, zie tuneScale().
 // Testen: ?scale=1 zet hem vast, ?msaa=0..4, ?ao=0 (uit) of 1 (volle resolutie), ?nobloom, ?nofx.
-const SCALES = [0.6, 0.75, 0.9, 1, 1.25, 1.5].filter((s) => s <= window.devicePixelRatio + 0.01);
+// De treden van zuinig naar mooi. Onder schaal 1 wordt het beeld wazig, daarom gaat eerst de omgevingsschaduw
+// (het duurste effect) uit en zakt de schaal daarna hooguit naar 0.8.
+const LEVELS = [
+  { scale: 0.8, ao: false },
+  { scale: 0.9, ao: false },
+  { scale: 1, ao: false },
+  { scale: 1, ao: true },
+  { scale: 1.25, ao: true },
+  { scale: 1.5, ao: true },
+].filter((l, i) => i === 0 || l.scale <= window.devicePixelRatio + 0.01);
 const fixedScale = Number(params.get('scale')) || 0;
-let scaleLevel = Math.min(SCALES.length - 1, SCALES.indexOf(1));
-const renderScale = () => fixedScale || SCALES[scaleLevel];
+let scaleLevel = Math.min(LEVELS.length - 1, 3);
+const renderScale = () => fixedScale || LEVELS[scaleLevel].scale;
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(renderScale());
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -90,7 +99,7 @@ const gtao = new GTAOPass(scene, camera, window.innerWidth, window.innerHeight);
 gtao.updateGtaoMaterial({ radius: 0.5, distanceExponent: 1.4, thickness: 1.2, scale: 1.15, samples: 8 });
 const gtaoSetSize = gtao.setSize.bind(gtao);
 gtao.setSize = (w: number, h: number) => gtaoSetSize(Math.ceil(w * AO_SCALE), Math.ceil(h * AO_SCALE));
-gtao.enabled = AO_SCALE > 0;
+gtao.enabled = AO_SCALE > 0 && (fixedScale > 0 || LEVELS[scaleLevel].ao);
 // Tekstlabels (sprites) horen niet in de diepte/normaal-pass van GTAO: daar worden ze
 // als massieve vlakken getekend en verschijnen ze als zwarte balken in beeld.
 const gtaoRender = gtao.render.bind(gtao);
@@ -112,14 +121,18 @@ composer.addPass(new OutputPass());
 composer.setPixelRatio(renderScale()); // zet ook alle passes op de juiste maat
 let postFx = !params.has('nofx');
 
-// Dynamische resolutie: zakt de framerate in, dan rendert de game op een lagere schaal (iets minder scherp,
-// wel vloeiend); is er ruimte over, dan gaat de schaal weer omhoog.
+// Dynamische kwaliteit: blijft de framerate een paar seconden achter elkaar laag, dan gaat de game een trede
+// omlaag (eerst de omgevingsschaduw uit, dan pas een iets lagere schaal); is er ruimte over, dan weer omhoog.
+// Eén trage seconde (iets laden, een vrachtwagen die binnenkomt) telt niet: anders wordt het beeld telkens wazig.
 function setScaleLevel(level: number) {
+  const resize = LEVELS[level].scale !== LEVELS[scaleLevel].scale;
   scaleLevel = level;
+  gtao.enabled = AO_SCALE > 0 && LEVELS[level].ao;
+  if (!resize) return;
   renderer.setPixelRatio(renderScale());
   composer.setPixelRatio(renderScale());
 }
-const tune = { ms: 0, frames: 0, calm: 0, raisedAt: -1e9, blocked: Infinity, blockedUntil: 0 };
+const tune = { ms: 0, frames: 0, calm: 0, slow: 0, raisedAt: -1e9, blocked: Infinity, blockedUntil: 0 };
 function tuneScale(frameMs: number, now: number) {
   if (fixedScale || frameMs > 250 || document.hidden) return; // haperingen en een verborgen tabblad tellen niet mee
   tune.ms += frameMs;
@@ -128,14 +141,19 @@ function tuneScale(frameMs: number, now: number) {
   const avg = tune.ms / tune.frames;
   tune.ms = tune.frames = 0;
   if (avg > 26 && scaleLevel > 0) {
-    // onder ~38 beelden per seconde: omlaag. Kwam dat door een verhoging van zojuist, dan die stap een tijd niet meer proberen.
-    if (now - tune.raisedAt < 8000) {
+    // onder ~38 beelden per seconde: omlaag, maar pas na drie trage seconden op rij. Kwam het door een verhoging
+    // van zojuist, dan meteen terug en die stap een tijd niet meer proberen.
+    tune.calm = 0;
+    const justRaised = now - tune.raisedAt < 8000;
+    if (++tune.slow < 3 && !justRaised) return;
+    if (justRaised) {
       tune.blocked = scaleLevel;
       tune.blockedUntil = now + 60_000;
     }
-    tune.calm = 0;
+    tune.slow = 0;
     setScaleLevel(scaleLevel - 1);
-  } else if (avg < 17.5 && scaleLevel < SCALES.length - 1) {
+  } else if (avg < 17.5 && scaleLevel < LEVELS.length - 1) {
+    tune.slow = 0;
     const next = scaleLevel + 1;
     if (++tune.calm >= 4 && !(next >= tune.blocked && now < tune.blockedUntil)) {
       tune.calm = 0;
@@ -143,7 +161,7 @@ function tuneScale(frameMs: number, now: number) {
       setScaleLevel(next);
     }
   } else {
-    tune.calm = 0;
+    tune.calm = tune.slow = 0;
   }
 }
 
@@ -405,7 +423,7 @@ const ear = new THREE.Vector3();
 
 const jackDistance = () => Math.hypot(player.position.x - jack.group.position.x, player.position.z - jack.group.position.z);
 const nearJack = () => jackDistance() < 2.2 && player.position.y < 1;
-if (import.meta.env.DEV) Object.assign((window as unknown as { wmDebug: object }).wmDebug, { jack });
+if (import.meta.env.DEV) Object.assign((window as unknown as { wmDebug: object }).wmDebug, { jack, player });
 
 // --- Multiplayer: iedereen speelt samen in één magazijn (?room=naam voor een eigen kamer, ?solo om alleen te spelen) ---
 const multiplayer = params.has('solo')
