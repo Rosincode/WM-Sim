@@ -14,6 +14,7 @@ import { createWmsGateway } from './wmsGateway';
 import { compareLocations } from './wmsLocations';
 import { wmsSync } from './wmsSync';
 import { mountWmsPanel } from './wmsPanel';
+import { mountWmsReconcile } from './wmsReconcile';
 
 // Koppelt de magazijn-sim aan de WMS (poort + stand ophalen), de 3D-scène, de HUD en het toetsenbord.
 // De hal heeft zijn eigen voorraad, voor alle spelers dezelfde. De WMS hoort wat er gebeurt via scans en kan
@@ -125,6 +126,25 @@ export function mountWarehouse({
     );
   });
   wmsSection.appendChild(resetBox);
+  // En andersom: de WMS bijwerken naar wat er in de hal staat (alleen pallets die in de WMS op een andere plek staan).
+  const reconcile = mountWmsReconcile(wmsSection, {
+    hall() {
+      const busy = new Set<string>();
+      for (const lane of sim.laneIn) for (const p of lane) if (p) busy.add(p.id);
+      for (const t of [sim.trucks.in, sim.trucks.out, ...sim.deliveries]) for (const p of t?.cargo ?? []) busy.add(p.id);
+      for (const r of sim.robots.robots) {
+        if (r.load) busy.add(r.load.id);
+        if (r.task) busy.add(r.task.palletId);
+      }
+      if (sim.carry?.kind === 'pallet') busy.add(sim.carry.pallet.id);
+      // Met de heftruck verplaatst en nog niet gescand: die boekt de speler zelf
+      const racked = sim.pallets().filter((p) => (p.unbooked ? (busy.add(p.id), false) : true));
+      return { racked, busy };
+    },
+    // Vóór de eerste stand uit de WMS is de hal nog leeg: dan valt er niets te vergelijken
+    settled: () => started && sim.pending === 0 && wms.pending === 0 && !mockOutOfStep(),
+  });
+  let stockDiffs = 0;
   const resetListeners: (() => void)[] = [];
   /** Zet de hal gelijk met de voorraad en open orders in de WMS; geeft het aantal voorraadregels terug. */
   async function resetToWms() {
@@ -268,6 +288,12 @@ export function mountWarehouse({
               : '';
         if (warning && warning !== lastWarning) hud.addError(warning);
         lastWarning = warning;
+        // Met de stamgegevens ook de pallets vergelijken: staat de hal anders dan de WMS denkt, dan zie je dat bij K
+        void reconcile.check().then(() => {
+          const n = reconcile.differences ?? 0;
+          if (n > 0 && stockDiffs === 0) menu.notify('wms');
+          stockDiffs = n;
+        });
       }
       // Leveringen die de WMS zelf heeft aangemeld. Vóór de voorraad opgehaald: zo staat de ontvangst van een
       // levering die we hier zien zeker in de voorraad van daarna.

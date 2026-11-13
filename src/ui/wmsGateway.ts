@@ -31,6 +31,16 @@ export function robotApi(): WmsRobotApi | null {
     : null;
 }
 
+/** Lossen of tellen van een ontvangst; false = de WMS heeft er geen ontvangst met een pallet voor. */
+async function withoutPallet(step: () => Promise<boolean> | undefined): Promise<boolean> {
+  try {
+    return (await step()) ?? false;
+  } catch (err) {
+    if (err instanceof WmsError && err.status === 409 && /heeft geen pallet/i.test(err.message)) return false;
+    throw err;
+  }
+}
+
 /** true = de WMS heeft de stap verwerkt; false = geen endpoint in de client. Gooit bij een weigering. */
 async function call(e: ProcessEvent): Promise<boolean> {
   const client = wms.client;
@@ -69,10 +79,12 @@ async function call(e: ProcessEvent): Promise<boolean> {
       await client.loadOrder({ orderId: e.orderId, truckId: e.truckId });
       return true;
     // Een levering uit de WMS: lossen en tellen. false = de WMS heeft van deze pallet geen ontvangst die daarop wacht.
+    // Heeft de WMS de ontvangst zonder pallet geboekt (los op de dockdeur), dan valt er voor hem niets te lossen
+    // of te tellen: de stap is dan alleen fysiek, anders komt de wagen nooit leeg.
     case 'PalletUnloaded':
-      return (await client.unloadReceipt?.({ palletId: e.palletId })) ?? false;
+      return withoutPallet(() => client.unloadReceipt?.({ palletId: e.palletId }));
     case 'PalletCounted':
-      return (await client.countReceipt?.({ palletId: e.palletId, qty: e.qty })) ?? false;
+      return withoutPallet(() => client.countReceipt?.({ palletId: e.palletId, qty: e.qty }));
     // Geek+-robots (docs/wms/08). Zolang de client de robotacties niet heeft, boekt het afronden van een
     // robotopdracht de pallet om als palletverplaatsing; starten en mislukken blijven dan lokaal.
     case 'RobotTaskStarted': {

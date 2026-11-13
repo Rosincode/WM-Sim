@@ -19,16 +19,18 @@ URL-opbouw in de game staat alleen in `src/integrations/wms/live.ts`.
 | [08](08-geekplus-robots.md) | Robots en robotopdrachten | het voorstel; gebouwd, zie 12 |
 | [09](09-realistisch-datamodel.md) | Alle aanroepen van de game op een rij, rechten, open punten | actueel |
 | [10](10-leveringen-uit-de-wms.md) | Leveringen uit de WMS, robots lossen en tellen | actueel |
-| [11](11-dubbele-stellingen.md) | 16 stellingen rug-aan-rug, codes `R1A` … `R8B` | **nog te doen in de WMS** |
+| [11](11-dubbele-stellingen.md) | 16 stellingen rug-aan-rug, codes `R1A` … `R8B` | gedaan in de WMS, op `pos_y` na (zie 13) |
 | [12](12-robotkoppeling.md) | Robotopdrachten uit de WMS, lossen en tellen | de game gebruikt het; **nog te doen in de WMS**: 8 robots, `pos_y`, limiet |
+| [13](13-wms-gelijk-met-de-hal.md) | Vergelijking hal en WMS van 2026-11-14; de game werkt palletlocaties in de WMS bij | **nog te doen in de WMS**: `pos_y`, 8 robots, ontvangsten zonder pallet, correctie-actie |
 
 ## Wat er in de WMS nog moet gebeuren
 
-Gecontroleerd met de API-client van de game op 2026-11-13:
+Gecontroleerd met de API-client van de game op 2026-11-14; de details staan in [13](13-wms-gelijk-met-de-hal.md).
 
-1. **Stellinglocaties hernoemen en aanvullen** (11). De WMS heeft nog de 231 oude codes
-   (`R1-01-1` … `R11-07-3`); de hal heeft er 336 met nieuwe codes (`R1A-01-1` … `R8B-07-3`). Tot dat
-   is gedaan weigert de WMS elke scan en boeking op een stellinglocatie.
-2. **Rechten van de API-client** (09, 10). `GET pallet` en `GET truck_visit` geven `403`.
-3. **Robotopdrachten** (08) bestaan niet in de WMS; de game speelt ze zelf na.
-4. **Insluiten in een iframe** (06) werkt nog niet.
+1. **`pos_y` van de stellingen** (13, 2.1). De 366 locaties bestaan met de juiste codes; van 315
+   stellinglocaties wijkt alleen `pos_y` af.
+2. **Acht robots toevoegen** (13, 2.2): `GKP-02`, `-04`, `-06`, `-08` en `GKF-01`, `-03`, `-05`, `-07`.
+3. **Ontvangsten van `simulatie_tick` krijgen geen pallet** (13, 2.3 en 2.4): lossen, tellen en
+   wegzetten kunnen daardoor niet in de WMS worden geboekt.
+4. **Correctie-actie voor aantallen** (13, 2.5): nieuw voorstel.
+5. **Insluiten in een iframe** (06) werkt nog niet.

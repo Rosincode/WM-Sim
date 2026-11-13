@@ -94,7 +94,12 @@ export function mountWmsPanel(parent?: HTMLElement) {
     const time = r.at.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const warn: string[] = [];
     if (r.locations.extra.length) warn.push(`${r.locations.extra.length} locaties staan in de WMS maar niet in de hal (${sample(r.locations.extra)}).`);
-    if (r.locations.different.length) warn.push(`${r.locations.different.length} locaties hebben in de WMS een ander type, niveau of positie (${sample(r.locations.different)}).`);
+    if (r.locations.different.length) {
+      warn.push(
+        `${r.locations.different.length} locaties hebben in de WMS een ander type, niveau of positie (${sample(r.locations.different)}). ` +
+          'De hal ligt vast: <a href="#" data-act="csv-different" style="color:inherit">download de juiste gegevens (CSV)</a> en zet ze in de WMS-app.',
+      );
+    }
     if (r.stock.hidden) warn.push(`${r.stock.hidden} voorraadregels liggen op een plek die de hal niet toont.`);
     if (r.stock.unknownSkus.length) warn.push(`Voorraad van onbekende artikelen: ${sample(r.stock.unknownSkus)}.`);
     return `<div class="sync"><b>Gelijk met ${source}</b>
@@ -162,11 +167,12 @@ export function mountWmsPanel(parent?: HTMLElement) {
     });
     panel.querySelector('[data-act="csv-locations"]')?.addEventListener('click', () => {
       if (!missing?.length) return;
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([locationsCsv(missing)], { type: 'text/csv' }));
-      a.download = 'ontbrekende-locaties.csv';
-      a.click();
-      URL.revokeObjectURL(a.href);
+      download(locationsCsv(missing), 'ontbrekende-locaties.csv');
+    });
+    panel.querySelector('[data-act="csv-different"]')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      const ids = new Set(wmsSync.report?.locations.different);
+      download(locationsCsv(hallLocations().filter((l) => ids.has(l.id))), 'afwijkende-locaties.csv');
     });
     panel.querySelector('[data-act="collapse"]')?.addEventListener('click', (e) => {
       e.stopPropagation(); // anders klapt de klik op het paneel hem meteen weer open
@@ -261,6 +267,14 @@ export function mountWmsPanel(parent?: HTMLElement) {
       }
     });
   }
+}
+
+function download(csv: string, name: string) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 function escapeHtml(s: string) {
