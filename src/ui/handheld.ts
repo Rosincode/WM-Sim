@@ -288,21 +288,47 @@ export function createHandheld({ camera, canvas, world, scanTargets, onScan }: O
 
   // ---------- Scannen ----------
   let audio: AudioContext | null = null;
-  function beep(ok: boolean) {
+  /** Aantal piepjes van deze scanner en of het laatste een goede scan was: zo horen andere spelers hem ook. */
+  let beeps = 0;
+  let beepOk = true;
+  /** De piep zelf. level 0..1 en pan -1..1 zijn voor de scanner van een andere speler (verder weg = zachter). */
+  function tone(ok: boolean, level = 1, pan = 0, own = true) {
     try {
+      // Zonder klik of toets van de speler zelf staat het geluid nog uit: de piep van een ander dan overslaan,
+      // anders klinken ze straks allemaal tegelijk.
+      if (!own && audio?.state !== 'running') return;
       audio ??= new AudioContext();
       const osc = audio.createOscillator();
       const gain = audio.createGain();
       osc.type = 'square';
       osc.frequency.value = ok ? 2700 : 320;
-      gain.gain.value = 0.06;
-      osc.connect(gain).connect(audio.destination);
+      gain.gain.value = 0.06 * level;
+      const panner = audio.createStereoPanner();
+      panner.pan.value = pan;
+      osc.connect(gain).connect(panner).connect(audio.destination);
       osc.start();
       osc.stop(audio.currentTime + (ok ? 0.09 : 0.22));
+      osc.onended = () => panner.disconnect();
     } catch {
       // geen geluid beschikbaar: stil doorgaan
     }
   }
+  function beep(ok: boolean) {
+    beeps++;
+    beepOk = ok;
+    tone(ok);
+  }
+  // De browser laat pas geluid toe na een klik of toets: daarna hoor je ook de scanners van anderen.
+  const unlockAudio = () => {
+    try {
+      audio ??= new AudioContext();
+      if (audio.state === 'suspended') void audio.resume();
+    } catch {
+      // geen geluid beschikbaar
+    }
+  };
+  window.addEventListener('pointerdown', unlockAudio);
+  window.addEventListener('keydown', unlockAudio);
 
   const raycaster = new THREE.Raycaster();
   const camPos = new THREE.Vector3();
@@ -411,6 +437,17 @@ export function createHandheld({ camera, canvas, world, scanTargets, onScan }: O
     /** Aantal keer gescand (voor andere spelers: die zien de laser). */
     get scans() {
       return scans;
+    },
+    /** Aantal piepjes van de scanner en of het laatste een goede scan was (voor andere spelers: die horen hem). */
+    get beeps() {
+      return beeps;
+    },
+    get beepOk() {
+      return beepOk;
+    },
+    /** Laat de scanner van een andere speler horen: level 0..1 (afstand), pan -1..1 (links/rechts). */
+    remoteBeep(ok: boolean, level: number, pan: number) {
+      tone(ok, level, pan, false);
     },
     get tool() {
       return tool;

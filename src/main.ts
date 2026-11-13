@@ -427,6 +427,7 @@ sounds.add('forklift', objectSource(forklift.group, () => forklift.forkHeight));
 sounds.add('jack', objectSource(jack.group, () => jack.lift));
 for (const s of robots.sources) sounds.add('robot', s);
 const ear = new THREE.Vector3();
+const earRight = new THREE.Vector3();
 
 const jackDistance = () => Math.hypot(player.position.x - jack.group.position.x, player.position.z - jack.group.position.z);
 const nearJack = () => jackDistance() < 2.2 && player.position.y < 1;
@@ -458,6 +459,17 @@ const multiplayer = params.has('solo')
       look: () => (view.mode === 'first' ? view.look : { yaw: 0, pitch: 0 }),
       tool: () => (view.mode !== 'first' ? 0 : handheld.tool === 'scanner' ? 1 : 2),
       scans: () => handheld.scans,
+      beeps: () => ({ count: handheld.beeps, ok: handheld.beepOk }),
+      // Scanner van een ander: zachter naarmate hij verder weg staat, links of rechts volgt de kijkrichting
+      scanBeep: (ok, at) => {
+        const dx = at.x - ear.x;
+        const dz = at.z - ear.z;
+        const d = Math.hypot(dx, dz);
+        if (d > 40) return;
+        earRight.setFromMatrixColumn(camera.matrixWorld, 0);
+        const pan = d < 0.5 ? 0 : THREE.MathUtils.clamp((dx * earRight.x + dz * earRight.z) / (d * (Math.hypot(earRight.x, earRight.z) || 1)), -1, 1) * 0.8;
+        handheld.remoteBeep(ok, Math.pow(3 / Math.max(d, 3), 1.2), pan);
+      },
       leaveForklift: () => setDriving(false),
     });
 

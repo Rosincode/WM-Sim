@@ -38,6 +38,8 @@ type Pose = {
   /** Kijkrichting opzij t.o.v. het lichaam (vanaf de stoel van de heftruck) */ ly: number;
   /** In de hand: 0 niets, 1 scanner, 2 tablet */ t: 0 | 1 | 2;
   /** Aantal keer gescand (teller) */ sc: number;
+  /** Aantal piepjes van de scanner (teller) */ b: number;
+  /** Laatste piep was een goede scan */ bo: 0 | 1;
   /** Stuuruitslag -1..1, als deze speler rijdt */ w: number;
   /** Staat op de heftruck: plek t.o.v. de truck; y = hoogte boven de vorken als hij op de vorken of de last staat */
   v?: { x: number; z: number; y?: number };
@@ -85,6 +87,10 @@ interface Options {
   tool(): 0 | 1 | 2;
   /** Aantal keer dat deze speler gescand heeft. */
   scans(): number;
+  /** Piepjes van de scanner van deze speler: de teller, en of de laatste een goede scan was. */
+  beeps(): { count: number; ok: boolean };
+  /** De scanner van een andere speler piept, op deze plek in de hal. */
+  scanBeep(ok: boolean, at: THREE.Vector3): void;
   /** Hoogte van de heupen van iemand die in de heftruck zit. */
   seatHipY: number;
   /** Hoogte van de heupen van iemand die op een stoel zit. */
@@ -303,7 +309,7 @@ export function mountMultiplayer(o: Options) {
     const avatar: Avatar = {
       character, tag, bubble, load, color,
       target: new THREE.Vector3(),
-      pose: { n: '', x: 0, y: 0, z: 0, r: 0, d: 0, c: '', p: 0, ly: 0, t: 0, sc: 0, w: 0, j: 0, k: 0, fv: '' },
+      pose: { n: '', x: 0, y: 0, z: 0, r: 0, d: 0, c: '', p: 0, ly: 0, t: 0, sc: 0, b: 0, bo: 1, w: 0, j: 0, k: 0, fv: '' },
       placed: false,
       look: { yaw: 0, pitch: 0 },
       scanT: 0,
@@ -424,6 +430,7 @@ export function mountMultiplayer(o: Options) {
   function sendPose(force = false) {
     const p = o.player.position;
     const look = o.look();
+    const beeps = o.beeps();
     const pose: Pose = {
       n: name,
       x: round(p.x), y: round(p.y), z: round(p.z),
@@ -433,6 +440,7 @@ export function mountMultiplayer(o: Options) {
       p: round(look.pitch), ly: round(look.yaw),
       t: o.tool(),
       sc: o.scans(),
+      b: beeps.count, bo: beeps.ok ? 1 : 0,
       w: o.isDriving() ? round(o.forklift.steer, 10) : 0,
       j: o.airborne() ? 1 : 0,
       k: o.forklift.honking || honked ? 1 : 0,
@@ -485,6 +493,7 @@ export function mountMultiplayer(o: Options) {
       const a = avatars.get(from.id) ?? addAvatar(from);
       const wasNew = !a.placed;
       const prevScans = a.pose.sc;
+      const prevBeeps = a.pose.b;
       a.pose = {
         n: String(data.n ?? '').slice(0, 20) || 'Speler',
         x: num(data.x), y: num(data.y), z: num(data.z), r: num(data.r),
@@ -494,6 +503,7 @@ export function mountMultiplayer(o: Options) {
         ly: THREE.MathUtils.clamp(num(data.ly), -2.5, 2.5),
         t: data.t === 1 || data.t === 2 ? data.t : 0,
         sc: num(data.sc),
+        b: num(data.b), bo: data.bo === 0 ? 0 : 1,
         w: THREE.MathUtils.clamp(num(data.w), -1, 1),
         j: data.j === 1 ? 1 : 0,
         k: data.k === 1 && data.d === 1 ? 1 : 0,
@@ -517,6 +527,8 @@ export function mountMultiplayer(o: Options) {
       if (!wasNew && a.pose.sc !== prevScans) a.scanT = 0.4; // heeft net gescand: laser tonen
       if (a.pose.k) hornUntil = performance.now() + 250;
       a.target.set(a.pose.x, a.pose.y, a.pose.z);
+      // Zijn scanner piepte: dat hoor je hier ook (niet op een tabblad op de achtergrond)
+      if (!wasNew && a.pose.b !== prevBeeps && !document.hidden) o.scanBeep(a.pose.bo === 1, a.target);
       if (a.pose.d && validFork(data.f)) {
         if (o.isDriving()) {
           if (from.id < room.id) o.leaveForklift(); // tegelijk ingestapt: het laagste id mag blijven
