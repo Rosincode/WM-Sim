@@ -44,7 +44,11 @@ gegevens ook als CSV aan: WMS-paneel (toets K) → *download de juiste gegevens 
 `location_id;location_type;pos_x;pos_y;level;blocked`. Werk daarmee de bestaande locaties bij; maak
 geen nieuwe aan.
 
-### 2.2 Robots (8 ontbreken)
+### 2.2 Robots (gedaan)
+
+**Stand 2026-11-14, later op de dag:** de WMS heeft nu alle 20 robots; dit punt is afgehandeld.
+
+Wat er ontbrak:
 
 De hal heeft per pad een tilrobot én een robot-heftruck. De WMS kent er per pad één. Toevoegen:
 
@@ -106,6 +110,22 @@ alleen te lezen. Nu wijkt af:
 Voorstel: een actie `correct_pallet` op `pallet`, invoer `counted_qty` (0 = de pallet is leeg). De WMS
 boekt het verschil als `stock_mutation` van het soort `correctie`. Geweigerd met `409` als het aantal
 negatief is. Zodra die actie er is, zet de game ook aantallen recht (hoofdstuk 3).
+
+### 2.6 Schrijven vanuit de game (nieuw)
+
+De wens is dat de game alles wat hierboven staat zelf naar de WMS kan schrijven. Nu geeft de API
+`403` op `POST`/`PATCH` van `location`, `item` en `stock`. Nodig voor de API-client van de game:
+
+| Wat | Aanroep | Nu |
+|---|---|---|
+| Positie van een locatie bijwerken | `PATCH location/<id> {pos_x, pos_y}` | `403` |
+| Een locatie toevoegen die de hal heeft en de WMS niet | `POST location {location_id, location_type, pos_x, pos_y, level}` | `403` |
+| Aantal op een pallet rechtzetten | actie `correct_pallet` op `pallet` (2.5) | bestaat niet |
+| Een pallet die alleen in de hal staat alsnog aanmaken | actie op `location`, invoer `pallet_id`, `sku`, `qty`: boekt de voorraad bij als correctie en maakt de pallet aan | bestaat niet |
+| Een pallet die alleen in de WMS staat laten vervallen | `correct_pallet` met `counted_qty` = 0 | bestaat niet |
+
+`location_id`, `location_type` en `level` hoeft de game niet te kunnen wijzigen. Meld terug welke van
+deze er komen en onder welke naam; de game gebruikt ze dan in *WMS bijwerken naar de hal*.
 
 ## 3. Wat de game sinds 2026-11-14 doet
 
