@@ -327,7 +327,16 @@ export function mountWarehouse({
     forkliftTake: sim.forkliftTake,
     forkliftPlace: sim.forkliftPlace,
     /** De Geek+-robots en waar hun opdrachten vandaan komen, voor src/ui/robots.ts. */
-    robots: { fleet: sim.robots, dispatch: robotDispatch },
+    robots: {
+      fleet: sim.robots,
+      dispatch: robotDispatch,
+      /** Hoe ver een order gepickt is (0 t/m 1). */
+      orderFill(orderId: string) {
+        const lines = sim.order(orderId)?.lines ?? [];
+        const total = lines.reduce((n, l) => n + l.qty, 0);
+        return total ? lines.reduce((n, l) => n + l.picked, 0) / total : 0;
+      },
+    },
     update(dt: number) {
       robotDispatch.update(dt);
       sim.update(dt);

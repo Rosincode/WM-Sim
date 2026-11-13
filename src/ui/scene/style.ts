@@ -28,6 +28,8 @@ export const STYLE = {
   wood: mat('#b98a5a', 0.75, 0),
   /** Blauw accent: stoelen in kantoor en kantine. */
   blue: mat('#1e4f9c', 0.7, 0.05),
+  /** Karton: losse dozen (op een grijparm, in een rolcontainer). */
+  carton: mat('#b98f62', 0.85, 0),
   /** Groen: planten. */
   green: mat('#3f7d4a', 0.9, 0),
   /** Vloerbedekking van het kantoor. */

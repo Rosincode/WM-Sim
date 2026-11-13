@@ -746,6 +746,108 @@ export function createWarehouse({
         return [{ locationId: l.id, level: l.level, free, x: l.x, z: l.z, sameSku: !!here?.size }];
       });
     },
+    orders: {
+      next: (skip) => orders.find((o) => o.status === 'open' && !skip.has(o.id))?.id ?? null,
+      status(id) {
+        const s = order(id)?.status;
+        return s === 'picking' || s === 'picked' ? s : 'other';
+      },
+      async start(id) {
+        const o = order(id);
+        if (!o || o.status !== 'open') return `${id} is geen open order (meer)`;
+        // Stond de order in de WMS al op picking, dan gaat de robot daarmee verder (zie takeContainer).
+        if (o.wmsStatus !== 'picking') {
+          const r = await ask({ type: 'PickStarted', orderId: id });
+          scanned('order', id, r.ok);
+          if (!r.ok) return `de WMS weigert: ${r.error}`;
+        }
+        const now = order(id);
+        if (!now || now.status !== 'open') return `${id} is al door iemand anders gepakt`;
+        now.status = 'picking';
+        now.wmsStatus = 'picking';
+        touch();
+        return null;
+      },
+      pickSpot(id, near, avoid) {
+        const o = order(id);
+        if (!o) return null;
+        const rest = openLines(o);
+        if (rest.length === 0) return 'done';
+        const unbooked = new Set([...moved.values()].map((m) => m.at));
+        // De dichtstbijzijnde locatie met voorraad voor een open regel; de vloer (de pickplek) gaat voor
+        const spot = shelfLocations()
+          .filter((l) => !isBlocked(l.id) && !avoid.has(l.id) && !unbooked.has(l.id) && rest.some((line) => qtyAt(l.id, line.sku) > 0))
+          .sort((a, b) => dist(a, near) + a.level * 4 - (dist(b, near) + b.level * 4))[0];
+        if (!spot) return null;
+        const sku = rest.find((line) => qtyAt(spot.id, line.sku) > 0)!.sku;
+        // de pallet waar de voorraad vanaf gaat: de buitenste (zie palletize)
+        const pallet = palletsAt(spot.id).filter((p) => p.sku === sku).sort((a, b) => b.slot - a.slot)[0];
+        return { x: spot.x + SLOT_DX[pallet?.slot ?? 0], z: spot.z, level: spot.level, locationId: spot.id };
+      },
+      async pick(id, locId) {
+        const o = order(id);
+        const line = o && openLines(o).find((l) => qtyAt(locId, l.sku) > 0);
+        if (!o || o.status !== 'picking' || !line) return `op ${locId} ligt niets (meer) wat ${id} nodig heeft`;
+        const { sku } = line;
+        const qty = Math.min(line.qty - line.picked, qtyAt(locId, sku));
+        const r = await ask({ type: 'PickLineConfirmed', orderId: id, sku, qty, locationId: locId });
+        scanned('location', locId, r.ok, locId);
+        if (!r.ok) return `de WMS weigert: ${r.error}`;
+        const now = order(id);
+        const nowLine = now?.lines.find((l) => l.sku === sku && l.picked < l.qty);
+        if (!now || !nowLine || qtyAt(locId, sku) < qty) return `${locId} is intussen gewijzigd`;
+        add(locId, sku, -qty);
+        nowLine.picked += qty;
+        now.picks.push({ sku, qty, locationId: locId, booked: r.linked });
+        touch();
+        return null;
+      },
+      async finish(id) {
+        const r = await ask({ type: 'PickCompleted', orderId: id });
+        if (!r.ok) return `de WMS weigert: ${r.error}`;
+        const o = order(id);
+        if (!o) return `${id} bestaat niet meer`;
+        o.status = 'picked';
+        o.wmsStatus = 'done';
+        touch();
+        return null;
+      },
+      stageSpot() {
+        const dock = laneOut[outDock]?.includes(null) ? outDock : laneOut.findIndex((lane) => lane.includes(null));
+        if (dock < 0) return null;
+        const slot = laneOut[dock].indexOf(null);
+        return { ...laneSlot(DOCKS[dock].laneOut, slot), dock, slot, locationId: DOCKS[dock].outId };
+      },
+      async stage(id, dock) {
+        const d = DOCKS[dock];
+        const r = await ask({ type: 'OrderStaged', orderId: id, dockId: d.outId });
+        scanned('location', d.outId, r.ok, d.outId);
+        if (!r.ok) return `de WMS weigert: ${r.error}`;
+        const o = order(id);
+        const lane = laneOut[dock];
+        if (!o || !lane.includes(null)) return `${d.outId} staat vol`;
+        lane[lane.indexOf(null)] = o.id;
+        o.status = 'staged';
+        touch();
+        return null;
+      },
+    },
+    async count(x, rows) {
+      const seen = { pallets: 0, booked: 0, bare: 0 };
+      for (const l of shelfLocations()) {
+        if (l.x !== x || !rows.includes(l.z)) continue;
+        for (const p of palletsAt(l.id)) {
+          if (p.unlabeled) seen.bare++;
+          else {
+            seen.pallets++;
+            // Een verplaatste pallet boekt de scan op de plek waar hij nu staat, net als de scanner van een speler
+            if (moved.has(p.id) && (await bookMove(p.id)).ok) seen.booked++;
+          }
+        }
+        scanned('location', l.id, true, l.id);
+      }
+      return seen;
+    },
     refill() {
       const at = (l: { x: number; z: number }) => `${l.x}|${l.z}`;
       const occupied = new Set([...stock.keys()].map((k) => k.split('|')[0]));
