@@ -1,9 +1,10 @@
 import type { Item, Location, Order } from '../../shared/contract';
-import { WmsError, type WmsClient, type WmsCredentials, type WmsItem, type WmsLocation, type WmsPallet } from './types';
+import { WmsError, type WmsClient, type WmsCredentials, type WmsDelivery, type WmsItem, type WmsLocation, type WmsPallet } from './types';
 
 // URL-opbouw van de WMS-API (basis: https://<host>/t/wm_sim/api):
 //   GET  {base}/{entiteit}                      -> lijst als { data: [...] }
 //   GET  {base}/{entiteit}?veld=waarde          -> gefilterde lijst; één waarde per veld, geen OData
+//   GET  {base}/truck_visit?status=checked_in   -> aangemelde vrachtwagens; hun ontvangsten: goods_receipt?dock_id=<id>
 //   GET  {base}/{entiteit}?limit=200&offset=200 -> volgende pagina; antwoord { data, limit, offset }
 //   POST {base}/{entiteit}                      -> record aanmaken (goods_receipt, pallet_move, customer_order,
 //                                                  order_line, truck_visit, scan_log), JSON-body; gelukt = 201
@@ -27,7 +28,10 @@ type StockRow = Row & { sku: string; location_id: string; qty: number };
 type PalletRow = Row & { pallet_id: string; sku: string; qty: number; location_id: string; status: 'active' | 'empty' };
 type OrderRow = Row & { order_id: string; status: Order['status'] };
 type OrderLineRow = Row & { order_id: string; sku: string; qty: number; picked_qty?: number | null };
-type TruckVisitRow = Row & { truck_id: string; status?: string | null };
+type TruckVisitRow = Row & {
+  truck_id: string; status?: string | null; direction?: string | null; dock_id?: string | null; created_at?: string | null;
+};
+type ReceiptRow = Row & { sku: string; qty: number; dock_id: string; pallet_id?: string | null; created_at?: string | null };
 
 /** Twee kanten van een verwijzing: platform-id -> tekstsleutel en terug. */
 type Refs = { keyById: Map<string, string>; idByKey: Map<string, string> };
@@ -121,6 +125,8 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
   const orderIds = new Map<string, string>();
   /** truck_id (tekst) -> platform-id van het bezoek dat nu is aangemeld. */
   const visitIds = new Map<string, string>();
+  /** Per aangemeld bezoek (platform-id) zijn ontvangsten: die veranderen niet meer, dus één keer ophalen. */
+  const receipts = new Map<string, WmsDelivery['pallets']>();
 
   const loadItems = () =>
     (items ??= list<ItemRow>('item')
@@ -366,6 +372,33 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
     async truckCheckOut({ truckId }) {
       await flow('truck_visit', await visitUuid(truckId), 'truck_check_out');
       visitIds.delete(truckId);
+    },
+
+    async getDeliveries() {
+      const [visits, item, loc] = await Promise.all([
+        list<TruckVisitRow>('truck_visit', { status: 'checked_in' }),
+        loadItems(),
+        loadLocations(),
+      ]);
+      const out: WmsDelivery[] = [];
+      for (const v of visits) {
+        if (v.status !== 'checked_in' || v.direction !== 'in' || !v.dock_id) continue;
+        visitIds.set(v.truck_id, v.id);
+        let pallets = receipts.get(v.id);
+        if (!pallets) {
+          // De ontvangsten van dit bezoek: op hetzelfde dock, met de pallet van deze wagen (PAL-<truck_id>) of
+          // geboekt nadat de wagen is aangemeld.
+          const rows = await list<ReceiptRow>('goods_receipt', { dock_id: v.dock_id });
+          pallets = rows
+            .filter((r) => r.dock_id === v.dock_id)
+            .filter((r) => r.pallet_id === `PAL-${v.truck_id}` || (!!r.created_at && !!v.created_at && r.created_at >= v.created_at))
+            .map((r) => ({ palletId: r.pallet_id || undefined, sku: item.keyById.get(r.sku) ?? r.sku, qty: Number(r.qty) }));
+          if (pallets.length) receipts.set(v.id, pallets);
+        }
+        out.push({ truckId: v.truck_id, dockId: loc.keyById.get(v.dock_id) ?? v.dock_id, pallets });
+      }
+      for (const id of receipts.keys()) if (!visits.some((v) => v.id === id)) receipts.delete(id);
+      return out;
     },
 
     async logScan({ kind, barcode, ok, locationId: at }) {

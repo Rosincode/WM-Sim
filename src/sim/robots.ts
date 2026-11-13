@@ -18,8 +18,11 @@ import type { WmsReply } from './wms';
 // en wisselen van pad via de robotbaan aan de oostkant van de hal.
 // Multiplayer: iedereen laat de robots lokaal rijden; alleen de host beslist (oppakken, neerzetten, de WMS vragen).
 
-/** Een opdracht van de WMS: breng deze pallet van de ene locatie naar de andere. */
-export type RobotTask = { id: string; palletId: string; fromLocationId: string; toLocationId: string };
+/**
+ * Een opdracht van de WMS: breng deze pallet van de ene locatie naar de andere.
+ * kind 'unload' = lossen: van de vrachtwagen aan de dockdeur (fromLocationId = DOCK-NN) naar de inslagbaan.
+ */
+export type RobotTask = { id: string; palletId: string; fromLocationId: string; toLocationId: string; kind?: 'unload' };
 /** idle = bij het laadstation; home = onderweg daarheen. */
 export type RobotPhase = 'idle' | 'toPickup' | 'toDrop' | 'home';
 export type RobotKind = 'lift' | 'fork';
@@ -67,6 +70,8 @@ export interface RobotWorld {
   touch(): void;
   say(text: string, kind?: 'info' | 'ok' | 'err'): void;
   ask(e: ProcessEvent): Promise<WmsReply>;
+  /** Een geloste pallet staat boven de inslagbaan: de ontvangst boeken (als de WMS dat niet al deed). */
+  received(pallet: Pallet, laneId: string, dockId: string): Promise<WmsReply>;
   /** Waar de pallet staat, of waarom de robot hem daar niet kan halen. */
   pickupSpot(palletId: string, fromLocationId: string): RobotSpot | string;
   /** Haalt de pallet fysiek van zijn plek; een tekst = dat kan niet (meer). */
@@ -76,7 +81,11 @@ export interface RobotWorld {
   /** Het niveau van een locatie (1 = op de vloer, ook voor de banen bij de docks). */
   level(locationId: string): number;
   drop(locationId: string, pallet: Pallet, slot: number): void;
-  /** Pallets met sticker op de inslagbanen: werk dat een robot kan doen. */
+  /** Pallets in aangemelde vrachtwagens die gelost kunnen worden, met het aantal vrije plekken op de inslagbaan. */
+  unload(): { palletId: string; fromLocationId: string; toLocationId: string; free: number }[];
+  /** Vrije palletplekken op een inslagbaan. */
+  laneRoom(laneId: string): number;
+  /** Getelde pallets met sticker op de inslagbanen: werk dat een robot kan doen. */
   inbound(): { palletId: string; sku: string; qty: number; locationId: string; z: number }[];
   /** Stellinglocaties waar nog een pallet van dit artikel bij kan (free = aantal vrije plekken). */
   space(sku: string): { locationId: string; level: number; free: number; x: number; z: number; sameSku: boolean }[];
@@ -423,10 +432,13 @@ export function createRobotFleet(world: RobotWorld) {
     if (spot.slot !== r.slot) return goDrop(r); // de plek is intussen bezet: door naar de volgende plek op deze locatie
     const l = state(r);
     l.busy = true;
-    const reply = await world.ask({
-      type: 'RobotTaskCompleted', taskId: task.id, robotId: r.id, palletId: pallet.id,
-      sku: pallet.sku, qty: pallet.qty, fromLocationId: r.loadFrom ?? task.fromLocationId, locationId: task.toLocationId,
-    });
+    const unload = task.kind === 'unload';
+    const reply = unload
+      ? await world.received(pallet, task.toLocationId, task.fromLocationId)
+      : await world.ask({
+          type: 'RobotTaskCompleted', taskId: task.id, robotId: r.id, palletId: pallet.id,
+          sku: pallet.sku, qty: pallet.qty, fromLocationId: r.loadFrom ?? task.fromLocationId, locationId: task.toLocationId,
+        });
     l.busy = false;
     if (r.task !== task || r.load !== pallet) return; // intussen is de hal gereset
     if (!reply.ok) return void fail(r, `de WMS weigert: ${reply.error}`);
@@ -436,7 +448,7 @@ export function createRobotFleet(world: RobotWorld) {
     r.load = null;
     r.loadFrom = null;
     r.task = null;
-    world.say(`${r.id} heeft ${pallet.id} weggezet op ${task.toLocationId}.`, 'ok');
+    world.say(`${r.id} heeft ${pallet.id} ${unload ? 'gelost' : 'weggezet'} op ${task.toLocationId}.`, 'ok');
     goHome(r);
   }
 
@@ -519,6 +531,8 @@ export function createRobotFleet(world: RobotWorld) {
       robots
         .filter((r) => r.load && !r.task && !state(r).busy)
         .map((r) => ({ robotId: r.id, kind: r.kind, palletId: r.load!.id, sku: r.load!.sku, fromLocationId: r.loadFrom ?? '' })),
+    unload: world.unload,
+    laneRoom: world.laneRoom,
     inbound: world.inbound,
     space: world.space,
     refill: world.refill,

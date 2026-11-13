@@ -3,7 +3,8 @@ import type { Item, Order } from '../shared/contract';
 import { wms, type WmsClient, type WmsItem, type WmsLocation } from '../integrations/wms';
 import { articles, setArticles, setBlockedLocations } from '../sim/catalog';
 import { LOCATIONS, POINTS, dist } from '../sim/layout';
-import { createWarehouse, type SharedState, type Warehouse } from '../sim/warehouse';
+import { createWarehouse, type Delivery, type SharedState, type Warehouse } from '../sim/warehouse';
+import { mountDockCounter } from './dockCounter';
 import { menu } from './menu';
 import { createPcScreen } from './pcScreen';
 import { createProcessHud } from './processHud';
@@ -53,10 +54,15 @@ export function mountWarehouse({
     gateway: createWmsGateway({ bypass: mockOutOfStep }),
     demoOrders: () => wms.client.mode === 'mock', // met een echte WMS komen orders uit de WMS-app
     perPallet,
+    // Meldt de WMS zelf leveringen aan (de flow 'Simulatie: leveringen en orders'), dan komen de vrachtwagens daarvandaan
+    deliveryFeed: () => !!wms.client.getDeliveries && !mockOutOfStep(),
+    // Staan de robots aan, dan doen ze het inkomende werk zelf: lossen, tellen, wegzetten en de wagen afmelden
+    automation: () => robotDispatch.enabled,
   });
   // De Geek+-robots krijgen hun opdrachten uit de WMS, of nagespeeld zolang de WMS die nog niet uitgeeft.
   const robotDispatch = createRobotDispatch({ fleet: sim.robots, authority: () => sim.authority, bypass: mockOutOfStep });
   const view = createWarehouseView(scene, player, sim, { rackStock });
+  const dockCounter = mountDockCounter(scene, sim.counter);
   const hud = createProcessHud(sim);
   // Aanmelden bij de WMS-API zit in het menu rechtsboven (K).
   const wmsSection = document.createElement('div');
@@ -153,6 +159,7 @@ export function mountWarehouse({
   let lastPollAt = -Infinity;
   let lastError = '';
   let lastWarning = '';
+  let deliveryError = '';
   let seenRevision = sim.revision;
   let worldRefresh = 0;
   const hallIds = new Set(LOCATIONS.map((l) => l.id)); // stellingen en in-/uitslaglocaties: wat de hal kan tonen
@@ -228,6 +235,19 @@ export function mountWarehouse({
         if (warning && warning !== lastWarning) hud.addError(warning);
         lastWarning = warning;
       }
+      // Leveringen die de WMS zelf heeft aangemeld. Vóór de voorraad opgehaald: zo staat de ontvangst van een
+      // levering die we hier zien zeker in de voorraad van daarna.
+      let deliveries: Delivery[] | null = null;
+      if (client.getDeliveries && sim.authority && !mockOutOfStep()) {
+        try {
+          deliveries = await client.getDeliveries();
+          deliveryError = '';
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg !== deliveryError) hud.addError(`Leveringen ophalen uit de WMS mislukt: ${msg}`);
+          deliveryError = msg;
+        }
+      }
       const [stock, orders] = await Promise.all([client.getStock(), client.getOpenOrders()]);
       if (client !== wms.client) return; // intussen in- of uitgelogd
       lastError = '';
@@ -250,6 +270,12 @@ export function mountWarehouse({
         // Alleen de host haalt de open orders binnen (de rest krijgt ze via de gedeelde wereld), en alleen als
         // er sinds het ophalen niets is gebeurd: anders zou een oude stand een verse handeling terugdraaien.
         sim.syncOrders(orders);
+      }
+      if (deliveries && sim.authority) {
+        // Elke levering komt als vrachtwagen aanrijden, met alleen de pallets die in de WMS nog op de dockdeur
+        // staan: wat daar al weg is, is al weggezet (bijvoorbeeld vóór een herstart van de game).
+        const onDock = (dockId: string, sku: string) => stock.find((s) => s.locationId === dockId && s.sku === sku)?.qty ?? 0;
+        sim.syncDeliveries(deliveries.map((d) => ({ ...d, pallets: d.pallets.filter((p) => onDock(d.dockId, p.sku) >= p.qty) })));
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -306,6 +332,7 @@ export function mountWarehouse({
       robotDispatch.update(dt);
       sim.update(dt);
       view.update(dt);
+      dockCounter.update(dt);
 
       const near = nearPc();
       if (pc.isOpen && !near) pc.close();

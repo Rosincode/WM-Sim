@@ -177,6 +177,8 @@ export function createWarehouseView(
   // --- Vrachtwagens ---
   const trucks = { in: truckMesh('in'), out: truckMesh('out') };
   root.add(trucks.in, trucks.out);
+  /** Leveringen die de WMS heeft aangemeld: hooguit één vrachtwagen per dock, pas gemaakt als er een komt. */
+  const deliveryTrucks = new Map<number, { mesh: THREE.Group; text: ReturnType<typeof label> }>();
 
   // --- Pallets en rolcontainers in de banen ---
   const laneInMeshes = DOCKS.map((d) =>
@@ -255,6 +257,13 @@ export function createWarehouseView(
 
     placeTruck(trucks.in, labels.truckIn, sim.trucks.in);
     placeTruck(trucks.out, labels.truckOut, sim.trucks.out);
+    for (const t of sim.deliveries) {
+      if (deliveryTrucks.has(t.dock)) continue;
+      const made = { mesh: truckMesh('in'), text: label(4.5) };
+      root.add(made.mesh, made.text.sprite);
+      deliveryTrucks.set(t.dock, made);
+    }
+    for (const [dock, v] of deliveryTrucks) placeTruck(v.mesh, v.text, sim.deliveries.find((t) => t.dock === dock) ?? null);
 
     const open = sim.orders.filter((o) => o.status === 'open').length;
     labels.containers.set(open ? `Rolcontainers · ${open} order${open === 1 ? '' : 's'}` : '');

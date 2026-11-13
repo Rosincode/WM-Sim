@@ -5,6 +5,7 @@ import {
   DOCKS, LANE_SLOTS, LOCATIONS, PER_PALLET, POINTS, SLOT_DX,
   dist, lanePoint, laneSlot, location, shelfLocations, type Dock, type Point,
 } from './layout';
+import { createCounter } from './counter';
 import { createRobotFleet } from './robots';
 import { offlineGateway, type WmsGateway, type WmsReply } from './wms';
 
@@ -20,7 +21,11 @@ import { offlineGateway, type WmsGateway, type WmsReply } from './wms';
  * id = het nummer op de palletsticker. unlabeled = er zit nog geen sticker op: de speler moet er zelf een
  * plakken (labelPallet) voordat de pallet gescand kan worden. De voorraad bij de start heeft al stickers.
  */
-export type Pallet = { id: string; sku: string; qty: number; unlabeled?: boolean };
+export type Pallet = {
+  id: string; sku: string; qty: number; unlabeled?: boolean;
+  /** Op de inslagbaan geteld door de telrobot: pas daarna zetten de robots hem weg. */
+  counted?: boolean;
+};
 /** Een pallet in een stelling: op welke locatie, en op welke van de palletplekken daar (0 = links). */
 export type StoredPallet = Pallet & { locationId: string; slot: number };
 /**
@@ -40,7 +45,11 @@ export type Truck = {
   t: number;
   cargo: Pallet[];
   loaded: string[];
+  /** Aangemeld door de WMS zelf (een levering uit de flow): de ontvangst is daar al geboekt, op de dockdeur. */
+  wms?: boolean;
 };
+/** Een inkomende vrachtwagen die in de WMS is aangemeld, met de pallets die nog op de dockdeur staan. */
+export type Delivery = { truckId: string; dockId: string; pallets: { palletId?: string; sku: string; qty: number }[] };
 /** picked = wat er al in de rolcontainer ligt. */
 export type OrderLine = { sku: string; qty: number; picked: number };
 /** Eén greep uit een locatie; booked = de WMS heeft hem al afgeboekt. */
@@ -83,15 +92,29 @@ interface Options {
   demoOrders?: () => boolean;
   /** Stuks op een volle pallet van een artikel (de hal weet hoeveel dozen erop passen). */
   perPallet?: (sku: string) => number;
+  /** true: de WMS meldt zelf inkomende vrachtwagens aan (syncDeliveries); de sim laat er dan zelf geen komen. */
+  deliveryFeed?: () => boolean;
+  /** true: de robots doen het inkomende werk zelf (aanmelden, lossen, tellen, wegzetten, afmelden). */
+  automation?: () => boolean;
 }
 
-export function createWarehouse({ gateway = offlineGateway, demoOrders = () => false, perPallet = () => PER_PALLET }: Options = {}) {
+export function createWarehouse({
+  gateway = offlineGateway,
+  demoOrders = () => false,
+  perPallet = () => PER_PALLET,
+  deliveryFeed = () => false,
+  automation = () => false,
+}: Options = {}) {
   const stock = new Map<string, number>(); // wat er fysiek in de stellingen staat; sleutel: locationId|sku
   const orders: SimOrder[] = [];
   // Per dock een inslagbaan (pallets) en een uitslagbaan (order-id's).
   const laneIn: (Pallet | null)[][] = DOCKS.map(() => Array(LANE_SLOTS).fill(null));
   const laneOut: (string | null)[][] = DOCKS.map(() => Array(LANE_SLOTS).fill(null));
   const trucks: { in: Truck | null; out: Truck | null } = { in: null, out: null };
+  /** De inkomende vrachtwagens die de WMS heeft aangemeld: hooguit één per dock. */
+  const deliveries: Truck[] = [];
+  /** Leveringen die hier al zijn afgemeld: een stand uit de WMS van net daarvoor mag ze niet terugbrengen. */
+  const departed = new Set<string>();
   /** De pallets in de stellingen, op het nummer van hun sticker. Samen zijn ze gelijk aan `stock`: zie palletize(). */
   const racked = new Map<string, StoredPallet>();
   /**
@@ -261,7 +284,9 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
   const pallets = () => [...racked.values()].map((p) => ({ ...p, unbooked: moved.has(p.id) }));
 
   const order = (id: string) => orders.find((o) => o.id === id);
-  const truck = (id: string) => [trucks.in, trucks.out].find((t) => t?.id === id) ?? null;
+  const truck = (id: string) => [trucks.in, trucks.out, ...deliveries].find((t) => t?.id === id) ?? null;
+  /** De inkomende vrachtwagens: die van de sim zelf en de leveringen uit de WMS. */
+  const inbound = () => [trucks.in, ...deliveries].filter((t): t is Truck => !!t);
   const carriedOrder = () => (carry?.kind === 'order' ? order(carry.orderId) : undefined);
   const openLines = (o: SimOrder) => o.lines.filter((l) => l.picked < l.qty);
   const linesText = (lines: { sku: string; qty: number }[]) => lines.map((l) => `${l.qty}× ${l.sku}`).join(', ');
@@ -305,7 +330,10 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     const { inId } = DOCKS[t.dock];
     const lane = laneIn[t.dock];
     if (!lane.includes(null)) return refused(`${inId} staat vol: zet eerst pallets weg.`);
-    const r = await ask({ type: 'GoodsReceived', sku: pallet.sku, qty: pallet.qty, dockId: inId, palletId: pallet.id });
+    // Een levering uit de WMS is daar al ontvangen: lossen is dan alleen nog fysiek.
+    const r: WmsReply = t.wms
+      ? { ok: true, linked: false }
+      : await ask({ type: 'GoodsReceived', sku: pallet.sku, qty: pallet.qty, dockId: inId, palletId: pallet.id });
     scanned('pallet', pallet.id, r.ok, inId);
     if (!r.ok) return wmsRefused(r);
     const now = truck(truckId);
@@ -314,7 +342,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     now.cargo.splice(i, 1);
     laneIn[t.dock][laneIn[t.dock].lastIndexOf(null)] = pallet; // doorschuiven: de eerste pallet staat het verst de hal in
     touch();
-    return done(`Ontvangen op ${inId}: ${what(pallet)}. Plak er een palletsticker op.`);
+    return done(`Ontvangen op ${inId}: ${what(pallet)}.${pallet.unlabeled ? ' Plak er een palletsticker op.' : ''}`);
   }
 
   /**
@@ -608,6 +636,14 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
 
   /** De pallet die een robot moet halen: op een inslagbaan of in een stelling. Een tekst = dat kan niet. */
   function robotPallet(palletId: string, fromId: string): { point: Point & { level: number }; take(): Pallet } | string {
+    const door = DOCKS.find((x) => x.id === fromId);
+    if (door) {
+      // Lossen: de pallet staat achter in de vrachtwagen aan deze dockdeur
+      const t = inbound().find((x) => x.dock === door.index && x.status === 'checkedIn');
+      const pallet = t?.cargo.find((p) => p.id === palletId);
+      if (!t || !pallet) return `${palletId} staat niet (meer) in een vrachtwagen aan ${fromId}`;
+      return { point: { ...door.truck, level: 1 }, take: () => (t.cargo.splice(t.cargo.indexOf(pallet), 1), pallet) };
+    }
     const d = DOCKS.find((x) => x.inId === fromId);
     if (d) {
       const lane = laneIn[d.index];
@@ -633,6 +669,8 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     };
   }
 
+  const laneRoom = (dock: number) => laneIn[dock]?.filter((p) => !p).length ?? 0;
+
   const robots = createRobotFleet({
     authority: () => authority,
     revision: () => revision,
@@ -650,6 +688,11 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
       return found.take();
     },
     dropSpot(locId, pallet) {
+      const lane = DOCKS.find((d) => d.inId === locId);
+      if (lane) {
+        const slot = laneIn[lane.index].lastIndexOf(null); // doorschuiven: de eerste pallet staat het verst de hal in
+        return slot < 0 ? `${locId} staat vol` : { ...laneSlot(lane.laneIn, slot), slot, level: 1 };
+      }
       const loc = location(locId);
       if (!loc || loc.type === 'dock') return `${locId} is geen stellinglocatie`;
       if (stockAt(locId).some((s) => s.sku !== pallet.sku)) return `op ${locId} staat al een ander artikel`;
@@ -659,12 +702,33 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     },
     level: (locId) => location(locId)?.level || 1,
     drop(locId, pallet, slot) {
+      const lane = DOCKS.find((d) => d.inId === locId);
+      if (lane) return void (laneIn[lane.index][slot] = pallet);
+      delete pallet.counted; // alleen van belang op de inslagbaan
       add(locId, pallet.sku, pallet.qty);
       racked.set(pallet.id, { ...pallet, locationId: locId, slot });
     },
+    async received(pallet, laneId, dockId) {
+      // Een levering uit de WMS is daar al ontvangen (op de dockdeur); anders boekt het lossen de ontvangst.
+      const t = inbound().find((x) => x.dockId === dockId);
+      const r: WmsReply = t?.wms
+        ? { ok: true, linked: false }
+        : await ask({ type: 'GoodsReceived', sku: pallet.sku, qty: pallet.qty, dockId: laneId, palletId: pallet.id });
+      scanned('pallet', pallet.id, r.ok, laneId);
+      return r;
+    },
+    unload: () =>
+      inbound().flatMap((t) =>
+        t.status === 'checkedIn'
+          ? t.cargo.map((p) => ({ palletId: p.id, fromLocationId: t.dockId, toLocationId: DOCKS[t.dock].inId, free: laneRoom(t.dock) }))
+          : [],
+      ),
+    laneRoom: (laneId) => laneRoom(DOCKS.findIndex((d) => d.inId === laneId)),
     inbound: () =>
       DOCKS.flatMap((d) =>
-        laneIn[d.index].flatMap((p) => (p && !p.unlabeled ? [{ palletId: p.id, sku: p.sku, qty: p.qty, locationId: d.inId, z: d.z }] : [])),
+        laneIn[d.index].flatMap((p) =>
+          p && !p.unlabeled && p.counted ? [{ palletId: p.id, sku: p.sku, qty: p.qty, locationId: d.inId, z: d.z }] : [],
+        ),
       ),
     space(sku) {
       const lines = new Map<string, Set<string>>();
@@ -702,6 +766,95 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     },
   });
 
+  // ========== De telrobot (src/sim/counter.ts) ==========
+
+  const lanePallet = (id: string) => {
+    for (const d of DOCKS) {
+      const pallet = laneIn[d.index].find((p) => p?.id === id);
+      if (pallet) return { pallet, dock: d };
+    }
+    return null;
+  };
+
+  /** Telt een pallet op een inslagbaan. Zit er nog geen sticker op, dan plakt de telrobot die (register_pallet). */
+  async function countPallet(id: string): Promise<boolean> {
+    const before = lanePallet(id);
+    if (!before) return false;
+    const { inId } = before.dock;
+    if (before.pallet.unlabeled) {
+      const r = await ask({ type: 'PalletLabeled', palletId: id, sku: before.pallet.sku, qty: before.pallet.qty, locationId: inId });
+      if (!r.ok) return (say(`Telrobot: de WMS weigert de palletsticker voor ${what(before.pallet)} op ${inId}: ${r.error}`, 'err'), false);
+    }
+    const now = lanePallet(id);
+    if (!now) return false; // intussen opgepakt
+    scanned('pallet', id, true, inId);
+    delete now.pallet.unlabeled;
+    now.pallet.counted = true;
+    touch();
+    say(`Telrobot: ${id} geteld op ${inId}: ${what(now.pallet)}. Klaar om weg te zetten.`, 'ok');
+    return true;
+  }
+
+  const counter = createCounter({
+    authority: () => authority,
+    revision: () => revision,
+    enabled: automation,
+    touch: () => touch(),
+    uncounted: () =>
+      DOCKS.flatMap((d) => laneIn[d.index].flatMap((p, i) => (p && !p.counted ? [{ palletId: p.id, ...laneSlot(d.laneIn, i) }] : []))),
+    count: countPallet,
+  });
+
+  // ========== Automatisch: aanmelden en afmelden van inkomende vrachtwagens ==========
+
+  /** Per vrachtwagen: tot wanneer (clock) we na een weigering van de WMS wachten met opnieuw proberen. */
+  const autoRetry = new Map<string, number>();
+  let autoBusy = false;
+  /** Staat de robotsturing aan, dan meldt de hal een inkomende wagen zelf aan, en af zodra hij leeg is. */
+  function automate() {
+    if (autoBusy) return;
+    const run = (id: string, action: Promise<ScanResult>) => {
+      autoBusy = true;
+      void action
+        .then((r) => !r.ok && autoRetry.set(id, clock + 30))
+        .finally(() => (autoBusy = false));
+    };
+    for (const t of inbound()) {
+      if ((autoRetry.get(t.id) ?? 0) > clock) continue;
+      if (t.status === 'waiting') return run(t.id, checkIn(t.id));
+      // Leeg, en geen robot meer onderweg met een pallet uit deze wagen
+      const busy = robots.robots.some((r) => r.task?.fromLocationId === t.dockId || r.loadFrom === t.dockId);
+      if (t.status === 'checkedIn' && t.cargo.length === 0 && !busy) return run(t.id, checkOut(t.id));
+    }
+  }
+
+  /**
+   * De leveringen die de WMS heeft aangemeld: elke nieuwe komt als vrachtwagen aanrijden aan zijn dock, al
+   * aangemeld en met zijn pallets aan boord. Alleen de host doet dit; de rest krijgt ze via de gedeelde wereld.
+   */
+  function syncDeliveries(list: Delivery[]) {
+    const robotLoads = new Set(robots.robots.flatMap((r) => (r.load ? [r.load.id] : [])));
+    const inHall = (id: string) => racked.has(id) || transit.has(id) || robotLoads.has(id) || !!lanePallet(id);
+    let changed = false;
+    for (const d of list) {
+      const dock = DOCKS.findIndex((x) => x.id === d.dockId);
+      if (dock < 0 || truck(d.truckId) || departed.has(d.truckId)) continue;
+      if (inbound().some((t) => t.dock === dock)) continue; // er staat nog een wagen: even wachten
+      if (trucks.out?.dock === dock) {
+        // De WMS heeft dit dock aan de levering gegeven: een uitgaande wagen die nog niet is aangemeld wijkt uit.
+        if (trucks.out.status !== 'arriving' && trucks.out.status !== 'waiting') continue;
+        outDock = chooseOutDock(dock);
+        Object.assign(trucks.out, { dock: outDock, dockId: DOCKS[outDock].id, status: 'arriving', t: 0 });
+      } else if (outDock === dock && !laneOut[dock].some((id) => id)) outDock = chooseOutDock(dock);
+      const cargo = d.pallets
+        .filter((p) => !p.palletId || !inHall(p.palletId)) // staat al in de hal: was al gelost
+        .map((p): Pallet => (p.palletId ? { id: p.palletId, sku: p.sku, qty: p.qty } : { id: newPalletId(), sku: p.sku, qty: p.qty, unlabeled: true }));
+      deliveries.push({ id: d.truckId, direction: 'in', dockId: d.dockId, dock, status: 'arriving', t: 0, cargo, loaded: [], wms: true });
+      changed = true;
+    }
+    if (changed) touch();
+  }
+
   // ========== Interacties rond de speler (E) ==========
 
   type Action = () => Promise<ScanResult> | ScanResult;
@@ -732,6 +885,7 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     const push = (it: Interaction | null, radius: number) => it && list.push({ ...it, radius });
 
     push(truckInteraction(trucks.in), 2.2);
+    for (const t of deliveries) push(truckInteraction(t), 2.2);
     push(truckInteraction(trucks.out), 2.2);
 
     // Per dock: inslaglocatie (pallets oppakken) en uitslaglocatie (orders klaarzetten of oppakken)
@@ -917,12 +1071,13 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
   // ========== Tijd ==========
 
   /** Uitgaand dock: bij voorkeur waar al orders klaarstaan, nooit het dock van de lossende wagen. */
-  function chooseOutDock() {
-    const staged = laneOut.findIndex((lane) => lane.some((id) => id));
-    if (staged >= 0 && staged !== trucks.in?.dock) return staged;
-    let d = rand(DOCKS.length);
-    while (d === trucks.in?.dock) d = rand(DOCKS.length);
-    return d;
+  function chooseOutDock(not = -1) {
+    const taken = new Set([not, ...inbound().map((t) => t.dock)]);
+    const staged = laneOut.findIndex((lane, i) => !taken.has(i) && lane.some((id) => id));
+    if (staged >= 0) return staged;
+    const free = DOCKS.map((d) => d.index).filter((i) => !taken.has(i));
+    // Alle docks bezet: dan toch een willekeurig dock (de WMS weigert het aanmelden tot er een vrij is)
+    return free.length ? free[rand(free.length)] : rand(DOCKS.length);
   }
 
   function spawnTruck(direction: Direction): Truck {
@@ -988,9 +1143,26 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     clock += dt;
     driveTruck('in', dt);
     driveTruck('out', dt);
+    for (let i = deliveries.length - 1; i >= 0; i--) {
+      const t = deliveries[i];
+      if (t.status === 'arriving') {
+        t.t = Math.min(1, t.t + dt / DRIVE_SECONDS);
+        if (t.t < 1) continue;
+        t.status = 'checkedIn'; // de WMS heeft hem al aangemeld
+        say(`${t.id} staat aan ${t.dockId}, aangemeld door de WMS (${plural(t.cargo.length, 'pallet')}).`);
+      } else if (t.status === 'departing') {
+        t.t = Math.max(0, t.t - dt / DRIVE_SECONDS);
+        if (t.t > 0) continue;
+        departed.add(t.id);
+        deliveries.splice(i, 1);
+      }
+    }
     robots.update(dt);
+    counter.update(dt);
     if (!authority) return; // in multiplayer laat alleen de host nieuwe vrachtwagens en testorders ontstaan
-    if (!trucks.in && skus().length > 0 && (inTimer -= dt) <= 0) trucks.in = spawnTruck('in');
+    if (automation()) automate();
+    // Meldt de WMS zelf leveringen aan, dan komen de inkomende wagens daarvandaan (syncDeliveries)
+    if (!trucks.in && !deliveryFeed() && skus().length > 0 && (inTimer -= dt) <= 0) trucks.in = spawnTruck('in');
     const outboundWork = orders.some((o) => ['picking', 'picked', 'staged'].includes(o.status));
     if (!trucks.out && outboundWork && (outTimer -= dt) <= 0) trucks.out = spawnTruck('out');
     if ((orderTimer -= dt) <= 0) {
@@ -1009,11 +1181,13 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
       laneIn,
       laneOut,
       trucks,
+      deliveries,
       outDock,
       forks: [...moved],
       pallets: [...racked.values()],
       transit: [...transit],
       robots: robots.shared(),
+      counter: counter.shared(),
       articles: articles(),
       seq: { truckIn: seq.truckIn, truckOut: seq.truckOut },
     });
@@ -1039,6 +1213,13 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
       if (cur && next && cur.id === next.id && cur.status === next.status) next.t = cur.t; // rijdt hier al: niet verspringen
       trucks[slot] = next;
     }
+    // Een speler met een oudere versie stuurt geen leveringen en geen telrobot
+    const before = [...deliveries];
+    deliveries.splice(0, deliveries.length, ...(s.deliveries ?? []).map((next) => {
+      const cur = before.find((t) => t.id === next.id && t.status === next.status);
+      return cur ? { ...next, t: cur.t } : next; // rijdt hier al: niet verspringen
+    }));
+    counter.applyShared(s.counter);
     outDock = s.outDock;
     moved.clear();
     for (const [id, f] of s.forks ?? []) moved.set(id, f);
@@ -1166,6 +1347,11 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     racked.clear();
     transit.clear();
     robots.reset();
+    counter.reset();
+    // Leveringen die in de WMS nog zijn aangemeld komen bij de volgende stand opnieuw aanrijden
+    deliveries.length = 0;
+    departed.clear();
+    autoRetry.clear();
     carry = null;
     foreign = false; // deze wereld komt uit de eigen WMS
     if (trucks.out) trucks.out.loaded = [];
@@ -1199,6 +1385,11 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     scan,
     loadSnapshot,
     syncOrders,
+    syncDeliveries,
+    /** De inkomende vrachtwagens die de WMS heeft aangemeld. */
+    get deliveries(): readonly Truck[] { return deliveries; },
+    /** De telrobot bij de inslagbanen (src/sim/counter.ts). */
+    counter,
     dropCarried,
     get trucks() { return trucks; },
     get laneIn() { return laneIn; },

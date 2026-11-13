@@ -1,13 +1,15 @@
 import { onProcessEvent } from '../sim/events';
+import { DOCKS } from '../sim/layout';
 import type { RobotFleet, RobotTask } from '../sim/robots';
 import { robotApi } from './wmsGateway';
 
 // Haalt de robotopdrachten op waar de Geek+-robots mee werken (src/sim/robots.ts).
 // - Kent de WMS-client de robotacties (docs/wms/08), dan komen de opdrachten uit de WMS: die is leidend.
 // - Zolang dat niet zo is (de mock, of een WMS waar de robots nog niet in zitten) speelt dit bestand de
-//   robotsturing van de WMS na: elke pallet met sticker op een inslagbaan krijgt een opdracht naar een vrije
-//   locatie in de stellingen (eerst de vloer, dan hoger), en een lege vloerlocatie wordt aangevuld met een pallet
-//   van erboven. Het verplaatsen zelf wordt dan in de WMS geboekt met confirm_putaway.
+//   robotsturing van de WMS na: elke pallet in een aangemelde vrachtwagen krijgt een losopdracht naar de inslagbaan
+//   van dat dock, elke getelde pallet met sticker op een inslagbaan een opdracht naar een vrije locatie in de
+//   stellingen (eerst de vloer, dan hoger), en een lege vloerlocatie wordt aangevuld met een pallet van erboven.
+//   Het verplaatsen zelf wordt dan in de WMS geboekt met confirm_putaway.
 // In multiplayer doet alleen de host dit; de andere spelers krijgen de robots via de gedeelde wereld.
 
 const POLL_SECONDS = 2;
@@ -45,7 +47,7 @@ export function createRobotDispatch({
     if (e.type !== 'RobotTaskFailed' && e.type !== 'RobotTaskCompleted') return;
     const task = issued.get(e.taskId);
     issued.delete(e.taskId);
-    if (!task || e.type !== 'RobotTaskFailed') return;
+    if (!task || e.type !== 'RobotTaskFailed' || task.kind === 'unload') return; // lossen kan later opnieuw
     if (!avoid.has(task.palletId)) avoid.set(task.palletId, new Set());
     avoid.get(task.palletId)!.add(task.toLocationId);
   });
@@ -62,16 +64,28 @@ export function createRobotDispatch({
       ...fleet.stranded().map((s) => ({ ...s, locationId: s.fromLocationId, floorOnly: s.kind !== 'fork', z: fleet.robots.find((r) => r.id === s.robotId)?.z ?? 0 })),
       ...fleet.inbound().map((p) => ({ ...p, floorOnly: false })),
     ];
-    const add = (palletId: string, fromLocationId: string, toLocationId: string) => {
-      const task = { id: `RT-${stamp}-${String(seq++).padStart(3, '0')}`, palletId, fromLocationId, toLocationId };
+    const add = (palletId: string, fromLocationId: string, toLocationId: string, kind?: 'unload') => {
+      const task: RobotTask = { id: `RT-${stamp}-${String(seq++).padStart(3, '0')}`, palletId, fromLocationId, toLocationId, ...(kind && { kind }) };
       issued.set(task.id, task);
       waiting.push(task);
       planned.add(palletId);
       targeted.set(toLocationId, (targeted.get(toLocationId) ?? 0) + 1);
     };
+    // Lossen: een pallet uit een aangemelde vrachtwagen naar de inslagbaan van dat dock, zolang daar plek is
+    for (const u of fleet.unload()) {
+      if (waiting.length >= MAX_WAITING) break;
+      if (planned.has(u.palletId) || u.free <= (targeted.get(u.toLocationId) ?? 0)) continue;
+      add(u.palletId, u.fromLocationId, u.toLocationId, 'unload');
+    }
     for (const w of work) {
       if (waiting.length >= MAX_WAITING) break;
       if (planned.has(w.palletId)) continue;
+      // Bij het lossen blijven steken (de baan was vol): alsnog naar de inslagbaan, daar wordt hij eerst geteld
+      const door = DOCKS.find((d) => d.id === w.locationId);
+      if (door) {
+        if (fleet.laneRoom(door.inId) > (targeted.get(door.inId) ?? 0)) add(w.palletId, door.id, door.inId, 'unload');
+        continue;
+      }
       const spot = fleet
         .space(w.sku)
         // een pallet die op een tilrobot staat kan alleen naar de vloer

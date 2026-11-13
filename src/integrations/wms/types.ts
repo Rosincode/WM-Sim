@@ -14,6 +14,13 @@ export type WmsLocation = Location & { level?: number; blocked?: boolean };
 /** Pallet met sticker zoals de WMS hem kent (entiteit `pallet`): `id` is het nummer op de sticker. */
 export type WmsPallet = { id: string; sku: string; qty: number; locationId: string };
 
+/**
+ * Een inkomende vrachtwagen die in de WMS is aangemeld (`truck_visit`, status checked_in), met zijn ontvangsten.
+ * De ontvangst is in de WMS al geboekt: de voorraad staat daar op de dockdeur (`dockId`, bijvoorbeeld DOCK-03).
+ * `palletId` ontbreekt als de ontvangst zonder pallet is geboekt.
+ */
+export type WmsDelivery = { truckId: string; dockId: string; pallets: { palletId?: string; sku: string; qty: number }[] };
+
 /** Eén interface voor zowel de echte WMS als de mock. Alle sleutels zijn de tekstsleutels (SKU-001, DOCK-01, ORD-…, PAL-…). */
 export interface WmsClient {
   readonly mode: 'live' | 'mock';
@@ -48,6 +55,11 @@ export interface WmsClient {
   loadOrder(p: { orderId: string; truckId: string }): Promise<void>;
   truckCheckIn(p: { truckId: string; direction: 'in' | 'out'; dockId: string }): Promise<void>;
   truckCheckOut(p: { truckId: string }): Promise<void>;
+  /**
+   * De inkomende vrachtwagens die de WMS zelf heeft aangemeld (de flow 'Simulatie: leveringen en orders').
+   * Ontbreekt bij een WMS die geen leveringen aanmaakt (de mock): dan laat de hal zelf vrachtwagens komen.
+   */
+  getDeliveries?(): Promise<WmsDelivery[]>;
   /** Logboek van scans; verandert niets aan de voorraad. */
   logScan(p: { kind: 'truck' | 'pallet' | 'location' | 'order'; barcode: string; ok: boolean; locationId?: string }): Promise<void>;
   /**
