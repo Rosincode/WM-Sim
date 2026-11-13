@@ -10,6 +10,7 @@ import { FORK_ROBOT_BODY, createForkRobot } from './scene/forkRobot';
 import { ROBOT_DECK, ROBOT_HALF, createGeekRobot, createRobotCharger } from './scene/geekRobot';
 import { PICK_ROBOT_BODY, PICK_ROBOT_CAGE, createPickRobot } from './scene/pickRobot';
 import type { Hall, Solid } from './scene/warehouse';
+import type { SoundSource } from './sounds';
 
 // De Geek+-robots in beeld: de tilrobots, de robot-heftrucks, de pickrobots en de voorraadteller, wat ze dragen,
 // hun laadstations (één per pad aan het eind ervan, de overige ertussen) en het onderdeel 'Robots' in het menu.
@@ -64,6 +65,8 @@ export function mountRobots({
       lift: 0,
       /** Hoe lang (s) de pickrobot al met deze greep bezig is. */
       grab: 0,
+      /** Hoe ver (0..1) de arm van de pickrobot is uitgeschoven. */
+      reach: 0,
       /** Botsvlakken voor de speler: de robot zelf (draait mee) en wat hij draagt (draait met de robot mee). */
       pose: { x: 0, z: 0, r: 0 },
       loadPose: { x: 0, z: 0, r: 0 },
@@ -147,6 +150,14 @@ export function mountRobots({
 
   let panelRefresh = 0;
   return {
+    /** Voor het geluid (src/ui/sounds.ts): waar elke robot is en hoe ver alles wat heft of uitschuift staat. */
+    sources: views.map((v): SoundSource => ({
+      get x() { return v.robot.x; },
+      get z() { return v.robot.z; },
+      get r() { return v.robot.r; },
+      get lift() { return v.robot.fork + v.lift * 0.06 + v.reach * 0.3; },
+      get waiting() { return fleet.waiting(v.robot); },
+    })),
     update(dt: number) {
       for (const v of views) {
         const { robot: r, mesh } = v;
@@ -177,6 +188,7 @@ export function mountRobots({
           v.grab = r.phase === 'picking' ? v.grab + dt : 0;
           const t = Math.min(1, v.grab / ROBOT_PICK_SECONDS);
           const reach = r.phase !== 'picking' ? 0 : t < 0.35 ? smooth(t / 0.35) : t < 0.5 ? 1 : t < 0.85 ? 1 - smooth((t - 0.5) / 0.35) : 0;
+          v.reach = reach;
           v.picker.setArm(r.fork, reach, r.phase === 'picking' && t >= 0.45 && t < 0.9);
           v.picker.setCage(r.order ? orderFill(r.order) : null);
         }

@@ -26,6 +26,7 @@ import { SceneRenderPass } from './ui/sceneRenderPass';
 import { menu } from './ui/menu';
 import { createPrompts, esc, type Prompt } from './ui/prompts';
 import { createEditor } from './ui/editor';
+import { createSounds, objectSource } from './ui/sounds';
 
 // De WMS-koppeling loopt via de poort van de sim (src/sim/wms.ts, ingevuld in src/ui/wmsGateway.ts):
 // elke handeling wacht op het antwoord van de WMS. De bridge op de bus (startWmsBridge) start daarom
@@ -348,6 +349,13 @@ const robots = mountRobots({
     ];
   },
 });
+// --- Geluid van alles wat rijdt: motor, wielen, hydrauliek en piepers (src/ui/sounds.ts) ---
+const sounds = createSounds();
+sounds.add('forklift', objectSource(forklift.group, () => forklift.forkHeight));
+sounds.add('jack', objectSource(jack.group, () => jack.lift));
+for (const s of robots.sources) sounds.add('robot', s);
+const ear = new THREE.Vector3();
+
 const jackDistance = () => Math.hypot(player.position.x - jack.group.position.x, player.position.z - jack.group.position.z);
 const nearJack = () => jackDistance() < 2.2 && player.position.y < 1;
 if (import.meta.env.DEV) Object.assign((window as unknown as { wmDebug: object }).wmDebug, { jack });
@@ -470,6 +478,10 @@ renderer.setAnimationLoop((now) => {
   printer.update(dt, player.position);
   warehouse.update(dt);
   robots.update(dt);
+  // In het overzicht luister je op de plek waar je naar kijkt, anders vanuit de camera
+  if (view.mode === 'overview') ear.copy(controls.target);
+  else camera.getWorldPosition(ear);
+  sounds.update(dt, ear, camera);
 
   // Toetsprompts: wat kun je hier doen, en met welke toets
   const list: Prompt[] = [];

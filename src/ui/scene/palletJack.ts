@@ -298,6 +298,10 @@ export function createPalletJack({ hall, bounds, take, place, onStockChange, loo
     get held() {
       return held;
     },
+    /** Hoe hoog (m) de vorken nu gepompt staan. */
+    get lift() {
+      return lift * LIFT;
+    },
     get hint() {
       return hint;
     },
