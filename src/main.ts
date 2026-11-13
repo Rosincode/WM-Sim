@@ -194,7 +194,7 @@ const handheld = createHandheld({
 const tabletApp = createTabletApp({ camera, display: handheld.tabletDisplay, onClose: () => handheld.setFocus(false) });
 
 let driving = false;
-/** De stoel in het kantoor waar de speler op zit (achter een bureau met de WMS-app), anders null. */
+/** De stoel waar de speler op zit (in het kantoor achter een bureau met de WMS-app, of in de kantine), anders null. */
 let chair: THREE.Object3D | null = null;
 /** Bewerkmodus voor de indeling van de hal (src/ui/editor.ts); werkt alleen in het overzicht. */
 let editor: ReturnType<typeof createEditor> | undefined;
@@ -285,6 +285,7 @@ window.addEventListener('keydown', (e) => {
     if (chair) standUp();
     else if (driving) setDriving(false);
     else if (jack.held) holdJack(false);
+    else if (nearSeat()) sitDown(nearSeat()!);
     else if (nearJack() && !(nearForklift() && forkliftDistance() < jackDistance())) {
       if (!multiplayer?.jackHolder()) holdJack(true);
     } else if (nearForklift() && !multiplayer?.forkliftDriver()) setDriving(true);
@@ -305,18 +306,31 @@ const warehouse = mountWarehouse({
   onPcOpen: (desk) => sitDown(hall.desks.find((d) => d.display === desk.display)!.seat),
 });
 
-// --- Bureaustoel: E bij een bureau in het kantoor = gaan zitten en de WMS openen, R = opstaan ---
+// --- Stoelen: R bij een stoel (kantoor of kantine) = gaan zitten, R = opstaan. E bij een bureau = gaan zitten en de WMS openen ---
 const CHAIR_HUD =
   '<b>WM-Sim — Aan het bureau</b><br><b>E</b>: de WMS-app op het scherm bedienen (Esc: scherm loslaten) · Muis: rondkijken<br><b>R</b>: opstaan · <b>V</b>: first/third person · <b>C</b>: overzicht';
+const SEAT_HUD = '<b>WM-Sim — Op een stoel</b><br>Muis: rondkijken<br><b>R</b>: opstaan · <b>V</b>: first/third person · <b>C</b>: overzicht';
+/** De dichtstbijzijnde stoel binnen bereik waar de speler (lopend, op de vloer) op kan gaan zitten, anders null. */
+function nearSeat() {
+  if (chair || driving || jack.held || player.position.y > 0.5) return null;
+  let best: THREE.Object3D | null = null;
+  let bestD = 1.1;
+  for (const s of hall.seats) {
+    const d = Math.hypot(player.position.x - s.position.x, player.position.z - s.position.z);
+    if (d < bestD) [best, bestD] = [s, d];
+  }
+  return best;
+}
 function sitDown(seat: THREE.Object3D) {
   if (chair || driving || jack.held) return;
   chair = seat;
+  const atDesk = hall.desks.some((d) => d.seat === seat);
   view.setVehicle({
     object: seat,
     seat: new THREE.Vector3(0, CHAIR_HEAD_Y, 0),
     eye: new THREE.Vector3(0, CHAIR_EYE_Y, 0.05),
-    hud: CHAIR_HUD,
-    pitch: -0.25, // blik op het scherm
+    hud: atDesk ? CHAIR_HUD : SEAT_HUD,
+    pitch: atDesk ? -0.25 : -0.1, // aan het bureau: blik op het scherm
     chase: { back: 2.6, up: 2.3, lookY: 1.1 },
   });
 }
@@ -586,6 +600,8 @@ renderer.setAnimationLoop((now) => {
       list.push({ key: 'R', html: 'Uitstappen' });
     } else if (jack.held) {
       // loslaten (R) staat al in de aanwijzing van de pompwagen
+    } else if (nearSeat()) {
+      list.push({ key: 'R', html: 'Gaan zitten' });
     } else if (nearJack() && !(nearForklift() && forkliftDistance() < jackDistance())) {
       const holder = multiplayer?.jackHolder();
       list.push(holder ? { html: `De pompwagen is in gebruik door ${esc(holder)}`, off: true } : { key: 'R', html: 'Pompwagen pakken' });

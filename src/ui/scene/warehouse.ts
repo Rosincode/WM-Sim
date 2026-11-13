@@ -1024,6 +1024,8 @@ export function createWarehouse(scene: THREE.Scene) {
     solids: () => solids,
     loadHeight,
     scanTargets,
+    /** Alle stoelen (kantoor en kantine) als zitplek: plek op de vloer, voorkant = +z. */
+    seats: rooms.seats,
     setPallets,
     setLoose,
     /** De pallets die nu in de stellingen staan. */

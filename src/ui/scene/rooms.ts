@@ -258,6 +258,16 @@ export function createRooms({ scene, roof, solid }: Options) {
   scene.add(screens);
   const screenMat = onTop(new THREE.MeshBasicMaterial({ color: '#0b0d10' }));
   const desks: OfficeDesk[] = [];
+  /** Elke stoel als zitplek: op de vloer onder de stoel, voorkant (+z) waar je heen kijkt als je zit. */
+  const seats: THREE.Object3D[] = [];
+  const seatAt = (x: number, z: number, ry: number) => {
+    const seat = new THREE.Object3D();
+    seat.position.set(x, 0, z);
+    seat.rotation.y = ry;
+    screens.add(seat);
+    seats.push(seat);
+    return seat;
+  };
   for (const dz of [-1.35, 1.35]) {
     const deskX = office.minX + OUTER + 0.44;
     const chairX = deskX + 0.64; // aangeschoven: de zitting raakt net de rand van het blad
@@ -269,10 +279,8 @@ export function createRooms({ scene, roof, solid }: Options) {
     display.position.set(deskX - 0.182, 1.06, z);
     display.rotation.y = QUARTER;
     // De stoel als zitplek: voorkant (+z) naar het bureau
-    const seat = new THREE.Object3D();
-    seat.position.set(chairX, 0, z);
-    seat.rotation.y = -QUARTER;
-    screens.add(display, seat);
+    const seat = seatAt(chairX, z, -QUARTER);
+    screens.add(display);
     desks.push({ display, ...DESK_SCREEN, x: chairX, z, seat });
   }
   for (let i = 0; i < 3; i++) place(cabinet(), office.maxX - WALL / 2 - 0.25, office.minZ + 1.5 + i * 0.85, -QUARTER, [0.8, 0.45, 1.3]);
@@ -289,6 +297,8 @@ export function createRooms({ scene, roof, solid }: Options) {
     for (const dx of [-0.6, 0, 0.6]) {
       place(chair(), tableX + dx, tz - 0.62, 0);
       place(chair(), tableX + dx, tz + 0.62, Math.PI);
+      seatAt(tableX + dx, tz - 0.62, 0);
+      seatAt(tableX + dx, tz + 0.62, Math.PI);
     }
   }
   place(vendingMachine(), canteen.minX + WALL / 2 + 0.42, frontZ - 1.2, QUARTER, [0.95, 0.8, 1.85]);
@@ -337,5 +347,5 @@ export function createRooms({ scene, roof, solid }: Options) {
     { minX: all.minX, maxX: all.maxX, minZ: back, maxZ: frontZ },
     ...ROOM_DOORS.map((d): Rect => ({ minX: d.from, maxX: d.to, minZ: frontZ - 0.5, maxZ: HALL_WALL + 0.7 })),
   ];
-  return { walkable, desks };
+  return { walkable, desks, seats };
 }
