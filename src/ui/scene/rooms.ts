@@ -53,6 +53,18 @@ export const ROOM_DOORS = [
   door('KANTINE', doorAt(WALKWAY_X, canteen, 0.6), 0.6),
 ];
 
+/** Beeldvlak van de monitor op een kantoorbureau (m): 16:9, net binnen de behuizing. */
+const DESK_SCREEN = { w: 0.52, h: 0.52 * (9 / 16) };
+/** Bovenkant van de zitting van een stoel (m). */
+const CHAIR_SEAT = 0.485;
+/** Wie op een stoel zit: hoogte van de heupen, en waar hoofd en ogen dan zitten (m boven de vloer). */
+export const CHAIR_HIP_Y = CHAIR_SEAT + 0.09;
+export const CHAIR_HEAD_Y = CHAIR_HIP_Y + 0.56;
+export const CHAIR_EYE_Y = CHAIR_HIP_Y + 0.68;
+
+/** Werkplek in het kantoor: het beeldvlak van de monitor (w × h m) en de stoel ervoor (op x, z; voorkant = +z van `seat`). */
+export type OfficeDesk = { display: THREE.Object3D; w: number; h: number; x: number; z: number; seat: THREE.Object3D };
+
 type Part = [THREE.Material, THREE.BufferGeometry];
 type Opening = { from: number; to: number; y0: number; y1: number; glass?: boolean };
 
@@ -241,9 +253,27 @@ export function createRooms({ scene, roof, solid }: Options) {
   // ---------- Kantoor: twee bureaus aan het raam met uitzicht op het terrein, kasten langs de tussenwand ----------
   const QUARTER = Math.PI / 2;
   const officeMidZ = (office.minZ + office.maxZ) / 2;
+  // Op elk bureau draait de WMS-app (src/ui/pcScreen.ts legt hem over het beeldvlak); je gaat ervoor op de stoel zitten.
+  const screens = new THREE.Group();
+  scene.add(screens);
+  const screenMat = onTop(new THREE.MeshBasicMaterial({ color: '#0b0d10' }));
+  const desks: OfficeDesk[] = [];
   for (const dz of [-1.35, 1.35]) {
-    place(desk(), office.minX + OUTER + 0.44, officeMidZ + dz, QUARTER, [1.6, 0.8, 0.76]);
-    place(chair(), office.minX + OUTER + 1.18, officeMidZ + dz, -QUARTER);
+    const deskX = office.minX + OUTER + 0.44;
+    const chairX = deskX + 0.64; // aangeschoven: de zitting raakt net de rand van het blad
+    const z = officeMidZ + dz;
+    place(desk(), deskX, z, QUARTER, [1.6, 0.8, 0.76]);
+    place(chair(), chairX, z, -QUARTER);
+    // Beeldvlak (16:9) vlak voor de monitor, naar de stoel gericht
+    const display = new THREE.Mesh(new THREE.PlaneGeometry(DESK_SCREEN.w, DESK_SCREEN.h), screenMat);
+    display.position.set(deskX - 0.182, 1.06, z);
+    display.rotation.y = QUARTER;
+    // De stoel als zitplek: voorkant (+z) naar het bureau
+    const seat = new THREE.Object3D();
+    seat.position.set(chairX, 0, z);
+    seat.rotation.y = -QUARTER;
+    screens.add(display, seat);
+    desks.push({ display, ...DESK_SCREEN, x: chairX, z, seat });
   }
   for (let i = 0; i < 3; i++) place(cabinet(), office.maxX - WALL / 2 - 0.25, office.minZ + 1.5 + i * 0.85, -QUARTER, [0.8, 0.45, 1.3]);
   place(plant(), office.maxX - 0.5, office.minZ + 0.6);
@@ -307,5 +337,5 @@ export function createRooms({ scene, roof, solid }: Options) {
     { minX: all.minX, maxX: all.maxX, minZ: back, maxZ: frontZ },
     ...ROOM_DOORS.map((d): Rect => ({ minX: d.from, maxX: d.to, minZ: frontZ - 0.5, maxZ: HALL_WALL + 0.7 })),
   ];
-  return { walkable };
+  return { walkable, desks };
 }

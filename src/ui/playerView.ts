@@ -23,8 +23,12 @@ interface Options {
 
 type Zone = { minX: number; maxX: number; minZ: number; maxZ: number };
 
-/** Voertuig waarin de speler zit: `seat` is de plek van de speler, `eye` die van de camera in first person (lokaal). */
-type Vehicle = { object: THREE.Object3D; seat: THREE.Vector3; eye?: THREE.Vector3 };
+/**
+ * Voertuig (of stoel) waarin de speler zit: `seat` is de plek van de speler, `eye` die van de camera in first person (lokaal).
+ * Voor een stoel: `hud` = eigen uitleg van de besturing, `pitch` = kijkhoek bij het gaan zitten, `chase` = volgcamera in
+ * third person (afstand erachter, hoogte, en de hoogte waar hij naar kijkt).
+ */
+type Vehicle = { object: THREE.Object3D; seat: THREE.Vector3; eye?: THREE.Vector3; hud?: string; pitch?: number; chase?: { back: number; up: number; lookY: number } };
 
 const EYE_HEIGHT = 1.6;
 const SEAT_PITCH = -0.3; // zittend kijk je iets omlaag: stuur en handen onder in beeld
@@ -90,7 +94,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
 
   const drivingText =
     '<b>WM-Sim — Heftruck</b><br>W/S: rijden · A/D: sturen · <b>↑/↓</b>: vorken heffen/zakken · <b>H</b>: toeteren · Muis: rondkijken<br><b>1</b>: scanner · <b>2</b>: tablet (F: dichtbij) in je rechterhand<br>Oppakken: vorken onder de pallet en heffen · Neerzetten: zakken<br><b>R</b>: uitstappen · <b>V</b>: first/third person · <b>C</b>: overzicht';
-  const refreshHud = () => (hud.innerHTML = (vehicle && mode !== 'overview' ? drivingText : hudText[mode]) + processKeys);
+  const refreshHud = () => (hud.innerHTML = (vehicle && mode !== 'overview' ? (vehicle.hud ?? drivingText) : hudText[mode]) + processKeys);
 
   function setMode(m: ViewMode) {
     mode = m;
@@ -102,7 +106,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
       camera.position.set(-48, 58, 82); // schuin van voren: dockgevel en voorgevel in beeld
       controls.target.set(-6, 0, 2);
     } else if (m === 'first') {
-      pitch = vehicle ? SEAT_PITCH : 0;
+      pitch = vehicle ? (vehicle.pitch ?? SEAT_PITCH) : 0;
     }
     refreshHud();
     onModeChange?.(m);
@@ -161,9 +165,10 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
         camera.rotation.set(pitch, o.rotation.y + Math.PI + lookYaw, 0, 'YXZ');
       } else {
         forward.set(Math.sin(o.rotation.y), 0, Math.cos(o.rotation.y));
-        camTarget.copy(o.position).addScaledVector(forward, -7.5).setY(4.5);
+        const chase = vehicle.chase ?? { back: 7.5, up: 4.5, lookY: 1.6 };
+        camTarget.copy(o.position).addScaledVector(forward, -chase.back).setY(chase.up);
         camera.position.lerp(camTarget, 1 - Math.exp(-dt * 5));
-        camera.lookAt(o.position.x, 1.6, o.position.z);
+        camera.lookAt(o.position.x, chase.lookY, o.position.z);
       }
       return;
     }
@@ -300,7 +305,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   function setVehicle(v: Vehicle | null) {
     vehicle = v;
     lookYaw = 0;
-    pitch = v ? SEAT_PITCH : 0;
+    pitch = v ? (v.pitch ?? SEAT_PITCH) : 0;
     player.visible = mode !== 'first' || !!v || body;
     player.position.y = 0;
     velY = 0;

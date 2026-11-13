@@ -16,6 +16,7 @@ import { createRadio } from './ui/radio';
 import { createPrinter } from './ui/printer';
 import { DESK, START } from './sim/layout';
 import { createExterior } from './ui/scene/exterior';
+import { CHAIR_EYE_Y, CHAIR_HEAD_Y, CHAIR_HIP_Y } from './ui/scene/rooms';
 import { createCharacter, type HandTarget } from './ui/scene/character';
 import { wms } from './integrations/wms';
 import { mountWarehouse } from './ui/warehouse';
@@ -173,6 +174,8 @@ const handheld = createHandheld({
 const tabletApp = createTabletApp({ camera, display: handheld.tabletDisplay, onClose: () => handheld.setFocus(false) });
 
 let driving = false;
+/** De stoel in het kantoor waar de speler op zit (achter een bureau met de WMS-app), anders null. */
+let chair: THREE.Object3D | null = null;
 /** Bewerkmodus voor de indeling van de hal (src/ui/editor.ts); werkt alleen in het overzicht. */
 let editor: ReturnType<typeof createEditor> | undefined;
 
@@ -187,9 +190,10 @@ function applyMode(mode: ViewMode) {
   scene.background = overview ? OUTSIDE : INSIDE;
   // In de heftruck: linkerhand op het stuur, scanner/tablet in de rechterhand, eigen lichaam (zonder hoofd) in beeld
   // Met de pompwagen: beide handen op de handgreep, dus geen scanner of tablet in beeld
-  handheld.setActive(mode === 'first' && !pushing);
+  // Aan het bureau: handen bij het toetsenbord, dus ook geen scanner of tablet
+  handheld.setActive(mode === 'first' && !pushing && !chair);
   handheld.setSeated(driving);
-  character.setFirstPerson(mode === 'first' && (driving || pushing));
+  character.setFirstPerson(mode === 'first' && (driving || pushing || !!chair));
 }
 
 const BOUNDS = { minX: -HALL.w / 2 + 0.6, maxX: HALL.w / 2 - 0.6, minZ: -HALL.d / 2 + 0.6, maxZ: HALL.d / 2 - 0.6 };
@@ -221,7 +225,8 @@ window.addEventListener('keydown', (e) => {
   const t = e.target;
   if (e.code === 'KeyR' && !e.repeat && !(t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement)) {
     // R: uitstappen of loslaten; anders pakken wat het dichtst bij is (heftruck of pompwagen)
-    if (driving) setDriving(false);
+    if (chair) standUp();
+    else if (driving) setDriving(false);
     else if (jack.held) holdJack(false);
     else if (nearJack() && !(nearForklift() && forkliftDistance() < jackDistance())) {
       if (!multiplayer?.jackHolder()) holdJack(true);
@@ -231,7 +236,42 @@ window.addEventListener('keydown', (e) => {
 });
 
 // Processim (vrachtwagens, banen, taken). De voorraad in de stellingen tekent de hal zelf.
-const warehouse = mountWarehouse({ scene, camera, player, rackStock: false, perPallet: hall.palletCapacity });
+// Aan de bureaus in het kantoor draait dezelfde WMS-app als op de pc in de hal; daar ga je bij zitten.
+const warehouse = mountWarehouse({
+  scene,
+  camera,
+  player,
+  rackStock: false,
+  perPallet: hall.palletCapacity,
+  desks: hall.desks.map((d) => ({ ...d, radius: 1.3, label: () => (chair ? 'Pc gebruiken: WMS openen' : 'Gaan zitten en de WMS openen') })),
+  onPcOpen: (desk) => sitDown(hall.desks.find((d) => d.display === desk.display)!.seat),
+});
+
+// --- Bureaustoel: E bij een bureau in het kantoor = gaan zitten en de WMS openen, R = opstaan ---
+const CHAIR_HUD =
+  '<b>WM-Sim — Aan het bureau</b><br><b>E</b>: de WMS-app op het scherm bedienen (Esc: scherm loslaten) · Muis: rondkijken<br><b>R</b>: opstaan · <b>V</b>: first/third person · <b>C</b>: overzicht';
+function sitDown(seat: THREE.Object3D) {
+  if (chair || driving || jack.held) return;
+  chair = seat;
+  view.setVehicle({
+    object: seat,
+    seat: new THREE.Vector3(0, CHAIR_HEAD_Y, 0),
+    eye: new THREE.Vector3(0, CHAIR_EYE_Y, 0.05),
+    hud: CHAIR_HUD,
+    pitch: -0.25, // blik op het scherm
+    chase: { back: 2.6, up: 2.3, lookY: 1.1 },
+  });
+}
+function standUp() {
+  const seat = chair;
+  if (!seat) return;
+  chair = null;
+  warehouse.closePc();
+  view.setVehicle(null);
+  // achter de stoel gaan staan, met het gezicht naar het bureau
+  player.position.set(seat.position.x - Math.sin(seat.rotation.y) * 0.6, 0, seat.position.z - Math.cos(seat.rotation.y) * 0.6);
+  player.rotation.y = seat.rotation.y;
+}
 warehouse.onWmsData((data) => handheld.setData(data)); // wat de scanner over een locatie laat zien komt uit de WMS
 const refreshHall = () => {
   hall.setPallets(warehouse.pallets());
@@ -332,6 +372,8 @@ const multiplayer = params.has('solo')
         return { x: on.x, z: on.z, y: on.lift ? player.position.y - forklift.forkHeight : undefined };
       },
       seatHipY: forklift.seat.y - 0.56,
+      chairHipY: CHAIR_HIP_Y,
+      isSitting: () => !!chair,
       isDriving: () => driving,
       look: () => (view.mode === 'first' ? view.look : { yaw: 0, pitch: 0 }),
       tool: () => (view.mode !== 'first' ? 0 : handheld.tool === 'scanner' ? 1 : 2),
@@ -419,7 +461,7 @@ renderer.setAnimationLoop((now) => {
       jack.grip(-1, jackHands[1].point);
       [leftHand, rightHand] = jackHands;
     }
-    character.update(dt, { seated: driving, seatHipY: forklift.seat.y - 0.56, carrying: warehouse.carrying(), leftHand, rightHand, walk: view.walk, airborne: view.airborne });
+    character.update(dt, { seated: driving || !!chair, seatHipY: chair ? CHAIR_HIP_Y : forklift.seat.y - 0.56, carrying: warehouse.carrying(), leftHand, rightHand, walk: view.walk, airborne: view.airborne });
   }
 
   multiplayer?.update(dt);
@@ -438,7 +480,9 @@ renderer.setAnimationLoop((now) => {
     if (action) list.push({ key: 'E', html: esc(action.label), off: !action.enabled });
     if (handheld.aimed)
       list.push({ key: 'Klik', html: `${handheld.aimed.startsWith('PAL-') ? 'Palletsticker' : 'Label'} <b>${esc(handheld.aimed)}</b> scannen` });
-    if (driving) {
+    if (chair) {
+      list.push({ key: 'R', html: 'Opstaan' });
+    } else if (driving) {
       list.push({ key: 'R', html: 'Uitstappen' });
     } else if (jack.held) {
       // loslaten (R) staat al in de aanwijzing van de pompwagen

@@ -24,6 +24,21 @@ import { mountWmsPanel } from './wmsPanel';
 
 /** Binnen deze afstand van de pc opent E de WMS-app; verder weglopen sluit hem. */
 const PC_RADIUS = 2;
+
+/**
+ * Extra werkplek met de WMS-app naast de pc in de hal (de bureaus in het kantoor): het beeldvlak van de monitor
+ * (w × h m, beeld naar +z) en de plek (x, z) waar je binnen `radius` m met E het scherm opent.
+ */
+export interface PcDesk {
+  display: THREE.Object3D;
+  w: number;
+  h: number;
+  x: number;
+  z: number;
+  radius: number;
+  /** Tekst van de toetsprompt zolang het scherm dicht is. */
+  label?: () => string;
+}
 /** Hoe vaak de stand uit de WMS wordt opgehaald (ms). */
 const POLL_MS = 3000;
 /** Hoe vaak artikelen en locaties (stamgegevens) opnieuw worden opgehaald (ms). */
@@ -38,6 +53,8 @@ export function mountWarehouse({
   player,
   rackStock = true,
   perPallet,
+  desks = [],
+  onPcOpen,
 }: {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
@@ -46,6 +63,10 @@ export function mountWarehouse({
   rackStock?: boolean;
   /** Stuks op een volle pallet van een artikel. */
   perPallet?: (sku: string) => number;
+  /** Werkplekken met de WMS-app naast de pc in de hal (de bureaus in het kantoor). */
+  desks?: PcDesk[];
+  /** De speler opent het scherm van zo'n werkplek (E): daar gaat hij bijvoorbeeld bij zitten. */
+  onPcOpen?: (desk: PcDesk) => void;
 }) {
   // Elke speler heeft zijn eigen mock-WMS. Zodra de wereld (mede) van een andere speler komt, loopt die mock
   // niet meer gelijk en slaan we hem over; de echte WMS is voor iedereen dezelfde en blijft altijd leidend.
@@ -127,17 +148,27 @@ export function mountWarehouse({
   let action: { label: string; enabled: boolean } | null = null;
 
   const pos = () => ({ x: player.position.x, z: player.position.z });
-  const nearPc = () => dist(pos(), POINTS.terminal) <= PC_RADIUS;
+  /** De werkplek uit het kantoor waar de speler bij staat of zit, anders null. */
+  const nearDesk = () => desks.find((d) => dist(pos(), d) <= d.radius) ?? null;
+  const nearPc = () => dist(pos(), POINTS.terminal) <= PC_RADIUS || !!nearDesk();
 
-  // De pc toont alleen de echte WMS-app: al zichtbaar op de monitor als je langsloopt, met E te bedienen.
-  const pc = createPcScreen({ camera, display: view.pcDisplay, world: scene });
+  // De pc's tonen alleen de echte WMS-app: al zichtbaar op de monitor als je langsloopt, met E te bedienen.
+  const pc = createPcScreen({
+    camera,
+    displays: [{ object: view.pcDisplay, w: 0.7, h: 0.7 * (9 / 16) }, ...desks.map((d) => ({ object: d.display, w: d.w, h: d.h }))],
+    world: scene,
+  });
 
   window.addEventListener('keydown', (e) => {
     const t = e.target;
     if (e.repeat || t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return;
     if (e.code === 'KeyE') {
       if (pc.isOpen) pc.close();
-      else if (nearPc()) pc.open();
+      else if (nearPc()) {
+        pc.open();
+        const desk = nearDesk();
+        if (desk) onPcOpen?.(desk);
+      }
       else sim.interact(pos());
     }
     if (e.code === 'KeyL') menu.toggle('log');
@@ -323,6 +354,8 @@ export function mountWarehouse({
     onReset(l: () => void) {
       resetListeners.push(l);
     },
+    /** Het scherm van de pc sluiten (bijvoorbeeld als de speler opstaat van zijn bureau). */
+    closePc: () => pc.close(),
     /** Voor de heftruck en de pompwagen: hele pallets uit en in de stellingen. */
     forkliftTake: sim.forkliftTake,
     forkliftPlace: sim.forkliftPlace,
@@ -349,7 +382,7 @@ export function mountWarehouse({
       hud.update(dt);
       const it = near ? null : sim.interactionAt(pos());
       action = near
-        ? { label: pc.isOpen ? 'Pc verlaten' : 'Pc gebruiken: WMS openen', enabled: true }
+        ? { label: pc.isOpen ? 'Pc verlaten' : (nearDesk()?.label?.() ?? 'Pc gebruiken: WMS openen'), enabled: true }
         : it && { label: it.label, enabled: !!it.enabled };
 
       // Direct na een handeling de stand opnieuw ophalen, verder op een vast ritme.

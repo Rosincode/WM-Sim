@@ -866,6 +866,8 @@ export function createWarehouse(scene: THREE.Scene) {
     colliders,
     /** Waar de speler buiten de hal mag lopen: de deuren naar en de kamers van de aanbouw (kantoor, kantine). */
     walkable: rooms.walkable,
+    /** De bureaus in het kantoor: monitor met de WMS-app en de stoel waarop je ervoor gaat zitten. */
+    desks: rooms.desks,
     /** Alles waar de speler tegenaan loopt of op kan staan: stellingen, pallets in de stellingen en vaste aankleding. */
     solids: () => solids,
     loadHeight,

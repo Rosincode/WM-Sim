@@ -31,6 +31,7 @@ type Pose = {
   x: number; y: number; z: number;
   /** Draaiing */ r: number;
   /** Rijdt in de heftruck */ d: 0 | 1;
+  /** Zit op een stoel (aan een bureau in het kantoor) */ s?: 1;
   /** Draagt: '' | 'order' | artikel van de pallet */ c: string;
   /** Stand van de heftruck, alleen als deze speler rijdt */ f?: ForkliftState;
   /** Kijkrichting: omhoog/omlaag */ p: number;
@@ -86,6 +87,10 @@ interface Options {
   scans(): number;
   /** Hoogte van de heupen van iemand die in de heftruck zit. */
   seatHipY: number;
+  /** Hoogte van de heupen van iemand die op een stoel zit. */
+  chairHipY: number;
+  /** Zit deze speler op een stoel (aan een bureau)? */
+  isSitting(): boolean;
   isDriving(): boolean;
   /** Twee spelers stapten tegelijk in: deze speler moet er weer uit. */
   leaveForklift(): void;
@@ -434,6 +439,7 @@ export function mountMultiplayer(o: Options) {
       fv: faceVer,
     };
     if (pose.d) pose.f = o.forklift.getState();
+    else if (o.isSitting()) pose.s = 1;
     if (o.jack.held()) pose.pj = o.jack.getState();
     const on = pose.d ? null : o.rider();
     if (on) pose.v = { x: round(on.x), z: round(on.z), ...(on.y !== undefined && { y: round(on.y) }) };
@@ -501,6 +507,7 @@ export function mountMultiplayer(o: Options) {
           room.send('fq', { to: from.id });
         }
       }
+      if (data.s === 1 && data.d !== 1) a.pose.s = 1;
       if (isObj(data.v) && data.d !== 1) {
         const { x, z, y } = data.v;
         a.pose.v = { x: THREE.MathUtils.clamp(num(x), -4, 4), z: THREE.MathUtils.clamp(num(z), -4, 4) };
@@ -745,8 +752,9 @@ export function mountMultiplayer(o: Options) {
         a.look.yaw += (a.pose.ly - a.look.yaw) * k;
         a.look.pitch += (a.pose.p - a.look.pitch) * k;
         a.scanT = Math.max(0, a.scanT - dt);
-        const seated = a.pose.d === 1;
-        if (seated) o.forklift.steeringGrip(a.wheelHand.point, a.wheelHand.normal!);
+        const driving = a.pose.d === 1;
+        const seated = driving || a.pose.s === 1;
+        if (driving) o.forklift.steeringGrip(a.wheelHand.point, a.wheelHand.normal!);
         const pushing = !seated && !!a.pose.pj; // duwt de pompwagen: beide handen op de handgreep
         if (pushing) {
           o.jack.grip(1, a.jackHands[0].point);
@@ -754,14 +762,14 @@ export function mountMultiplayer(o: Options) {
         }
         a.character.update(dt, {
           seated,
-          seatHipY: o.seatHipY,
+          seatHipY: driving ? o.seatHipY : o.chairHipY,
           carrying: !!a.pose.c,
           look: a.look,
           tool: a.pose.t === 1 ? 'scanner' : a.pose.t === 2 ? 'tablet' : undefined,
           scan: a.scanT / 0.4,
           walk,
           airborne: a.pose.j === 1,
-          leftHand: seated ? a.wheelHand : pushing ? a.jackHands[0] : undefined,
+          leftHand: driving ? a.wheelHand : pushing ? a.jackHands[0] : undefined,
           rightHand: pushing ? a.jackHands[1] : undefined,
         });
         a.tag.set(a.pose.n, a.color);

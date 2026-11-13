@@ -1,16 +1,18 @@
 import * as THREE from 'three';
 import { createAppFrame } from './wmsApp';
 
-// Het scherm van de pc in het magazijn: alleen de echte WMS-app (iframe). Eén HTML-element in twee standen:
+// Het scherm van de pc's (de werkplek in het magazijn en de bureaus in het kantoor): alleen de echte WMS-app (iframe).
+// Er is één app voor alle schermen: hij ligt op de monitor die het dichtst bij de camera staat. Eén HTML-element in twee standen:
 // - in de wereld: het ligt perspectivisch over het beeldvlak van de 3D-monitor, zodat je de app al ziet
 //   als je langsloopt (alleen kijken; verborgen als er iets voor staat of je achter het scherm staat);
 // - geopend (E bij de pc): groot midden in beeld en te bedienen. Sluit met Esc, E, het kruisje of weglopen.
 // Een iframe kan niet als textuur in WebGL; daarom een HTML-laag bovenop het canvas.
 
-/** Schermresolutie van de pc in CSS-pixels: full HD, zoals een gewone monitor (beeldvlak 0,7 m breed, 16:9). */
+/** Schermresolutie van de pc in CSS-pixels: full HD, zoals een gewone monitor (beeldvlak 16:9). */
 const W = 1920;
 const H = 1080;
-const SCREEN = { w: 0.7, h: 0.7 * (9 / 16) };
+/** Beeldvlak van een monitor in de 3D-scène: een vlak van w × h meter, het beeld naar zijn +z-kant. */
+export type PcDisplay = { object: THREE.Object3D; w: number; h: number };
 /** Verder weg dan dit (m) tonen we de app niet in de wereld. */
 const MAX_DISTANCE = 40;
 
@@ -30,13 +32,13 @@ const css = `
 
 interface Options {
   camera: THREE.PerspectiveCamera;
-  /** Het beeldvlak van de monitor in de 3D-scène. */
-  display: THREE.Object3D;
+  /** De beeldvlakken van de monitoren in de 3D-scène (minstens één). */
+  displays: PcDisplay[];
   /** Wortel voor de zichtlijn-controle (de scène). */
   world: THREE.Object3D;
 }
 
-export function createPcScreen({ camera, display, world }: Options) {
+export function createPcScreen({ camera, displays, world }: Options) {
   const style = document.createElement('style');
   style.textContent = css;
   document.head.appendChild(style);
@@ -98,59 +100,58 @@ export function createPcScreen({ camera, display, world }: Options) {
   const CORNERS: [number, number][] = [[-0.5, 0.5], [0.5, 0.5], [0.5, -0.5], [-0.5, -0.5]];
   const px = [0, 0, 0, 0];
   const py = [0, 0, 0, 0];
-  let blocked = false;
-  let sightTimer = 0;
+  /** Per monitor: afstand tot de camera en of er iets voor staat (dat laatste wordt niet elk beeld bepaald). */
+  const screens = displays.map((d) => ({ ...d, distance: 0, blocked: false, sightTimer: 0 }));
+  type Screen = (typeof screens)[number];
 
   /** Telt dit object als obstakel? Niet: onzichtbaar (eigen lichaam in first person), labels, doorzichtige
    *  markeringen, wat de speler vasthoudt en de pc zelf. */
-  function solid(object: THREE.Object3D) {
+  function solid(object: THREE.Object3D, s: Screen) {
     if ((object as THREE.Sprite).isSprite) return false;
     const mat = (object as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
     if (mat && !Array.isArray(mat) && mat.transparent && mat.opacity < 0.6) return false;
     for (let o: THREE.Object3D | null = object; o; o = o.parent) {
-      if (!o.visible || o === camera || o === display.parent) return false;
+      if (!o.visible || o === camera || o === s.object.parent) return false;
     }
     return true;
   }
 
   /** Staat er iets tussen de camera en het scherm? (midden en beide zijkanten) */
-  function sightBlocked() {
+  function sightBlocked(s: Screen) {
     for (const sx of [0, -0.4, 0.4]) {
-      target.set(sx * SCREEN.w, 0, 0).applyMatrix4(display.matrixWorld);
+      target.set(sx * s.w, 0, 0).applyMatrix4(s.object.matrixWorld);
       const far = dir.copy(target).sub(camPos).length();
       raycaster.set(camPos, dir.divideScalar(far));
       raycaster.far = far - 0.05;
       for (const hit of raycaster.intersectObject(world, true)) {
-        if (solid(hit.object)) return true;
+        if (solid(hit.object, s)) return true;
       }
     }
     return false;
   }
 
-  /** Legt het frame over het beeldvlak; false als het scherm niet (goed) in beeld is. */
-  function placeInWorld(dt: number) {
-    camera.updateWorldMatrix(true, false);
-    display.updateWorldMatrix(true, false);
-    camPos.setFromMatrixPosition(camera.matrixWorld);
+  /** Legt het frame over het beeldvlak van deze monitor; false als die niet (goed) in beeld is. */
+  function place(s: Screen, dt: number) {
+    const display = s.object;
     center.setFromMatrixPosition(display.matrixWorld);
-    const distance = camPos.distanceTo(center);
-    if (distance > MAX_DISTANCE) return false;
+    if (s.distance > MAX_DISTANCE) return false;
     normal.set(0, 0, 1).transformDirection(display.matrixWorld);
-    if (normal.dot(dir.copy(camPos).sub(center)) < 0.2 * distance) return false; // achter of te schuin
+    if (normal.dot(dir.copy(camPos).sub(center)) < 0.2 * s.distance) return false; // achter of te schuin
 
-    viewProj.copy(camera.matrixWorld).invert().premultiply(camera.projectionMatrix);
     for (let i = 0; i < 4; i++) {
-      v.set(CORNERS[i][0] * SCREEN.w, CORNERS[i][1] * SCREEN.h, 0, 1).applyMatrix4(display.matrixWorld).applyMatrix4(viewProj);
+      v.set(CORNERS[i][0] * s.w, CORNERS[i][1] * s.h, 0, 1).applyMatrix4(display.matrixWorld).applyMatrix4(viewProj);
       if (v.w < 0.05) return false; // hoek achter de camera
       px[i] = (v.x / v.w * 0.5 + 0.5) * window.innerWidth;
       py[i] = (-v.y / v.w * 0.5 + 0.5) * window.innerHeight;
     }
+    // Helemaal buiten beeld: geen zichtlijn nodig
+    if (Math.max(...px) < 0 || Math.min(...px) > window.innerWidth || Math.max(...py) < 0 || Math.min(...py) > window.innerHeight) return false;
 
-    if ((sightTimer -= dt) <= 0) {
-      sightTimer = 0.2;
-      blocked = sightBlocked();
+    if ((s.sightTimer -= dt) <= 0) {
+      s.sightTimer = 0.2;
+      s.blocked = sightBlocked(s);
     }
-    if (blocked) return false;
+    if (s.blocked) return false;
 
     // Projectieve afbeelding van de rechthoek W×H op de vier hoekpunten
     const dx1 = px[1] - px[2], dx2 = px[3] - px[2], sx = px[0] - px[1] + px[2] - px[3];
@@ -167,6 +168,20 @@ export function createPcScreen({ camera, display, world }: Options) {
     ];
     setTransform(`matrix3d(${m.map((n) => +n.toFixed(7)).join(',')})`);
     return true;
+  }
+
+  /** Legt het frame op de dichtstbijzijnde monitor die in beeld is; false als er geen te zien is. */
+  function placeInWorld(dt: number) {
+    camera.updateWorldMatrix(true, false);
+    camPos.setFromMatrixPosition(camera.matrixWorld);
+    viewProj.copy(camera.matrixWorld).invert().premultiply(camera.projectionMatrix);
+    for (const s of screens) {
+      s.object.updateWorldMatrix(true, false);
+      s.distance = center.setFromMatrixPosition(s.object.matrixWorld).distanceTo(camPos);
+    }
+    screens.sort((a, b) => a.distance - b.distance);
+    for (const s of screens) if (place(s, dt)) return true;
+    return false;
   }
 
   return {
