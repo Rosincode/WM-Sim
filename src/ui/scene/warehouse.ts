@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { AISLE_Z, DOCKS, DOCK_PITCH, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROW_FACE, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, WALKWAY_X, rowBehind, type Bay } from '../../sim/layout';
+import { AISLE_Z, DOCKS, DOCK_PITCH, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROW_FACE, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, WALKWAY_X, location, rackLocationId, rowBehind, rowName, type Bay } from '../../sim/layout';
 import { createRooms, ROOM_DOORS } from './rooms';
 import { onTop } from './style';
 import * as tex from './textures';
@@ -470,7 +470,7 @@ export function createWarehouse(scene: THREE.Scene) {
         decks.add(bx, y + 0.004, z0, SECTION_PITCH - 0.1, 0.006, 0.95);
         solid(bx, z0, SECTION_PITCH - 0.09, 1.05, y - 0.13, y + 0.007); // liggers met roosterdek: je loopt eronderdoor of staat erop
       }
-      const base = `R${r + 1}-${String(s + 1).padStart(2, '0')}`;
+      const base = rackLocationId(r, s, 1).slice(0, -2);
       // Labels op de liggers: niveau 1 en 2 delen de onderste ligger (pijl omlaag / omhoog), daarboven elk zijn eigen ligger
       const spots = LEVEL_Y.map((_, l): [string, number, number, 'up' | 'down'] => [
         `${base}-${l + 1}`,
@@ -487,7 +487,7 @@ export function createWarehouse(scene: THREE.Scene) {
       }
     });
     // Kopbescherming en rij-aanduiding
-    const rowSign = onTop(new THREE.MeshStandardMaterial({ map: tex.sign(`R${r + 1}`, '#17346b', '#ffffff'), roughness: 0.5 }));
+    const rowSign = onTop(new THREE.MeshStandardMaterial({ map: tex.sign(rowName(r), '#17346b', '#ffffff'), roughness: 0.5 }));
     for (const [x, ry] of [[RACK_MIN_X - 0.36, -Math.PI / 2], [RACK_MAX_X + 0.36, Math.PI / 2]] as const) {
       if (block) {
         // één kopbescherming per blok: twee rijen rug-aan-rug delen hem
@@ -620,15 +620,10 @@ export function createWarehouse(scene: THREE.Scene) {
   }
 
   function slotsFor(id: string): [number, number, number][] | null {
-    const rack = /^R(\d+)-(\d+)-(\d+)$/.exec(id);
-    if (rack) {
-      const z = ROW_Z[+rack[1] - 1];
-      const x = BAY_X[+rack[2] - 1];
-      const y = LEVEL_Y[+rack[3] - 1];
-      if (z === undefined || x === undefined || y === undefined) return null;
-      return SLOT_DX.map((dx) => [x + dx, y === 0 ? 0 : y + 0.01, z]);
-    }
-    return null;
+    const loc = location(id);
+    const y = loc && loc.type !== 'dock' ? LEVEL_Y[loc.level - 1] : undefined;
+    if (!loc || y === undefined) return null;
+    return SLOT_DX.map((dx) => [loc.x + dx, y === 0 ? 0 : y + 0.01, loc.z]);
   }
 
   const CARTON_SIZES: [number, number, number][] = [
@@ -847,7 +842,7 @@ export function createWarehouse(scene: THREE.Scene) {
     ROW_Z.forEach((_, r) =>
       BAY_X.forEach((_, s) =>
         LEVEL_Y.forEach((_, l) => {
-          const locId = `R${r + 1}-${String(s + 1).padStart(2, '0')}-${l + 1}`;
+          const locId = rackLocationId(r, s, l + 1);
           const used = usedSlots.get(locId);
           slotsFor(locId)!.forEach(([sx, sy, sz], index) => {
             if (used?.has(index) || Math.abs(height - sy) > 1.3) return;

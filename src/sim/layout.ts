@@ -6,7 +6,9 @@
 //                   minstens twee), met palletsPerLocation palletplekken naast elkaar per locatie.
 //                   De rijen staan rug-aan-rug: rij 1 staat alleen, daarna pad, rij 2 en 3 tegen elkaar, pad,
 //                   rij 4 en 5, enzovoort. Elke rij is dus vanaf één pad te bereiken. rowPitch = afstand tussen
-//                   twee rijen aan weerszijden van een pad, backToBackPitch = tussen twee rijen rug-aan-rug
+//                   twee rijen aan weerszijden van een pad, backToBackPitch = tussen twee rijen rug-aan-rug.
+//                   De codes volgen het pad: R1A en R1B zijn de linker- en de rechterstelling van pad 1
+//                   (gezien vanaf de dockkant), R2A en R2B die van pad 2, enzovoort
 //   docks           dockdeuren in de westwand (x = -width/2), elk met een inslag- en een uitslagbaan
 //   desk            bureau met de pc; radio en printer staan erop (dx/dz ten opzichte van het bureau)
 //   rollContainers  lege rolcontainers: hier begin je aan een order
@@ -130,6 +132,18 @@ export const DOCK_PITCH = docks.pitch;
 export const DOCK_Z = range(docks.count, docks.firstZ, docks.pitch);
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
+/**
+ * De code van stellingrij r (vanaf 0): het nummer van zijn pad met A of B. Loop je vanaf de dockkant het pad in,
+ * dan staat stelling A links (noord) en stelling B rechts (zuid): R1A, R1B, R2A, R2B, ...
+ */
+export const rowName = (r: number) => `R${ROW_AISLE[r] + 1}${r % 2 ? 'B' : 'A'}`;
+/** De code van een stellinglocatie: rij, sectie (vanaf 0) en niveau (vanaf 1), bijvoorbeeld R3B-07-2. */
+export const rackLocationId = (r: number, s: number, level: number) => `${rowName(r)}-${pad2(s + 1)}-${level}`;
+/**
+ * Zet een stellingcode van vóór de dubbele stellingen (R1-01-1: rijen doorgenummerd) om naar de huidige
+ * (R1A-01-1). Zo blijft voorraad uit een gedeelde hal van een oudere versie op dezelfde rij staan.
+ */
+export const currentLocationId = (id: string) => id.replace(/^R(\d+)(?=-\d\d-\d$)/, (old, n) => (ROW_Z[n - 1] === undefined ? old : rowName(n - 1)));
 const WALL_X = -HALL.w / 2;
 /** Midden van de banen (x); elke baan is een rij van LANE_SLOTS palletplekken vanaf het dock de hal in. */
 const LANE_X = WALL_X + docks.lanes.distanceFromWall;
@@ -174,7 +188,7 @@ export const LOCATIONS: SimLocation[] = (() => {
   ROW_Z.forEach((z, r) =>
     SECTION_X.forEach((x, s) => {
       for (let level = 1; level <= racks.levelHeights.length; level++) {
-        const id = `R${r + 1}-${pad2(s + 1)}-${level}`;
+        const id = rackLocationId(r, s, level);
         locs.push({ id, type: level === 1 ? 'pick' : 'rack', x, z, level });
       }
     }),

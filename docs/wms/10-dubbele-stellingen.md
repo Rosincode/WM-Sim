@@ -1,9 +1,12 @@
-# 10 — Dubbele stellingen: 16 rijen rug-aan-rug
+# 10 — Dubbele stellingen: 8 paden met een stelling A en B
 
-De stellingen in de hal staan nu rug-aan-rug, zoals in een echt magazijn: rij 1 staat alleen, daarna
-komt een pad, rij 2 en 3 staan met de ruggen tegen elkaar, weer een pad, rij 4 en 5, enzovoort. Elke
-rij is daardoor nog maar vanaf één pad te bereiken. Op dezelfde vloer passen zo 16 rijen in plaats
-van 11.
+De stellingen in de hal staan nu rug-aan-rug, zoals in een echt magazijn. Tussen de stellingen
+liggen 8 paden; aan elk pad staan twee stellingen tegenover elkaar: **stelling A** links en
+**stelling B** rechts (gezien als je vanaf de dockkant het pad in loopt). Elke stelling is alleen
+vanaf zijn eigen pad te bereiken.
+
+De stellingcodes volgen daarom het pad: `R1A` en `R1B` zijn de twee stellingen van pad 1, `R2A` en
+`R2B` die van pad 2, enzovoort. Op dezelfde vloer staan nu 16 stellingen in plaats van 11.
 
 Het datamodel en de acties veranderen niet. Alleen de **locaties** en de **robots** wijzigen. Dit
 document vervangt paragraaf 3 van `05-grotere-hal-locaties.md`; de docklocaties (paragraaf 2 daar)
@@ -13,51 +16,63 @@ blijven gelijk.
 
 | | Oud | Nieuw |
 |---|---|---|
-| Stellingrijen | 11 (`R1` … `R11`) | 16 (`R1` … `R16`) |
+| Stellingen | 11 rijen (`R1` … `R11`) | 8 paden × 2 stellingen (`R1A`, `R1B` … `R8A`, `R8B`) |
 | Stellinglocaties | 11 × 7 × 3 = 231 | 16 × 7 × 3 = 336 |
 | Totaal locaties (met de 30 docklocaties) | 261 | 366 |
-| Paden tussen de stellingen | 10 | 8 |
-| Robots | 10 | 8 |
+| Padrobots (tilrobots en robot-heftrucks) | 10 | 8 |
 
-- De bestaande codes `R1-01-1` t/m `R11-07-3` blijven geldig; alleen hun `pos_y` wijzigt. Voorraad
-  en pallets op die locaties kunnen blijven staan.
-- Er komen 105 locaties bij: `R12-01-1` t/m `R16-07-3`.
+- **Alle stellingcodes wijzigen.** De 231 bestaande locaties krijgen een nieuwe `location_id` en een
+  nieuwe `pos_y` (paragraaf 2); er komen 105 locaties bij (`R6B` t/m `R8B`).
+- Hernoem de bestaande locaties in plaats van ze te verwijderen en opnieuw aan te maken: voorraad,
+  pallets en historie blijven dan op dezelfde fysieke stelling staan.
 - `pos_x`, `level` en `location_type` blijven zoals in 05: sectie 01 t/m 07 op `pos_x` -8, -4, 0, 4,
   8, 12, 16; niveau 1 is `pick`, niveau 2 en 3 zijn `rack`.
+- `location_id` = `R{pad}{A of B}-{sectie:2 cijfers}-{niveau}`, bijvoorbeeld `R3B-07-2`. Het
+  padnummer heeft geen voorloopnul.
 
-## 2. Stellinglocaties (336)
+## 2. Van oude naar nieuwe code
 
-`location_id` = `R{rij}-{sectie:2 cijfers}-{niveau}`, het rijnummer zonder voorloopnul (`R1` … `R16`).
+Alleen het deel vóór het eerste streepje verandert; sectie en niveau blijven gelijk
+(`R4-05-2` wordt `R2B-05-2`).
 
-`pos_y` per rij:
+| Oud | Nieuw | pos_y |
+|---|---|---|
+| `R1` | `R1A` | -24.5 |
+| `R2` | `R1B` | -19.5 |
+| `R3` | `R2A` | -18.2 |
+| `R4` | `R2B` | -13.2 |
+| `R5` | `R3A` | -11.9 |
+| `R6` | `R3B` | -6.9 |
+| `R7` | `R4A` | -5.6 |
+| `R8` | `R4B` | -0.6 |
+| `R9` | `R5A` | 0.7 |
+| `R10` | `R5B` | 5.7 |
+| `R11` | `R6A` | 7 |
+| nieuw | `R6B` | 12 |
+| nieuw | `R7A` | 13.3 |
+| nieuw | `R7B` | 18.3 |
+| nieuw | `R8A` | 19.6 |
+| nieuw | `R8B` | 24.6 |
 
-| Rij | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
-|---|---|---|---|---|---|---|---|---|
-| pos_y | -24.5 | -19.5 | -18.2 | -13.2 | -11.9 | -6.9 | -5.6 | -0.6 |
+Als formule, voor pad `p` (1 t/m 8): stelling A ligt op `pos_y` = -24.5 + (p − 1) × 6.3, stelling B
+5 hoger. Het pad zelf ligt er middenin: `pos_y` = -22 + (p − 1) × 6.3.
 
-| Rij | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 |
-|---|---|---|---|---|---|---|---|---|
-| pos_y | 0.7 | 5.7 | 7 | 12 | 13.3 | 18.3 | 19.6 | 24.6 |
+De oude en de nieuwe codes overlappen niet (de nieuwe hebben altijd een letter), dus de volgorde
+van hernoemen maakt niet uit.
 
-Als formule, met `n` = rij − 1: `pos_y` = -24.5 + ⌊n / 2⌋ × 6.3 + (n oneven ? 5 : 0).
+De game vergelijkt zijn locaties met die van de WMS (WMS-paneel in het menu). Locaties die de WMS
+niet kent kunnen daar met één knop worden aangemaakt of als CSV worden gedownload. Zonder hernoemen
+ziet de game alle 336 stellinglocaties als ontbrekend en de 231 oude als onbekend in de hal; maak ze
+dan niet met de knop aan, want dan staat de voorraad nog op de oude codes.
 
-De game vergelijkt zijn locaties met die van de WMS (WMS-paneel in het menu): ontbrekende locaties
-kunnen daar met één knop worden aangemaakt of als CSV worden gedownload, en locaties met een andere
-positie worden als afwijkend gemeld. De posities van `R1` … `R11` moeten in de WMS zelf worden
-bijgewerkt.
+De hal zelf zet voorraad die nog onder een oude code staat automatisch om naar de nieuwe.
 
-## 3. Paden
+## 3. Paden en looproutes
 
-Voor wie in de WMS met looproutes of padnummers wil werken: pad `p` (1 t/m 8) ligt tussen rij
-2p − 1 en rij 2p, op `pos_y` = -22 + (p − 1) × 6.3.
-
-| Pad | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
-|---|---|---|---|---|---|---|---|---|
-| Rijen | 1 en 2 | 3 en 4 | 5 en 6 | 7 en 8 | 9 en 10 | 11 en 12 | 13 en 14 | 15 en 16 |
-| pos_y | -22 | -15.7 | -9.4 | -3.1 | 3.2 | 9.5 | 15.8 | 22.1 |
-
-Twee locaties in hetzelfde pad liggen dus tegenover elkaar; een picker of robot hoeft voor beide
-niet van pad te wisselen. De game gebruikt de padnummers niet in de aanroepen naar de WMS.
+Twee stellingen met hetzelfde nummer liggen tegenover elkaar in hetzelfde pad: een picker of robot
+hoeft voor `R3A` en `R3B` niet van pad te wisselen. Het padnummer is dus af te leiden uit de
+`location_id` en hoeft geen apart veld te zijn. Sorteren op `location_id` geeft nu ook een logische
+looproute (pad voor pad); met 8 paden is er geen `R10` meer die vóór `R2` sorteert.
 
 ## 4. Robots
 
@@ -66,10 +81,12 @@ Elk pad heeft zijn eigen robot, om en om een tilrobot (`GKP`, alleen niveau 1) e
 
 `GKP-01`, `GKF-02`, `GKP-03`, `GKF-04`, `GKP-05`, `GKF-06`, `GKP-07`, `GKF-08`
 
-`GKP-09` en `GKF-10` bestaan niet meer in de hal. Staan ze in de entiteit `robot` (zie 08), zet ze
-dan op niet-actief of verwijder ze; lopende opdrachten horen er niet meer op te staan.
+Het nummer van de robot is het nummer van zijn pad. `GKP-09` en `GKF-10` bestaan niet meer in de
+hal. Staan ze in de entiteit `robot` (zie 08), zet ze dan op niet-actief of verwijder ze; lopende
+opdrachten horen er niet meer op te staan. De robots zonder eigen pad (de pickrobots en de
+telrobot) wijzigen niet.
 
 ## 5. Gevolgen voor de acties
 
-Geen nieuwe acties of velden. De tekstsortering van `location_id` (zie 05, paragraaf 4) blijft
-gelden: `R10` … `R16` komen vóór `R2`.
+Geen nieuwe acties of velden. Controles op het formaat van `location_id` (als die er zijn) moeten
+de letter na het padnummer toestaan.

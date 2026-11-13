@@ -2,7 +2,7 @@ import type { Item, Order } from '../shared/contract';
 import { publish, type Direction, type ProcessEvent, type ScanKind } from './events';
 import { articles, isBlocked, skus } from './catalog';
 import {
-  DOCKS, LANE_SLOTS, LOCATIONS, PER_PALLET, POINTS, SLOT_DX,
+  DOCKS, LANE_SLOTS, LOCATIONS, PER_PALLET, POINTS, SLOT_DX, currentLocationId,
   dist, lanePoint, laneSlot, location, shelfLocations, type Dock, type Point,
 } from './layout';
 import { createCounter } from './counter';
@@ -1299,7 +1299,11 @@ export function createWarehouse({
   function applyShared(s: ReturnType<typeof sharedState>) {
     foreign = true;
     stock.clear();
-    for (const [k, qty] of s.stock) stock.set(k, qty);
+    // Een hal van vóór de dubbele stellingen heeft de oude stellingcodes (R1-01-1): omzetten naar R1A-01-1
+    for (const [k, qty] of s.stock) {
+      const [loc, sku] = k.split('|');
+      stock.set(key(currentLocationId(loc), sku), qty);
+    }
     // Een speler met een oudere versie stuurt orders zonder picks/wmsStatus: aanvullen.
     orders.splice(0, orders.length, ...s.orders.map((o) => ({
       ...o,
@@ -1324,9 +1328,9 @@ export function createWarehouse({
     counter.applyShared(s.counter);
     outDock = s.outDock;
     moved.clear();
-    for (const [id, f] of s.forks ?? []) moved.set(id, f);
+    for (const [id, f] of s.forks ?? []) moved.set(id, { ...f, locationId: currentLocationId(f.locationId), at: f.at && currentLocationId(f.at) });
     racked.clear();
-    for (const p of s.pallets ?? []) racked.set(p.id, p);
+    for (const p of s.pallets ?? []) racked.set(p.id, { ...p, locationId: currentLocationId(p.locationId) });
     seeding = !s.pallets; // een speler met een oudere versie stuurt geen pallets: palletize() maakt ze, met sticker
     palletize();
     seeding = false;
