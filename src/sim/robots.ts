@@ -1,5 +1,5 @@
 import type { ProcessEvent } from './events';
-import { HALL, LEVEL_Y, ROW_Z, SECTION_PITCH, SECTION_X, dist, type Point } from './layout';
+import { AISLE_Z, HALL, LEVEL_Y, ROW_AISLE, ROW_Z, SECTION_PITCH, SECTION_X, dist, type Point } from './layout';
 import type { Pallet } from './warehouse';
 import type { WmsReply } from './wms';
 
@@ -94,8 +94,8 @@ export const ROBOT_FORK_REACH = 0.75;
 /** Onder dit percentage neemt een robot geen nieuwe opdracht aan: eerst laden. */
 const LOW_BATTERY = 25;
 const RACK_MAX_X = SECTION_X[SECTION_X.length - 1] + SECTION_PITCH / 2;
-/** De paden tussen de stellingrijen (z); pad i ligt tussen rij i en rij i + 1. */
-export const ROBOT_AISLES = ROW_Z.slice(1).map((z, i) => (ROW_Z[i] + z) / 2);
+/** De paden tussen de stellingen (z). De rijen staan rug-aan-rug: een pad heeft aan weerszijden een rij. */
+export const ROBOT_AISLES = AISLE_Z;
 /** De robotbaan (x) aan de oostkant: daar wisselen de robots van pad. Rijden naar +z gaat rechts, naar -z links. */
 export const ROBOT_CORRIDOR_X = Math.min(RACK_MAX_X + 3, HALL.w / 2 - 3.4);
 const LANE = 0.55;
@@ -118,11 +118,10 @@ const parkPose = (i: number) =>
 
 const angle = (to: number, from: number) => Math.atan2(Math.sin(to - from), Math.cos(to - from));
 const nearestAisle = (z: number) => ROBOT_AISLES.reduce((best, az, i) => (Math.abs(az - z) < Math.abs(ROBOT_AISLES[best] - z) ? i : best), 0);
-/** Vanuit welke paden is dit punt te bereiken? Een stellingrij vanaf beide kanten, een inslagbaan vanuit het pad ervoor. */
+/** Vanuit welke paden is dit punt te bereiken? Een stellingrij alleen vanuit zijn eigen pad, een inslagbaan vanuit het pad ervoor. */
 function aislesFor(p: Point): number[] {
   const row = ROW_Z.findIndex((z) => Math.abs(z - p.z) < 0.01);
-  if (row < 0) return [nearestAisle(p.z)];
-  return [row - 1, row].filter((a) => a >= 0 && a < ROBOT_AISLES.length);
+  return [row < 0 ? nearestAisle(p.z) : ROW_AISLE[row]];
 }
 
 export function createRobotFleet(world: RobotWorld) {

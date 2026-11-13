@@ -3,7 +3,10 @@
 //
 //   hall            binnenmaat van het gebouw; het midden ligt op (0, 0)
 //   racks           stellingen: rijen (langs z) x secties (langs x) x niveaus (levelHeights = hoogte per niveau,
-//                   minstens twee), met palletsPerLocation palletplekken naast elkaar per locatie
+//                   minstens twee), met palletsPerLocation palletplekken naast elkaar per locatie.
+//                   De rijen staan rug-aan-rug: rij 1 staat alleen, daarna pad, rij 2 en 3 tegen elkaar, pad,
+//                   rij 4 en 5, enzovoort. Elke rij is dus vanaf één pad te bereiken. rowPitch = afstand tussen
+//                   twee rijen aan weerszijden van een pad, backToBackPitch = tussen twee rijen rug-aan-rug
 //   docks           dockdeuren in de westwand (x = -width/2), elk met een inslag- en een uitslagbaan
 //   desk            bureau met de pc; radio en printer staan erop (dx/dz ten opzichte van het bureau)
 //   rollContainers  lege rolcontainers: hier begin je aan een order
@@ -54,6 +57,7 @@ export function modelError(m: unknown): string | null {
   if (!count(racks.rows) || !count(racks.sections)) return 'racks.rows en racks.sections: een geheel getal van 1 t/m 40';
   if (!count(racks.palletsPerLocation)) return 'racks.palletsPerLocation: een geheel getal vanaf 1';
   if (racks.rowPitch <= 0 || racks.sectionPitch <= 0 || racks.palletPitch <= 0) return 'racks: tussenafstanden moeten groter dan 0 zijn';
+  if (racks.backToBackPitch < 1.2) return 'racks.backToBackPitch: minstens 1,2 m, anders raken de rijen rug-aan-rug elkaar';
   const levels = racks.levelHeights;
   if (levels.length < 2 || levels[0] !== 0 || levels.some((y, i) => i > 0 && y <= levels[i - 1]))
     return 'racks.levelHeights: minstens twee niveaus, oplopend vanaf 0';
@@ -103,10 +107,25 @@ const pose = (p: { x: number; z: number; rotation: number }): Pose => ({ x: p.x,
 /** Binnenmaat van de hal (m); het midden ligt op (0, 0). De docks zitten in de westwand (x = -w/2). */
 export const HALL = { w: hall.width, d: hall.depth, h: hall.height };
 
-/** Secties per stelling (x) en stellingrijen (z); standaard ligt elk dock recht voor een pad. */
+/**
+ * Afstand (z) van rij r (vanaf 0) tot de eerste rij. De rijen staan rug-aan-rug: rij 0 alleen, dan een pad,
+ * rij 1 en 2 tegen elkaar, een pad, rij 3 en 4, enzovoort.
+ */
+export const rowOffset = (r: number, m: Pick<WarehouseModel['racks'], 'rowPitch' | 'backToBackPitch'> = racks) =>
+  Math.floor(r / 2) * (m.rowPitch + m.backToBackPitch) + (r % 2) * m.rowPitch;
+
+/** Secties per stelling (x) en stellingrijen (z). */
 export const SECTION_PITCH = racks.sectionPitch;
 export const SECTION_X = range(racks.sections, racks.firstSectionX, racks.sectionPitch);
-export const ROW_Z = range(racks.rows, racks.firstRowZ, racks.rowPitch);
+export const ROW_Z = Array.from({ length: racks.rows }, (_, r) => +(racks.firstRowZ + rowOffset(r)).toFixed(3));
+/** Aan welke kant (z) van rij r zijn pad ligt: +1 of -1. De andere kant is de rug. */
+export const ROW_FACE = ROW_Z.map((_, r) => (r % 2 ? -1 : 1));
+/** Het pad waar rij r aan ligt (index in AISLE_Z): elke rij is vanaf één pad te bereiken. */
+export const ROW_AISLE = ROW_Z.map((_, r) => Math.floor(r / 2));
+/** De paden tussen de stellingen (z): pad a ligt voor rij 2a, met aan de overkant rij 2a + 1 (als die er is). */
+export const AISLE_Z = range(Math.ceil(racks.rows / 2), racks.firstRowZ + racks.rowPitch / 2, racks.rowPitch + racks.backToBackPitch);
+/** De rij waar rij r met zijn rug tegenaan staat, of -1 als hij alleen staat (de eerste, en de laatste bij een even aantal). */
+export const rowBehind = (r: number) => (r - ROW_FACE[r] >= 0 && r - ROW_FACE[r] < ROW_Z.length ? r - ROW_FACE[r] : -1);
 export const DOCK_PITCH = docks.pitch;
 export const DOCK_Z = range(docks.count, docks.firstZ, docks.pitch);
 

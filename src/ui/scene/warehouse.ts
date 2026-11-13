@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { DOCKS, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, WALKWAY_X, type Bay } from '../../sim/layout';
+import { AISLE_Z, DOCKS, DOCK_PITCH, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROW_FACE, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, WALKWAY_X, rowBehind, type Bay } from '../../sim/layout';
 import { createRooms, ROOM_DOORS } from './rooms';
 import { onTop } from './style';
 import * as tex from './textures';
@@ -176,10 +176,11 @@ export function createWarehouse(scene: THREE.Scene) {
     paintGeos.set(mat, list);
   }
   const YELLOW = '#e3b505';
-  for (const z of ROW_Z) {
-    marking(RACK_MID_X, z - 0.85, RACK_LEN + 1.4, 0.1, YELLOW);
-    marking(RACK_MID_X, z + 0.85, RACK_LEN + 1.4, 0.1, YELLOW);
-  }
+  // Een lijn langs de padkant van elke rij; een rij die alleen staat heeft ook aan zijn rug een lijn
+  ROW_Z.forEach((z, r) => {
+    marking(RACK_MID_X, z + ROW_FACE[r] * 0.85, RACK_LEN + 1.4, 0.1, YELLOW);
+    if (rowBehind(r) < 0) marking(RACK_MID_X, z - ROW_FACE[r] * 0.85, RACK_LEN + 1.4, 0.1, YELLOW);
+  });
   // Looppad tussen de dockzone en de stellingen
   const WALK_X = WALKWAY_X;
   // Het loopt van de noordwand (daar zit de deur naar de kantine) tot aan de parkeerplaats, of anders tot de wand.
@@ -293,7 +294,8 @@ export function createWarehouse(scene: THREE.Scene) {
   const columnWraps = new Batch();
   const columnSpots: [number, number][] = [];
   for (let x = -W / 2; x <= W / 2; x += 7) columnSpots.push([x, -D / 2 + 0.17], [x, D / 2 - 0.17]);
-  for (const z of ROW_Z) columnSpots.push([-W / 2 + 0.17, z], [W / 2 - 0.17, z]); // tussen de dockdeuren
+  for (const z of [DOCKS[0].z - DOCK_PITCH / 2, ...DOCKS.map((d) => d.z + DOCK_PITCH / 2)])
+    columnSpots.push([-W / 2 + 0.17, z], [W / 2 - 0.17, z]); // tussen de dockdeuren
   for (const [x, z] of columnSpots) {
     columns.add(x, H / 2, z, 0.26, H, 0.26);
     columnWraps.add(x, 0.6, z, 0.3, 1.2, 0.3);
@@ -340,7 +342,7 @@ export function createWarehouse(scene: THREE.Scene) {
   const wires = new Batch();
   const LAMP_Y = 7;
   for (const x of LIGHT_X)
-    for (const { z } of DOCKS) { // boven elk gangpad
+    for (const z of AISLE_Z) { // boven elk gangpad
       housings.add(x, LAMP_Y, z, 1.25, 0.07, 0.32);
       lamps.add(x, LAMP_Y - 0.04, z, 1.15, 0.012, 0.24);
       for (const dx of [-0.5, 0.5]) wires.add(x + dx, (H + LAMP_Y) / 2, z, 0.008, H - LAMP_Y, 0.008);
@@ -441,11 +443,21 @@ export function createWarehouse(scene: THREE.Scene) {
   const rackLabelSpots: { index: number; position: THREE.Vector3; back: boolean }[] = [];
 
   ROW_Z.forEach((z0, r) => {
+    // De rijen staan rug-aan-rug: het pad ligt aan de kant `face`, aan de andere kant staat (meestal) de buurrij.
+    const face = ROW_FACE[r];
+    const behind = rowBehind(r);
+    const paired = behind >= 0;
+    /** Het midden en de diepte van het blok: deze rij, of het paar rug-aan-rug (dan alleen bij de eerste van de twee). */
+    const block = !paired ? { z: z0, d: 1.4 } : behind > r ? { z: (z0 + ROW_Z[behind]) / 2, d: 1.4 + ROW_Z[behind] - z0 } : null;
     for (const fx of FRAME_X) {
       for (const dz of [-0.5, 0.5]) {
         posts.add(fx, POST_H / 2, z0 + dz, 0.09, POST_H, 0.07);
-        guards.add(fx, 0.2, z0 + dz * 1.16, 0.16, 0.4, 0.05);
+        // aanrijbescherming alleen waar verkeer langs komt, niet tussen twee rijen in
+        if (!paired || dz * face > 0) guards.add(fx, 0.2, z0 + dz * 1.16, 0.16, 0.4, 0.05);
       }
+      // rugkoppelingen: de twee rijen zitten met afstandhouders aan elkaar vast
+      if (paired && behind > r)
+        for (let y = 0.9; y < POST_H; y += 1.6) braces.add(fx, y, block!.z, 0.04, 0.04, ROW_Z[behind] - z0 - 1);
       for (let y = 0.3, k = 0; y < POST_H; y += 1.6, k++) {
         braces.add(fx, y, z0, 0.035, 0.035, 0.94);
         if (y + 1.6 < POST_H) braces.add(fx, y + 0.8, z0, 0.035, 0.035, 1.84, (k % 2 ? 1 : -1) * Math.atan2(1.6, 0.94), 0, 0);
@@ -468,18 +480,20 @@ export function createWarehouse(scene: THREE.Scene) {
       ]);
       for (const [id, x, y, arrow] of spots) {
         const index = rackLabels.push({ id, arrow }) - 1;
-        for (const side of [1, -1]) {
-          const position = new THREE.Vector3(x, y, z0 + side * 0.5265);
-          rackLabelSpots.push({ index, position, back: side < 0 });
-          scanTargets.push({ code: id, position });
-        }
+        // alleen aan de padkant: aan de rug kom je niet
+        const position = new THREE.Vector3(x, y, z0 + face * 0.5265);
+        rackLabelSpots.push({ index, position, back: face < 0 });
+        scanTargets.push({ code: id, position });
       }
     });
     // Kopbescherming en rij-aanduiding
     const rowSign = onTop(new THREE.MeshStandardMaterial({ map: tex.sign(`R${r + 1}`, '#17346b', '#ffffff'), roughness: 0.5 }));
     for (const [x, ry] of [[RACK_MIN_X - 0.36, -Math.PI / 2], [RACK_MAX_X + 0.36, Math.PI / 2]] as const) {
-      endGuards.add(x, 0.22, z0, 0.12, 0.44, 1.4);
-      solid(x, z0, 0.12, 1.4, 0, 0.44);
+      if (block) {
+        // één kopbescherming per blok: twee rijen rug-aan-rug delen hem
+        endGuards.add(x, 0.22, block.z, 0.12, 0.44, block.d);
+        solid(x, block.z, 0.12, block.d, 0, 0.44);
+      }
       const s = new THREE.Mesh(signGeo, rowSign);
       s.position.set(ry < 0 ? RACK_MIN_X - 0.05 : RACK_MAX_X + 0.05, 2.7, z0);
       s.rotation.y = ry;
@@ -572,7 +586,7 @@ export function createWarehouse(scene: THREE.Scene) {
   scene.add(parkSign);
 
   // ---------- Voorraad: pallets, dozen en wikkelfolie ----------
-  const MAX_PALLETS = 700;
+  const MAX_PALLETS = Math.max(700, ROW_Z.length * BAY_X.length * LEVEL_Y.length * SLOT_DX.length); // elke palletplek bezet
   const MAX_CARTONS = 24000;
   const pallets = new THREE.InstancedMesh(palletGeo, woodMat, MAX_PALLETS);
   const cartons = new THREE.InstancedMesh(UNIT_BOX, cartonMats, MAX_CARTONS);

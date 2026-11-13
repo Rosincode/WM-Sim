@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { BASE_MODEL, MODEL, MODEL_DRAFT_KEY, MODEL_IS_DRAFT, modelError, type WarehouseModel } from '../sim/layout';
+import { BASE_MODEL, MODEL, MODEL_DRAFT_KEY, MODEL_IS_DRAFT, modelError, rowOffset, type WarehouseModel } from '../sim/layout';
 import { menu } from './menu';
 
 // Bewerkmodus voor de indeling van de hal. Je kijkt van boven en sleept grepen over de vloer; elke greep
@@ -62,10 +62,13 @@ function handlesOf(m: WarehouseModel): Handle[] {
   structure(
     'Stellingen: aantal secties en rijen',
     racks.firstSectionX + (racks.sections - 0.5) * racks.sectionPitch,
-    racks.firstRowZ + (racks.rows - 0.5) * racks.rowPitch,
+    racks.firstRowZ + rowOffset(racks.rows - 1, racks) + 0.65,
     (x, z) => {
       racks.sections = clamp(Math.round((x - racks.firstSectionX) / racks.sectionPitch + 0.5), 1, 40);
-      racks.rows = clamp(Math.round((z - racks.firstRowZ) / racks.rowPitch + 0.5), 1, 40);
+      // de rijen staan rug-aan-rug, dus niet op een vaste afstand: tel de rijen die vóór de greep liggen
+      let rows = 1;
+      while (rows < 40 && racks.firstRowZ + rowOffset(rows, racks) <= z) rows++;
+      racks.rows = rows;
     },
   );
 
@@ -123,7 +126,7 @@ function outlineOf(m: WarehouseModel): number[] {
   const rackLen = racks.sections * racks.sectionPitch;
   const rackMid = racks.firstSectionX + ((racks.sections - 1) * racks.sectionPitch) / 2;
   for (let r = 0; r < racks.rows; r++) {
-    const z = racks.firstRowZ + r * racks.rowPitch;
+    const z = racks.firstRowZ + rowOffset(r, racks);
     rect(rackMid, z, rackLen, 1.1);
     for (let s = 1; s < racks.sections; s++) {
       const x = racks.firstSectionX + (s - 0.5) * racks.sectionPitch;

@@ -775,7 +775,10 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     }
 
     // Stellingen: zonder scanner in de hand scan je met E de sectie waar je voor staat
-    const section = shelfLocations().find((l) => l.level === 1 && dist(l, pos) < 1.8);
+    // de dichtstbijzijnde: rug-aan-rug staan twee rijen binnen bereik
+    const section = shelfLocations()
+      .filter((l) => l.level === 1 && dist(l, pos) < 1.8)
+      .sort((a, b) => dist(a, pos) - dist(b, pos))[0];
     if (section) {
       const name = section.id.slice(0, -2);
       const levels = LOCATIONS.filter((l) => l.x === section.x && l.z === section.z && l.type !== 'dock');
