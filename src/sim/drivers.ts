@@ -1,4 +1,4 @@
-import { DOCKS, HALL, dist, laneSlot, type Dock, type Point } from './layout';
+import { CANTEEN, DOCKS, DOCK_PITCH, HALL, ROOM_DOORS, dist, laneSlot, type Dock, type Point } from './layout';
 import type { Pallet } from './warehouse';
 
 // De chauffeurs. Elke vrachtwagen heeft een chauffeur die zelf lost of laadt, zonder hulp van het magazijn:
@@ -6,10 +6,15 @@ import type { Pallet } from './warehouse';
 // dockdeur open, pakt de elektrische pompwagen die bij het dock staat en rijdt de pallets één voor één uit de
 // wagen naar de inslagbaan (of de klaargezette orders de wagen in). Daarna zet hij de pompwagen terug, meldt
 // op het scherm dat hij klaar is, doet de dockdeur dicht, loopt terug naar zijn cabine en rijdt weg.
+// Is een wagen te vroeg, of staat er nog een andere wagen aan zijn dock, dan parkeert hij eerst op een wachtplaats
+// op het terrein. De chauffeur loopt naar de kantine, pakt een bekertje koffie en gaat zitten tot hij aan de beurt
+// is; dan loopt hij terug en rijdt hij zijn wagen naar het dock.
 // Zoals overal in de sim geldt: eerst de WMS, dan fysiek. Multiplayer: iedereen laat de chauffeurs lokaal
 // lopen; alleen de host beslist.
 
 export type DriverPhase =
+  // koffiepauze: naar de kantine, een bekertje pakken, gaan zitten, en terug naar de wagen op de wachtplaats
+  | 'toCanteen' | 'coffee' | 'toSeat' | 'drinking' | 'toTruck' | 'boarding'
   | 'toScreen' | 'checkIn' | 'opening' | 'toJack'
   // lossen: naar de pallet in de wagen, optillen, naar de inslagbaan, neerzetten
   | 'toCargo' | 'lifting' | 'toLane'
@@ -44,9 +49,19 @@ export type Driver = {
   timer: number;
   /** Seconden die hij al op klaargezette orders wacht. */
   waited: number;
+  /** Heeft een bekertje koffie in de hand. */
+  cup?: boolean;
+  /** De stoel in de kantine (index in CANTEEN.seats) waar hij heen loopt of op zit; -1 = geen. */
+  seat?: number;
   /** Telt elke beslissing; in multiplayer wint de hoogste stand. */
   v: number;
 };
+
+const BREAK: ReadonlySet<DriverPhase> = new Set(['toCanteen', 'coffee', 'toSeat', 'drinking', 'toTruck', 'boarding']);
+/** Heeft koffiepauze: zijn wagen staat nog op een wachtplaats, niet aan het dock. */
+export const onBreak = (d: Pick<Driver, 'phase'>) => BREAK.has(d.phase);
+/** Zit op zijn stoel in de kantine. */
+export const seated = (d: Driver) => d.phase === 'drinking' && d.path.length === 0 && (d.seat ?? -1) >= 0;
 
 /** Iets waar een chauffeur voor blijft staan: een speler, de heftruck, een pallet die los op de vloer staat. */
 export type DriverObstacle = Point & { rad: number };
@@ -55,7 +70,10 @@ export type DriverTruck = {
   id: string;
   dock: number;
   direction: 'in' | 'out';
-  status: 'arriving' | 'waiting' | 'checkedIn' | 'departing';
+  /** parking = rijdt naar een wachtplaats; parked = staat daar tot hij naar zijn dock mag. */
+  status: 'parking' | 'parked' | 'arriving' | 'waiting' | 'checkedIn' | 'departing';
+  /** De wachtplaats (index in WAIT_BAYS) waar hij heen rijdt, staat of vandaan komt. */
+  bay?: number;
   cargo: Pallet[];
   loaded: string[];
 };
@@ -87,6 +105,13 @@ export interface DriverWorld {
   loadDone(truckId: string): Promise<boolean>;
   /** De wagen afmelden: daarna rijdt hij weg. */
   checkOut(truckId: string): Promise<boolean>;
+  /**
+   * Mag de wagen op de wachtplaats naar zijn dock: is het (bijna) zijn tijd en is het dock vrij? Bij true houdt
+   * de wereld het dock voor hem vast en loopt de chauffeur terug naar zijn wagen.
+   */
+  callToDock(truckId: string): boolean;
+  /** De chauffeur zit weer in zijn cabine: de wagen rijdt van de wachtplaats naar zijn dock. */
+  driveToDock(truckId: string): void;
 }
 
 const X0 = -HALL.w / 2;
@@ -96,6 +121,19 @@ const X0 = -HALL.w / 2;
  * tussen de wielkasten in de laadruimte: pallets, de pompwagen en de chauffeur blijven daarbinnen (zie cargoSpot).
  */
 export const TRUCK = { rear: X0 - 0.4, floor: 0.45, length: 8, cabX: X0 - 9.7, cabSide: 1.75, clear: 1.06 };
+/**
+ * De wachtplaatsen op het terrein, in de noordwesthoek (voorbij het eerste dock, aan de overkant van de rijlijn):
+ * hier parkeert een wagen die te vroeg is of waarvan het dock nog bezet is. Het punt is de achterkant van de
+ * laadbak; de cabine wijst van het gebouw af (-x), net als aan het dock. De rijroutes staan in yard.ts.
+ */
+export const WAIT_BAYS: Point[] = (() => {
+  const edge = -HALL.d / 2 - 8; // de noordrand van het terrein (zie src/ui/scene/exterior.ts)
+  const bays: Point[] = [];
+  // vanaf het vak van het eerste dock naar het noorden, zolang er achter de wagen ruimte is om achteruit weg te draaien
+  for (let z = (DOCKS[0]?.z ?? 0) - DOCK_PITCH / 2 - 2; z >= edge + 10.5 && bays.length < 3; z -= 3.2) bays.push({ x: TRUCK.rear - 30.95, z });
+  return bays;
+})();
+
 /** De laadklep: loopt van de halvloer (x = low) schuin op naar de laadvloer van de wagen (x = high). */
 export const DOCK_RAMP = { low: X0 + 2.1, high: X0 - 0.35 };
 /** Hoogte van de vloer waar de chauffeur en zijn pompwagen op rijden: de hal, de laadklep of de laadvloer. */
@@ -137,6 +175,9 @@ const JACK_SPEED = 1.5;
 const TURN = 4;
 /** Zo lang (s) wacht een chauffeur hooguit op orders die nog klaargezet moeten worden. */
 const MAX_WAIT = 240;
+/** Koffiepauze: zo lang (s) duurt het pakken van een bekertje, en zo lang zit hij minstens. */
+const COFFEE_SECONDS = 4.5;
+const SIT_SECONDS = 12;
 
 const angle = (to: number, from: number) => Math.atan2(Math.sin(to - from), Math.cos(to - from));
 
@@ -157,7 +198,12 @@ export function createDrivers(world: DriverWorld) {
   const dockOf = (d: Driver) => DOCKS[d.dock];
   const truckOf = (d: Driver) => world.trucks().find((t) => t.id === d.id);
   const cab = (dock: Dock): Point => ({ x: TRUCK.cabX, z: dock.z + TRUCK.cabSide });
-  const doorZ = (dock: Dock) => DRIVER_DOORS.reduce((best, z) => (Math.abs(z - dock.z) < Math.abs(best - dock.z) ? z : best));
+  /** De chauffeursdeur het dichtst bij z. */
+  const doorNear = (at: number) => DRIVER_DOORS.reduce((best, z) => (Math.abs(z - at) < Math.abs(best - at) ? z : best));
+  const doorZ = (dock: Dock) => doorNear(dock.z);
+  const bayOf = (d: Driver) => WAIT_BAYS[truckOf(d)?.bay ?? -1];
+  /** Waar de chauffeur uit zijn cabine stapt als de wagen op een wachtplaats staat. */
+  const bayCab = (bay: Point): Point => ({ x: bay.x + TRUCK.cabX - TRUCK.rear, z: bay.z + TRUCK.cabSide });
   const jackStand = (dock: Dock): Point => ({ x: jackPark(dock).x - JACK_HANDLE, z: jackPark(dock).z });
 
   // ========== Routes ==========
@@ -172,6 +218,26 @@ export function createDrivers(world: DriverWorld) {
     ];
   }
   const walkOut = (dock: Dock): Waypoint[] => [...walkIn(dock).reverse().slice(1), cab(dock)];
+
+  /**
+   * Te voet van de wachtplaats naar het koffieapparaat: over het terrein, door de chauffeursdeur, langs de
+   * noordwand van de hal en door de deur van de kantine.
+   */
+  function toCanteen(bay: Point): Waypoint[] {
+    const z = doorNear(bay.z);
+    const door = ROOM_DOORS.canteen.x;
+    const along = -HALL.d / 2 + 1.4; // de looplijn (z) langs de noordwand
+    return [
+      { x: OUTSIDE_X, z: bayCab(bay).z }, { x: OUTSIDE_X, z }, { x: X0 - 1, z }, { x: X0 + 1, z }, { x: INSIDE_X, z },
+      { x: INSIDE_X, z: along }, { x: door, z: along }, { x: door, z: CANTEEN.front - 1.3 },
+      { x: CANTEEN.coffeeStand.x, z: CANTEEN.coffeeStand.z },
+    ];
+  }
+  /** En terug naar de cabine, vanaf waar hij in de kantine zit of staat. */
+  function toTruck(d: Driver, bay: Point): Waypoint[] {
+    const back = toCanteen(bay).reverse().slice(1);
+    return [{ x: CANTEEN.aisleX, z: d.z }, ...back, bayCab(bay)];
+  }
 
   /**
    * Met de pompwagen naar een punt: eerst terug naar de rijlijn langs de docks, daarlangs naar de juiste hoogte
@@ -284,8 +350,44 @@ export function createDrivers(world: DriverWorld) {
     go(d, 'parkJack', drive(d, { x: p.x, z: p.z }, true));
   }
 
+  /** Koffiepauze: de volgende stap. Zijn wagen staat op een wachtplaats. */
+  function pause(d: Driver) {
+    const bay = bayOf(d);
+    if (!bay) return;
+    switch (d.phase) {
+      case 'toCanteen':
+        d.r = CANTEEN.coffeeStand.r;
+        return go(d, 'coffee', [], COFFEE_SECONDS);
+      case 'coffee': {
+        // met het bekertje naar een vrije stoel op de hoek van een tafel; is er geen, dan drinkt hij het staand op
+        d.cup = true;
+        d.seat = CANTEEN.cornerSeats.find((i) => !drivers.some((o) => o !== d && o.seat === i)) ?? -1;
+        const seat = CANTEEN.seats[d.seat];
+        const path = seat ? [{ x: CANTEEN.aisleX, z: seat.z }, { x: seat.x, z: seat.z }] : [{ x: CANTEEN.aisleX, z: d.z }];
+        return go(d, 'toSeat', path);
+      }
+      case 'toSeat':
+        d.r = CANTEEN.seats[d.seat ?? -1]?.r ?? d.r;
+        return go(d, 'drinking', [], SIT_SECONDS);
+      case 'drinking':
+        // Is het zijn tijd en is het dock vrij, dan loopt hij terug; anders blijft hij nog even zitten
+        if (!world.callToDock(d.id)) return void (d.timer = 2);
+        d.cup = false;
+        d.seat = -1;
+        return go(d, 'toTruck', toTruck(d, bay));
+      case 'toTruck':
+        d.r = -Math.PI / 2;
+        return go(d, 'boarding', [], 1.2);
+      case 'boarding':
+        // De wagen rijdt naar zijn dock; daar stapt de chauffeur weer uit (zie update)
+        d.timer = 5;
+        return world.driveToDock(d.id);
+    }
+  }
+
   /** De chauffeur is aangekomen of klaar met wachten: de volgende stap. */
   function step(d: Driver) {
+    if (onBreak(d)) return pause(d);
     const t = truckOf(d);
     const dock = dockOf(d);
     if (!t) return;
@@ -363,18 +465,23 @@ export function createDrivers(world: DriverWorld) {
     if (!world.authority()) return;
     const trucks = world.trucks();
     // Een wagen die aan het dock staat krijgt zijn chauffeur; rijdt de wagen weg, dan is de chauffeur mee
+    // Staat de wagen op een wachtplaats, dan stapt de chauffeur daar uit voor een koffiepauze; rijdt de wagen
+    // daarna naar zijn dock, dan is die chauffeur mee en stapt hij aan het dock opnieuw uit.
+    const atDock = (t: DriverTruck) => t.status === 'waiting' || t.status === 'checkedIn';
     for (const t of trucks) {
-      if ((t.status !== 'waiting' && t.status !== 'checkedIn') || drivers.some((d) => d.id === t.id)) continue;
+      const bay = t.status === 'parked' ? WAIT_BAYS[t.bay ?? -1] : undefined;
+      if ((!atDock(t) && !bay) || drivers.some((d) => d.id === t.id)) continue;
       const dock = DOCKS[t.dock];
       drivers.push({
-        id: t.id, dock: t.dock, direction: t.direction, ...cab(dock), r: -Math.PI / 2,
-        phase: 'toScreen', path: walkIn(dock), jack: false, load: null, order: null, door: false, target: 0, timer: 0.8, waited: 0, v: floor,
+        id: t.id, dock: t.dock, direction: t.direction, ...(bay ? bayCab(bay) : cab(dock)), r: -Math.PI / 2,
+        phase: bay ? 'toCanteen' : 'toScreen', path: bay ? toCanteen(bay) : walkIn(dock),
+        jack: false, load: null, order: null, door: false, target: 0, timer: 0.8, waited: 0, cup: false, seat: -1, v: floor,
       });
       world.touch();
     }
     for (let i = drivers.length - 1; i >= 0; i--) {
       const t = trucks.find((x) => x.id === drivers[i].id);
-      if (t && (t.status === 'waiting' || t.status === 'checkedIn')) continue;
+      if (t && (onBreak(drivers[i]) ? t.status === 'parked' : atDock(t))) continue;
       floor = Math.max(floor, drivers[i].v + 1);
       drivers.splice(i, 1);
       world.touch();
@@ -390,6 +497,11 @@ export function createDrivers(world: DriverWorld) {
   function statusText(d: Driver) {
     const what = d.direction === 'in' ? 'lossen' : 'laden';
     switch (d.phase) {
+      case 'toCanteen': return 'loopt naar de kantine';
+      case 'coffee': return 'pakt een bekertje koffie';
+      case 'toSeat': return 'zoekt een plekje in de kantine';
+      case 'drinking': return 'drinkt koffie in de kantine';
+      case 'toTruck': case 'boarding': return 'loopt terug naar zijn wagen';
       case 'toScreen': return 'loopt naar het dock';
       case 'checkIn': return 'meldt zich aan';
       case 'opening': return 'zet de dockdeur open';
@@ -413,8 +525,8 @@ export function createDrivers(world: DriverWorld) {
     setObstacles(source: () => DriverObstacle[]) {
       obstacles = source;
     },
-    /** De chauffeur aan een dock, of undefined. */
-    at: (dock: number) => drivers.find((d) => d.dock === dock),
+    /** De chauffeur die aan een dock bezig is (niet een die nog koffiepauze heeft), of undefined. */
+    at: (dock: number) => drivers.find((d) => d.dock === dock && !onBreak(d)),
     /** Voor de gedeelde wereld; alleen ververst als de wereld verandert, zodat het lopen zelf niet als wijziging telt. */
     shared(): Driver[] {
       if (snapshotAt !== world.revision()) {

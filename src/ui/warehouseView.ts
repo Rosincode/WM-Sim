@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { DOCKS, LANE_LENGTH, LANE_SLOTS, LEVEL_Y, POINTS, laneSlot, type Point } from '../sim/layout';
 import { TRUCK, cargoSpot } from '../sim/drivers';
 import type { Truck, Warehouse } from '../sim/warehouse';
-import { atGate, truckPose } from '../sim/yard';
+import { atGate, truckPoseOf } from '../sim/yard';
 import { createPcMesh } from './scene/pc';
 import { createTruck } from './scene/truck';
 import { onTop } from './scene/style';
@@ -191,8 +191,13 @@ export function createWarehouseView(
   // --- Vrachtwagens ---
   const trucks = { in: truckView('in'), out: truckView('out') };
   root.add(trucks.in.mesh, trucks.out.mesh);
-  /** Leveringen die de WMS heeft aangemeld: hooguit één vrachtwagen per dock, pas gemaakt als er een komt. */
-  const deliveryTrucks = new Map<number, { truck: TruckView; text: ReturnType<typeof label> }>();
+  /**
+   * Leveringen die de WMS heeft aangemeld, op het nummer van de wagen: pas gemaakt als er een komt. Er kunnen er
+   * twee voor hetzelfde dock zijn (de tweede wacht op het terrein). Een wagen die weg is gaat terug in de voorraad.
+   */
+  type DeliveryTruck = { truck: TruckView; text: ReturnType<typeof label> };
+  const deliveryTrucks = new Map<string, DeliveryTruck>();
+  const spareTrucks: DeliveryTruck[] = [];
 
   // --- Pallets in de banen: op de inslagbaan wat gelost is, op de uitslagbaan de klaargezette orders ---
   const lanes = DOCKS.map(() => ({
@@ -225,7 +230,8 @@ export function createWarehouseView(
     const dock = DOCKS[t.dock];
     // Over de weg het terrein op, steken en achteruit tegen de dockdeur (de route staat in src/sim/yard.ts);
     // de achterdeuren gaan open voordat hij het dock in rijdt
-    const pose = truckPose(t.dock, t.status === 'departing', t.t);
+    // (een wagen die te vroeg is, of waarvan het dock nog bezet is, staat eerst op een wachtplaats)
+    const pose = truckPoseOf(t);
     view.mesh.position.set(pose.x, 0, pose.z);
     view.mesh.rotation.y = pose.r;
     view.setDoors(pose.doors);
@@ -244,7 +250,13 @@ export function createWarehouseView(
   }
 
   const truckText = (t: Truck | null) => {
-    if (!t || t.status === 'arriving') return '';
+    if (!t || t.status === 'arriving' || t.status === 'parking') return '';
+    if (t.status === 'parked') {
+      if (t.go) return `${t.id} · mag naar ${t.dockId}`;
+      const left = Math.ceil(t.wait ?? 0);
+      if (left <= 0) return `${t.id} · wacht tot ${t.dockId} vrij is`;
+      return `${t.id} · te vroeg voor ${t.dockId} · ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    }
     const status = {
       waiting: 'wacht op aanmelden',
       checkedIn: t.direction === 'in' ? `aangemeld · ${t.cargo.length} pallet(s)` : `aangemeld · ${t.loaded.length} ingeladen`,
@@ -275,12 +287,21 @@ export function createWarehouseView(
     placeTruck(trucks.in, labels.truckIn, sim.trucks.in);
     placeTruck(trucks.out, labels.truckOut, sim.trucks.out);
     for (const t of sim.deliveries) {
-      if (deliveryTrucks.has(t.dock)) continue;
-      const made = { truck: truckView('in'), text: label(4.5) };
-      root.add(made.truck.mesh, made.text.sprite);
-      deliveryTrucks.set(t.dock, made);
+      if (deliveryTrucks.has(t.id)) continue;
+      let made = spareTrucks.pop();
+      if (!made) {
+        made = { truck: truckView('in'), text: label(4.5) };
+        root.add(made.truck.mesh, made.text.sprite);
+      }
+      deliveryTrucks.set(t.id, made);
     }
-    for (const [dock, v] of deliveryTrucks) placeTruck(v.truck, v.text, sim.deliveries.find((t) => t.dock === dock) ?? null);
+    for (const [id, v] of deliveryTrucks) {
+      const t = sim.deliveries.find((x) => x.id === id) ?? null;
+      placeTruck(v.truck, v.text, t);
+      if (t) continue;
+      deliveryTrucks.delete(id);
+      spareTrucks.push(v);
+    }
 
     gate = THREE.MathUtils.clamp(gate + (gateWanted ? dt : -dt) / 1.2, 0, 1);
 

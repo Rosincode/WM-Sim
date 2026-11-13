@@ -6,10 +6,10 @@ import {
   dist, lanePoint, laneSlot, location, shelfLocations, type Dock, type Point,
 } from './layout';
 import { createCounter } from './counter';
-import { createDrivers, dockScreen } from './drivers';
+import { WAIT_BAYS, createDrivers, dockScreen } from './drivers';
 import { createRobotFleet } from './robots';
 import { offlineGateway, type WmsGateway, type WmsReply } from './wms';
-import { truckSeconds } from './yard';
+import { bayDriveSeconds, parkSeconds, truckSeconds } from './yard';
 
 // De fysieke wereld van het magazijn: vrachtwagens, pallets, de pallets van orders en wat er in de stellingen staat.
 // Die wereld is van de game en voor alle spelers dezelfde. De WMS is de administratie ervan: hij hoort wat
@@ -37,7 +37,11 @@ export type StoredPallet = Pallet & { locationId: string; slot: number };
  * at = de stellinglocatie waar hij nu staat; leeg zolang hij op de vorken of los op de vloer staat.
  */
 type MovedPallet = { locationId: string; sku: string; qty: number; at?: string | null };
-export type TruckStatus = 'arriving' | 'waiting' | 'checkedIn' | 'departing';
+/**
+ * parking = rijdt naar een wachtplaats op het terrein; parked = staat daar (de chauffeur heeft koffiepauze) tot
+ * hij naar zijn dock mag; arriving = rijdt naar zijn dock.
+ */
+export type TruckStatus = 'parking' | 'parked' | 'arriving' | 'waiting' | 'checkedIn' | 'departing';
 export type Truck = {
   id: string;
   direction: Direction;
@@ -47,6 +51,12 @@ export type Truck = {
   status: TruckStatus;
   /** 0 = ver weg op de openbare weg, 1 = tegen de dockdeur; de route ertussen staat in yard.ts (truckPose). */
   t: number;
+  /** De wachtplaats (index in WAIT_BAYS) waar hij heen rijdt, staat, of vandaan naar zijn dock rijdt. */
+  bay?: number;
+  /** Zoveel seconden is hij nog te vroeg; 0 = hij wacht alleen tot zijn dock vrij is. */
+  wait?: number;
+  /** Hij mag naar zijn dock, dat voor hem wordt vrijgehouden: de chauffeur loopt terug naar zijn wagen. */
+  go?: boolean;
   cargo: Pallet[];
   loaded: string[];
   /** Aangemeld door de WMS zelf (een levering uit de flow): de ontvangst is daar al geboekt, op de dockdeur. */
@@ -76,6 +86,11 @@ export type Objective = { point?: Point; level?: number; text: string };
 /** Uitkomst van een scan of handeling, voor het scherm van de scanner. */
 export type ScanResult = { ok: boolean; text: string };
 
+/** De kans dat een vrachtwagen te vroeg is, en hoeveel seconden dan: minstens min, plus hooguit extra. */
+const EARLY_CHANCE = 0.4;
+const EARLY_SECONDS = { min: 90, extra: 120 };
+/** Zoveel seconden voor zijn tijd loopt de chauffeur vanuit de kantine terug naar zijn wagen. */
+const WALK_BACK_SECONDS = 45;
 const DEMO_ORDER_INTERVAL = 45;
 const DEMO_MAX_OPEN_ORDERS = 2;
 /** Zo dichtbij (m) moet je staan om op een gescande locatie iets neer te zetten of te pakken. */
@@ -316,7 +331,19 @@ export function createWarehouse({
   const pallets = () => [...racked.values()].map((p) => ({ ...p, unbooked: moved.has(p.id) }));
 
   const order = (id: string) => orders.find((o) => o.id === id);
-  const truck = (id: string) => [trucks.in, trucks.out, ...deliveries].find((t) => t?.id === id) ?? null;
+  const allTrucks = () => [trucks.in, trucks.out, ...deliveries].filter((t): t is Truck => !!t);
+  const truck = (id: string) => allTrucks().find((t) => t.id === id) ?? null;
+  /** Een vrije wachtplaats op het terrein, of -1. */
+  const freeBay = () => WAIT_BAYS.findIndex((_, i) => !allTrucks().some((t) => t.bay === i));
+  /**
+   * Stuurt een nieuwe wagen eerst naar een wachtplaats (als er een vrij is): hij is `wait` seconden te vroeg,
+   * of zijn dock is nog bezet (wait = 0). De chauffeur drinkt intussen koffie in de kantine (src/sim/drivers.ts).
+   */
+  function parkFirst(t: Truck, wait: number): Truck {
+    const bay = freeBay();
+    return bay < 0 ? t : Object.assign(t, { status: 'parking' as const, bay, wait });
+  }
+  const earlyBy = () => EARLY_SECONDS.min + rand(EARLY_SECONDS.extra);
   /** De inkomende vrachtwagens: die van de sim zelf en de leveringen uit de WMS. */
   const inbound = () => [trucks.in, ...deliveries].filter((t): t is Truck => !!t);
   const carriedOrder = () => (carry?.kind === 'order' ? order(carry.orderId) : undefined);
@@ -961,7 +988,7 @@ export function createWarehouse({
     authority: () => authority,
     revision: () => revision,
     touch: () => touch(),
-    trucks: () => [trucks.in, trucks.out, ...deliveries].filter((t): t is Truck => !!t),
+    trucks: allTrucks,
     async checkIn(truckId) {
       const t = truck(truckId);
       if (t?.status === 'checkedIn') return true; // een levering uit de WMS is daar al aangemeld
@@ -1045,6 +1072,27 @@ export function createWarehouse({
       return true;
     },
     checkOut: async (truckId) => (await checkOut(truckId)).ok,
+    callToDock(truckId) {
+      const t = truck(truckId);
+      if (!t || t.status !== 'parked') return false;
+      if (t.go) return true;
+      if ((t.wait ?? 0) > WALK_BACK_SECONDS) return false; // nog te vroeg
+      // Het dock is vrij als er geen wagen staat, heen rijdt of vertrekt, en geen andere wachtende wagen het al heeft gekregen
+      const waits = (o: Truck) => o.status === 'parking' || o.status === 'parked';
+      if (allTrucks().some((o) => o !== t && o.dock === t.dock && (!waits(o) || o.go))) return false;
+      t.go = true;
+      touch();
+      say(`${t.dockId} is vrij voor ${t.id}: de chauffeur loopt terug naar zijn wagen.`);
+      return true;
+    },
+    driveToDock(truckId) {
+      const t = truck(truckId);
+      if (!t || t.status !== 'parked') return;
+      Object.assign(t, { status: 'arriving', t: 0 });
+      delete t.go;
+      delete t.wait;
+      touch();
+    },
   });
 
   /** Heeft de telrobot alle pallets van een geloste levering geteld, dan is de telling bevestigd: de robots mogen ze wegzetten. */
@@ -1083,17 +1131,22 @@ export function createWarehouse({
     for (const d of list) {
       const dock = DOCKS.findIndex((x) => x.id === d.dockId);
       if (dock < 0 || truck(d.truckId) || departed.has(d.truckId)) continue;
-      if (inbound().some((t) => t.dock === dock)) continue; // er staat nog een wagen: even wachten
-      if (trucks.out?.dock === dock) {
+      const out = trucks.out;
+      if (out?.dock === dock && out.status !== 'checkedIn' && out.status !== 'departing') {
         // De WMS heeft dit dock aan de levering gegeven: een uitgaande wagen die nog niet is aangemeld wijkt uit.
-        if (trucks.out.status !== 'arriving' && trucks.out.status !== 'waiting') continue;
         outDock = chooseOutDock(dock);
-        Object.assign(trucks.out, { dock: outDock, dockId: DOCKS[outDock].id, status: 'arriving', t: 0 });
-      } else if (outDock === dock && !laneOut[dock].some((id) => id)) outDock = chooseOutDock(dock);
+        const away = out.status === 'parking' || out.status === 'parked'; // staat nog op een wachtplaats: alleen een ander dock
+        Object.assign(out, { dock: outDock, dockId: DOCKS[outDock].id }, away ? null : { status: 'arriving', t: 0 });
+      } else if (out?.dock !== dock && outDock === dock && !laneOut[dock].some((id) => id)) outDock = chooseOutDock(dock);
+      // Staat er nog een wagen aan dit dock (of wacht er al een op), dan parkeert deze op een wachtplaats tot het
+      // dock vrij is; is er geen wachtplaats vrij, dan komt hij later. Ook een wagen die te vroeg is parkeert eerst.
+      const taken = allTrucks().some((t) => t.dock === dock);
+      if (taken && freeBay() < 0) continue;
       const cargo = d.pallets
         .filter((p) => !p.palletId || !inHall(p.palletId)) // staat al in de hal: was al gelost
         .map((p): Pallet => (p.palletId ? { id: p.palletId, sku: p.sku, qty: p.qty } : { id: newPalletId(), sku: p.sku, qty: p.qty, unlabeled: true }));
-      deliveries.push({ id: d.truckId, direction: 'in', dockId: d.dockId, dock, status: 'arriving', t: 0, cargo, loaded: [], wms: true });
+      const t: Truck = { id: d.truckId, direction: 'in', dockId: d.dockId, dock, status: 'arriving', t: 0, cargo, loaded: [], wms: true };
+      deliveries.push(taken ? parkFirst(t, 0) : Math.random() < EARLY_CHANCE ? parkFirst(t, earlyBy()) : t);
       changed = true;
     }
     if (changed) touch();
@@ -1107,7 +1160,7 @@ export function createWarehouse({
   });
 
   function truckInteraction(t: Truck | null): Interaction | null {
-    if (!t || t.status === 'arriving' || t.status === 'departing') return null;
+    if (!t || (t.status !== 'waiting' && t.status !== 'checkedIn')) return null; // alleen een wagen die aan het dock staat
     const i = (label: string, action?: Action) => interaction(label, DOCKS[t.dock].truck, action);
     // De chauffeur regelt zijn wagen zelf: aanmelden, lossen of laden en afmelden
     const driver = drivers.at(t.dock);
@@ -1354,18 +1407,43 @@ export function createWarehouse({
             unlabeled: true, // een binnenkomende pallet krijgt zijn sticker pas in de hal
           }))
         : [];
-    return { id, direction, dockId: DOCKS[dock].id, dock, status: 'arriving', t: 0, cargo, loaded: [] };
+    const t: Truck = { id, direction, dockId: DOCKS[dock].id, dock, status: 'arriving', t: 0, cargo, loaded: [] };
+    // Een wagen mag best wat eerder komen dan zijn tijd: dan parkeert hij eerst op een wachtplaats
+    return Math.random() < EARLY_CHANCE ? parkFirst(t, earlyBy()) : t;
+  }
+
+  /**
+   * Laat een wagen rijden die onderweg is naar zijn wachtplaats of naar zijn dock, en telt op de wachtplaats af
+   * tot het zijn tijd is. true = hij staat nu tegen zijn dock.
+   */
+  function approach(t: Truck, dt: number) {
+    if (t.status === 'parking') {
+      t.t = Math.min(1, t.t + dt / parkSeconds(t.bay ?? -1));
+      if (t.t < 1) return false;
+      t.status = 'parked';
+      const bay = `wachtplaats ${(t.bay ?? 0) + 1}`;
+      say(
+        t.wait
+          ? `${t.id} is te vroeg voor ${t.dockId} en parkeert op ${bay}: de chauffeur haalt koffie in de kantine.`
+          : `${t.dockId} is nog bezet: ${t.id} parkeert op ${bay}, de chauffeur haalt koffie in de kantine.`,
+      );
+    } else if (t.status === 'parked') {
+      if (t.wait) t.wait = Math.max(0, t.wait - dt);
+    } else if (t.status === 'arriving') {
+      t.t = Math.min(1, t.t + dt / (t.bay === undefined ? truckSeconds(t.dock, false) : bayDriveSeconds(t.bay, t.dock)));
+      if (t.t < 1) return false;
+      delete t.bay;
+      return true;
+    }
+    return false;
   }
 
   function driveTruck(slot: 'in' | 'out', dt: number) {
     const t = trucks[slot];
     if (!t) return;
-    if (t.status === 'arriving') {
-      t.t = Math.min(1, t.t + dt / truckSeconds(t.dock, false));
-      if (t.t === 1) {
-        t.status = 'waiting';
-        say(`${t.id} staat aan ${t.dockId}: aanmelden.`);
-      }
+    if (approach(t, dt)) {
+      t.status = 'waiting';
+      say(`${t.id} staat aan ${t.dockId}: aanmelden.`);
     } else if (t.status === 'departing') {
       t.t = Math.max(0, t.t - dt / truckSeconds(t.dock, true));
       if (t.t === 0) {
@@ -1405,9 +1483,7 @@ export function createWarehouse({
     driveTruck('out', dt);
     for (let i = deliveries.length - 1; i >= 0; i--) {
       const t = deliveries[i];
-      if (t.status === 'arriving') {
-        t.t = Math.min(1, t.t + dt / truckSeconds(t.dock, false));
-        if (t.t < 1) continue;
+      if (approach(t, dt)) {
         t.status = 'checkedIn'; // de WMS heeft hem al aangemeld
         say(`${t.id} staat aan ${t.dockId}, aangemeld door de WMS (${plural(t.cargo.length, 'pallet')}).`);
       } else if (t.status === 'departing') {

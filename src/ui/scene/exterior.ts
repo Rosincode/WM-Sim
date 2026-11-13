@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { DRIVER_DOORS } from '../../sim/drivers';
+import { DRIVER_DOORS, WAIT_BAYS } from '../../sim/drivers';
 import { DOCKS, DOCK_PITCH, ROOMS } from '../../sim/layout';
 import logoUrl from '../assets/robodu-logo.jpg';
 import { onTop } from './style';
@@ -76,6 +76,11 @@ export function createExterior(scene: THREE.Scene) {
   for (let x = -ROAD_HALF + 2; x <= ROAD_HALF - 2; x += 8) line(x, ROAD_Z, 3, 0.15);
   // Dockvakken op het terrein
   for (let i = 0; i <= DOCKS.length; i++) line(X0 - 10.5, DOCKS[0].z - DOCK_PITCH / 2 + i * DOCK_PITCH, 19, 0.14);
+  // Wachtplaatsen voor vrachtwagens die te vroeg zijn of waarvan het dock nog bezet is (src/sim/drivers.ts)
+  WAIT_BAYS.forEach((b, i) => {
+    line(b.x - 5.2, b.z + 1.6, 12.4, 0.14);
+    if (i === WAIT_BAYS.length - 1) line(b.x - 5.2, b.z - 1.6, 12.4, 0.14);
+  });
   // Parkeervakken: twee rijen met een rijbaan ertussen
   const bays: { x: number; z: number }[] = [];
   for (let x = PARKING.minX + 1.5; x <= PARKING.maxX - 1; x += 2.6) {
@@ -100,6 +105,18 @@ export function createExterior(scene: THREE.Scene) {
     );
     m.rotation.x = -Math.PI / 2;
     m.position.set(X0 - 22.5, -0.005, d.z);
+    root.add(m);
+  });
+
+  // Nummers van de wachtplaatsen, achter de wagen (aan de kant van de rijlijn)
+  const bayGeo = new THREE.PlaneGeometry(4.4, 1.1);
+  WAIT_BAYS.forEach((b, i) => {
+    const m = new THREE.Mesh(
+      bayGeo,
+      onTop(new THREE.MeshStandardMaterial({ map: tex.floorText(`P${i + 1}`), color: '#e9e9e2', transparent: true, depthWrite: false, roughness: 0.8 }), 3),
+    );
+    m.rotation.x = -Math.PI / 2;
+    m.position.set(b.x + 3.4, -0.005, b.z);
     root.add(m);
   });
 
@@ -286,7 +303,7 @@ export function createExterior(scene: THREE.Scene) {
 
   // ---------- Geparkeerde opleggers op het terrein ----------
   // Zelfde stijl als de vrachtwagens aan de docks (src/ui/scene/truck.ts)
-  for (const [x, z] of [[X0 - 30, YARD.minZ + 3], [X0 - 30, YARD.minZ + 7], [X0 - 14, YARD.maxZ - 3.5]]) {
+  for (const [x, z] of [[X0 - 12, YARD.minZ + 3], [X0 - 12, YARD.minZ + 7], [X0 - 14, YARD.maxZ - 3.5]]) {
     const trailer = createParkedTrailer();
     trailer.position.set(x, 0, z);
     root.add(trailer);

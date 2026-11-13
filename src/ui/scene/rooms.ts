@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { HALL, ROOMS, WALKWAY_X, type Rect } from '../../sim/layout';
+import { CANTEEN, HALL, ROOMS, ROOM_DOORS as DOOR_SPOTS, type Rect } from '../../sim/layout';
+import { coffeeMachine } from './coffee';
 import { STYLE, onTop } from './style';
 import * as tex from './textures';
 
@@ -36,22 +37,9 @@ export const ROOM_WINDOWS: WallWindow[] = [
   { wall: 'north', at: office.minZ, from: canteenMid + 0.4, to: canteen.maxX - 1.6, y0: SILL, y1: HEAD },
 ];
 
-const COLUMN_PITCH = 7; // de kolommen langs de halwand staan om de 7 m (zie warehouse.ts)
-/** Midden van een deur van 2 × `half` breed in de halwand: zo dicht mogelijk bij x, binnen de kamer en vrij van de kolommen. */
-function doorAt(x: number, r: Rect, half: number) {
-  const within = (v: number) => Math.min(r.maxX - half - 0.6, Math.max(r.minX + half + 0.6, v));
-  let c = within(x);
-  const column = -HALL.w / 2 + Math.round((c + HALL.w / 2) / COLUMN_PITCH) * COLUMN_PITCH;
-  const clear = half + 0.45;
-  if (Math.abs(c - column) < clear) c = within(column + (c < column ? -clear : clear));
-  return c;
-}
-const door = (text: string, x: number, half: number) => ({ text, x, from: x - half, to: x + half, height: DOOR_H });
-/** Deuropeningen in de noordwand van de hal (langs x): die van de kantine ligt waar het looppad op de wand uitkomt (als het past). */
-export const ROOM_DOORS = [
-  door('KANTOOR', doorAt(office.maxX - 1.2, office, 0.55), 0.55),
-  door('KANTINE', doorAt(WALKWAY_X, canteen, 0.6), 0.6),
-];
+const door = (text: string, at: { x: number; half: number }) => ({ text, x: at.x, from: at.x - at.half, to: at.x + at.half, height: DOOR_H });
+/** Deuropeningen in de noordwand van de hal (langs x); waar ze zitten staat in src/sim/layout.ts. */
+export const ROOM_DOORS = [door('KANTOOR', DOOR_SPOTS.office), door('KANTINE', DOOR_SPOTS.canteen)];
 
 /** Beeldvlak van de monitor op een kantoorbureau (m): 16:9, net binnen de behuizing. */
 const DESK_SCREEN = { w: 0.52, h: 0.52 * (9 / 16) };
@@ -123,7 +111,7 @@ function fridge(): Part[] {
   ];
 }
 
-/** Keukenblok met spoelbak, kraan, koffieapparaat en magnetron. */
+/** Keukenblok met spoelbak, kraan en magnetron; het koffieapparaat (coffee.ts) staat er los op. */
 function counter(len: number): Part[] {
   return [
     [STYLE.white, rb(len, 0.86, 0.6, 0.012, 0, 0.43, 0)],
@@ -131,8 +119,6 @@ function counter(len: number): Part[] {
     [STYLE.steel, rb(0.5, 0.012, 0.38, 0.005, -len / 2 + 0.6, 0.903, 0)],
     [STYLE.steel, cyl(0.012, 0.24, -len / 2 + 0.6, 1.02, -0.22)],
     [STYLE.steel, new THREE.CylinderGeometry(0.012, 0.012, 0.16, 10).rotateX(Math.PI / 2).translate(-len / 2 + 0.6, 1.14, -0.14)],
-    [STYLE.black, rb(0.28, 0.38, 0.32, 0.03, 0.1, 1.09, -0.08)],
-    [STYLE.paint, rb(0.06, 0.03, 0.01, 0.004, 0.1, 1.2, 0.083)],
     [STYLE.white, rb(0.5, 0.29, 0.36, 0.02, len / 2 - 0.45, 1.045, -0.06)],
     [STYLE.black, rb(0.34, 0.2, 0.01, 0.004, len / 2 - 0.5, 1.045, 0.123)],
     ...[-1, 0, 1].map((i): Part => [STYLE.dark, rb(0.18, 0.02, 0.025, 0.008, (i * len) / 3.2, 0.72, 0.31)]),
@@ -286,20 +272,16 @@ export function createRooms({ scene, roof, solid }: Options) {
   for (let i = 0; i < 3; i++) place(cabinet(), office.maxX - WALL / 2 - 0.25, office.minZ + 1.5 + i * 0.85, -QUARTER, [0.8, 0.45, 1.3]);
   place(plant(), office.maxX - 0.5, office.minZ + 0.6);
 
-  // ---------- Kantine: keukenblok en koelkast langs de oostwand, twee tafels, automaat ----------
-  const counterX = canteen.maxX - OUTER - 0.33;
-  place(fridge(), counterX, canteen.minZ + 0.6, -QUARTER, [0.62, 0.62, 1.8]);
-  place(counter(3.2), counterX, canteen.minZ + 2.6, -QUARTER, [3.2, 0.63, 0.9]);
-  const tableX = canteen.minX + Math.min(3.2, (canteen.maxX - canteen.minX) / 2 - 0.6);
-  for (const tz of [canteen.minZ + 2.2, canteen.minZ + 4.9]) {
-    if (tz + 1.2 > frontZ) continue;
-    place(table(1.8, 0.8), tableX, tz, 0, [1.8, 0.8, 0.76]);
-    for (const dx of [-0.6, 0, 0.6]) {
-      place(chair(), tableX + dx, tz - 0.62, 0);
-      place(chair(), tableX + dx, tz + 0.62, Math.PI);
-      seatAt(tableX + dx, tz - 0.62, 0);
-      seatAt(tableX + dx, tz + 0.62, Math.PI);
-    }
+  // ---------- Kantine: keukenblok met het koffieapparaat en de koelkast langs de oostwand, twee tafels, automaat ----------
+  // Waar alles staat komt uit src/sim/layout.ts (CANTEEN): de chauffeurs halen hier koffie en schuiven aan.
+  const block = CANTEEN.counter;
+  place(fridge(), block.x, canteen.minZ + 0.6, -QUARTER, [0.62, 0.62, 1.8]);
+  place(counter(block.length), block.x, block.z, -QUARTER, [block.length, 0.63, 0.9]);
+  place(coffeeMachine(), CANTEEN.machine.x, CANTEEN.machine.z, -QUARTER);
+  for (const t of CANTEEN.tables) place(table(1.8, 0.8), t.x, t.z, 0, [1.8, 0.8, 0.76]);
+  for (const s of CANTEEN.seats) {
+    place(chair(), s.x, s.z, s.r);
+    seatAt(s.x, s.z, s.r);
   }
   place(vendingMachine(), canteen.minX + WALL / 2 + 0.42, frontZ - 1.2, QUARTER, [0.95, 0.8, 1.85]);
   place(plant(), canteen.minX + 0.5, canteen.minZ + 0.6);

@@ -1,9 +1,11 @@
 import * as THREE from 'three';
-import { DRIVER_DOORS, JACK_HANDLE, JACK_REACH, dockFloorY, dockScreen, jackPark, type Driver, type DriverObstacle, type Drivers } from '../sim/drivers';
-import { DOCKS, HALL } from '../sim/layout';
+import { DRIVER_DOORS, JACK_HANDLE, JACK_REACH, dockFloorY, dockScreen, jackPark, seated, type Driver, type DriverObstacle, type Drivers } from '../sim/drivers';
+import { CANTEEN, DOCKS, HALL } from '../sim/layout';
 import type { Obstacle } from '../sim/robots';
 import type { Truck } from '../sim/warehouse';
 import { createCharacter, type HandTarget } from './scene/character';
+import { COFFEE_SPOTS, CUP_HEIGHT, createCoffeeStream, createCup } from './scene/coffee';
+import { CHAIR_HIP_Y } from './scene/rooms';
 import { createDockScreen, type DockScreenState } from './scene/dockScreen';
 import { createElectricJack } from './scene/electricJack';
 import type { Solid } from './scene/warehouse';
@@ -11,6 +13,8 @@ import { dropLoad, loadTop, type OrderLoads, type PalletLoads } from './warehous
 
 // De chauffeurs in beeld: de figuur zelf, de elektrische pompwagen bij elk dock, het aanraakscherm naast elke
 // dockdeur, en de deuren die voor hem open en dicht gaan. Leest alleen de sim (src/sim/drivers.ts).
+// Heeft hij koffiepauze (zijn wagen staat op een wachtplaats), dan pakt hij in de kantine een bekertje uit het
+// koffieapparaat en drinkt hij dat aan tafel op.
 
 const X0 = -HALL.w / 2;
 /** Hoogte (m) van het scherm aan de wand. */
@@ -63,12 +67,41 @@ export function mountDrivers({
   });
   const doors = DRIVER_DOORS.map(() => 0);
 
+  // Het koffieapparaat staat een kwartslag gedraaid op het keukenblok (voorkant naar -x): hier het bekertje dat
+  // onder de uitloop volloopt en het straaltje koffie
+  const machine = new THREE.Group();
+  machine.position.set(CANTEEN.machine.x, 0, CANTEEN.machine.z);
+  machine.rotation.y = -Math.PI / 2;
+  const brewCup = createCup();
+  brewCup.position.copy(COFFEE_SPOTS.cup);
+  const stream = createCoffeeStream();
+  machine.add(brewCup, stream);
+  scene.add(machine);
+  machine.updateMatrixWorld();
+  /** Een punt op het apparaat (COFFEE_SPOTS) in de wereld. */
+  const onMachine = (spot: THREE.Vector3, out: THREE.Vector3) => machine.localToWorld(out.copy(spot));
+
   /** De figuren van de chauffeurs, op het nummer van hun vrachtwagen. */
-  const people = new Map<string, { character: ReturnType<typeof createCharacter>; left: HandTarget; right: HandTarget }>();
+  type Person = {
+    character: ReturnType<typeof createCharacter>;
+    left: HandTarget;
+    right: HandTarget;
+    /** Het bekertje koffie in zijn rechterhand. */
+    cup: THREE.Object3D;
+    /** Waar hij mee bezig is, en hoe lang al (s). */
+    phase: string;
+    since: number;
+  };
+  const people = new Map<string, Person>();
   function person(id: string) {
     let p = people.get(id);
     if (!p) {
-      p = { character: createCharacter(undefined, { vest: '#1565c0' }), left: { point: new THREE.Vector3() }, right: { point: new THREE.Vector3() } };
+      p = { character: createCharacter(undefined, { vest: '#1565c0' }), left: { point: new THREE.Vector3() }, right: { point: new THREE.Vector3() }, cup: createCup(), phase: '', since: 0 };
+      // het bekertje staat rechtop in de hand als de onderarm naar voren wijst
+      p.cup.rotation.x = Math.PI / 2;
+      p.cup.position.set(0.05, -0.058, -CUP_HEIGHT / 2);
+      p.cup.visible = false;
+      p.character.rightHand.add(p.cup);
       scene.add(p.character.group);
       people.set(id, p);
     }
@@ -76,7 +109,7 @@ export function mountDrivers({
   }
 
   function screenState(i: number): DockScreenState {
-    const t = trucks().find((x) => x.dock === i);
+    const t = trucks().find((x) => x.dock === i && x.status !== 'parking' && x.status !== 'parked'); // niet een wagen die nog op het terrein wacht
     const d = drivers.at(i);
     const job = t?.direction === 'out' ? 'laden' : 'lossen';
     const base = { dock: `DOCK ${i + 1}`, truck: t?.id ?? '', job, checkedIn: false, done: false } as const;
@@ -147,6 +180,12 @@ export function mountDrivers({
         const z = d.jack ? d.z - fz * JACK_HANDLE : d.z;
         g.position.set(x, d.jack ? dockFloorY(x) : 0, z);
         g.rotation.y = d.r;
+        // Aan tafel in de kantine: precies op zijn stoel, met zijn gezicht naar de tafel
+        const seat = seated(d) ? CANTEEN.seats[d.seat ?? -1] : undefined;
+        if (seat) {
+          g.position.set(seat.x, 0, seat.z);
+          g.rotation.y = seat.r;
+        }
         DRIVER_DOORS.forEach((dz, i) => (near[i] ||= Math.hypot(x - X0, z - dz) < 2));
       }
       for (const v of visitors?.() ?? []) DRIVER_DOORS.forEach((dz, i) => (near[i] ||= Math.hypot(v.x - X0, v.z - dz) < 2));
@@ -173,12 +212,47 @@ export function mountDrivers({
         hall.setDriverDoor(i, next);
       });
       // De figuren, na de pompwagens: hun handen liggen op de dissel
+      let brewing = 0; // hoe lang (s) er al een bekertje onder de uitloop staat; 0 = geen
       for (const d of drivers.drivers) {
         const p = person(d.id);
         const v = docks[d.dock];
         let left: HandTarget | undefined;
         let right: HandTarget | undefined;
-        if (d.jack && v) {
+        if (p.phase !== d.phase) [p.phase, p.since] = [d.phase, 0];
+        p.since += dt;
+        const sitting = seated(d);
+        p.cup.visible = !!d.cup;
+        if (d.phase === 'coffee') {
+          // Koffie pakken: een bekertje van de stapel, onder de uitloop zetten, de knop indrukken en het volle bekertje pakken
+          const s = p.since;
+          if (s > 1.4) brewing = s - 1.4;
+          const spot = s < 0.9 ? COFFEE_SPOTS.stack : s < 1.6 ? COFFEE_SPOTS.cup : s < 2.3 ? COFFEE_SPOTS.button : s > 3.7 ? COFFEE_SPOTS.cup : null;
+          if (spot) {
+            onMachine(spot, p.right.point);
+            if (spot === COFFEE_SPOTS.cup) p.right.point.y += CUP_HEIGHT / 2;
+            right = p.right;
+          }
+        } else if (d.cup) {
+          // Het bekertje voor zich uit; zittend rust het op tafel en neemt hij af en toe een slok
+          const g = p.character.group;
+          const sip = d.phase === 'drinking' ? THREE.MathUtils.smoothstep(Math.sin(p.since * 0.8 + 1.2), 0.82, 0.97) : 0;
+          const hip = sitting ? CHAIR_HIP_Y : 0.916;
+          const rest = sitting ? [-0.2, 0.25, 0.33] : [-0.17, 0.15, 0.25];
+          const mouth = [-0.1, 0.62, 0.21];
+          const [lx, ly, lz] = rest.map((v0, k) => v0 + (mouth[k] - v0) * sip);
+          const sin = Math.sin(g.rotation.y);
+          const cos = Math.cos(g.rotation.y);
+          p.right.point.set(g.position.x + lx * cos + lz * sin, g.position.y + hip + ly, g.position.z - lx * sin + lz * cos);
+          right = p.right;
+          if (sitting) {
+            // de andere hand ligt op tafel
+            p.left.point.set(g.position.x + 0.19 * cos + 0.31 * sin, g.position.y + hip + 0.23, g.position.z - 0.19 * sin + 0.31 * cos);
+            left = p.left;
+          }
+        }
+        if (right) {
+          // heeft het bekertje (of het koffieapparaat) al in de hand
+        } else if (d.jack && v) {
           v.jack.grip(1, p.left.point);
           v.jack.grip(-1, p.right.point);
           left = p.left;
@@ -193,8 +267,10 @@ export function mountDrivers({
           p.right.point.set(X0 + 0.2, 1.3, DOCKS[d.dock].z - 1.6);
           right = p.right;
         }
-        p.character.update(dt, { leftHand: left, rightHand: right, airborne: false });
+        p.character.update(dt, { leftHand: left, rightHand: right, airborne: false, seated: sitting, seatHipY: CHAIR_HIP_Y });
       }
+      brewCup.visible = brewing > 0;
+      stream.visible = brewing > 0.9 && brewing < 2.1;
       if ((screenRefresh -= dt) <= 0) {
         screenRefresh = 0.3;
         docks.forEach((v, i) => v.screen.set(screenState(i)));

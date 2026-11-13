@@ -30,6 +30,8 @@ export const STYLE = {
   blue: mat('#1e4f9c', 0.7, 0.05),
   /** Karton: een losse doos (op een grijparm). */
   carton: mat('#b98f62', 0.85, 0),
+  /** Koffie: de bonen in het koffieapparaat en wat er in een bekertje zit. */
+  coffee: mat('#3a2417', 0.6, 0),
   /** Groen: planten. */
   green: mat('#3f7d4a', 0.9, 0),
   /** Vloerbedekking van het kantoor. */

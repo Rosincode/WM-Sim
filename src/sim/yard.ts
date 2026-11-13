@@ -1,10 +1,13 @@
-import { TRUCK } from './drivers';
-import { DOCKS, HALL } from './layout';
+import { TRUCK, WAIT_BAYS } from './drivers';
+import { DOCKS, HALL, type Point } from './layout';
 
 // Het buitenterrein als rijroute: de openbare weg, de inrit met de slagboom, het vrachtwagenterrein voor de docks.
 // Een vrachtwagen komt altijd over de weg aanrijden, draait de inrit op, rijdt het terrein op tot voorbij zijn
 // dock en steekt dan achteruit het dock in (achteruit insturen, vooruit rechtzetten, recht achteruit). Vertrekken
 // gaat vooruit het dock uit, via de inrit de weg op.
+// Een wagen die te vroeg is (of waarvan het dock nog bezet is) rijdt eerst vooruit een wachtplaats in de noordhoek
+// van het terrein in (WAIT_BAYS in drivers.ts); van daar steekt hij later achteruit de rijlijn op en rijdt hij naar
+// zijn dock.
 // Een route is een rij rechte stukken en bochten (createRoute) met een snelheid per stuk; daaruit volgt waar het
 // voertuig op elk moment is. Dezelfde bouwer is bruikbaar voor andere voertuigen (auto's naar de parkeerplaats).
 // De maten hier horen bij het terrein dat src/ui/scene/exterior.ts tekent.
@@ -142,20 +145,28 @@ const STEER_IN = Math.PI / 3;
 /** De achteras van een wagen die tegen het dock staat. */
 const DOCKED_X = TRUCK.rear - AXLE;
 
-/** Over de weg vanuit het oosten, de inrit op, het terrein over, steken en achteruit tegen het dock. */
-function arrival(dockZ: number): Route {
+/** Na het steken staat de wagen weer op de rijlijn, recht voor zijn dock: daarvoor moet hij er zo ver voorbij. */
+const PAST = RADIUS * Math.sin(STEER_IN) - RADIUS * (1 - Math.sin(STEER_IN));
+/** Waar (z) een wagen die van de inrit komt op de rijlijn langs de docks uitkomt. */
+const LANE_FROM_Z = YARD_DRIVE.yardZ - 2 * RADIUS;
+
+/** Over de weg vanuit het oosten, de inrit op en het terrein over tot op de rijlijn langs de docks (naar het noorden). */
+function ontoLane() {
   const R = RADIUS;
-  // Na het steken staat de wagen weer op de rijlijn, recht voor zijn dock: daarvoor moet hij er zo ver voorbij
-  const past = R * Math.sin(STEER_IN) - R * (1 - Math.sin(STEER_IN));
-  const laneFromZ = YARD_DRIVE.yardZ - 2 * R;
   return createRoute({ x: YARD_DRIVE.inX + R + ROAD_RUN, z: ROAD.westZ, a: WEST, rolling: true })
     .straight(ROAD_RUN, SPEED.road)
     .turn('right', QUARTER, R, SPEED.turn) // de inrit op
     .straight(ROAD.westZ - R - YARD_DRIVE.yardZ, SPEED.yard) // onder de slagboom door
     .turn('right', QUARTER, R, SPEED.turn)
     .straight(LANE_X - R - (YARD_DRIVE.inX + R), SPEED.yard)
-    .turn('left', QUARTER, R, SPEED.turn) // de rijlijn langs de docks op
-    .straight(Math.max(0, laneFromZ - (dockZ - past)), SPEED.yard) // tot voorbij het dock
+    .turn('left', QUARTER, R, SPEED.turn); // de rijlijn langs de docks op
+}
+
+/** Over de weg vanuit het oosten, de inrit op, het terrein over, steken en achteruit tegen het dock. */
+function arrival(dockZ: number): Route {
+  const R = RADIUS;
+  return ontoLane()
+    .straight(Math.max(0, LANE_FROM_Z - (dockZ - PAST)), SPEED.yard) // tot voorbij het dock
     .pause(1)
     .turn('right', STEER_IN, R, SPEED.back, true) // achteruit insturen: de achterkant zwenkt naar het dock
     .pause(0.8)
@@ -180,7 +191,72 @@ function departure(dockZ: number): Route {
     .build(true);
 }
 
+// ========== Wachtplaatsen ==========
+
+/** De achteras van een wagen op een wachtplaats: de cabine wijst van het gebouw af, net als aan het dock. */
+const bayAxle = (bay: Point) => bay.x - AXLE;
+
+/** Net als naar een dock het terrein op, maar de rijlijn af tot in de noordhoek en daar vooruit de wachtplaats in. */
+function toBay(bay: Point): Route {
+  const R = RADIUS;
+  return ontoLane()
+    .straight(Math.max(0, LANE_FROM_Z - (bay.z + R)), SPEED.yard)
+    .turn('left', QUARTER, R, SPEED.turn) // de wachtplaats in
+    .straight(Math.max(0, LANE_X - R - bayAxle(bay)), SPEED.steer)
+    .build();
+}
+
+/**
+ * Van de wachtplaats naar het dock: achteruit de wachtplaats uit en de rijlijn op (de neus naar het zuiden), de
+ * rijlijn af tot voorbij het dock en dan steken zoals bij aankomen, maar in spiegelbeeld.
+ */
+function fromBay(bay: Point, dockZ: number): Route {
+  const R = RADIUS;
+  return createRoute({ x: bayAxle(bay), z: bay.z, a: WEST })
+    .pause(0.5)
+    .straight(Math.max(0, LANE_X - R - bayAxle(bay)), SPEED.back, true)
+    .turn('right', QUARTER, R, SPEED.back, true) // de achterkant zwenkt de rijlijn op, naar het noorden
+    .pause(0.8)
+    .straight(Math.max(0, dockZ + PAST - (bay.z - R)), SPEED.yard) // tot voorbij het dock
+    .pause(1)
+    .turn('left', STEER_IN, R, SPEED.back, true) // achteruit insturen: de achterkant zwenkt naar het dock
+    .pause(0.8)
+    .turn('right', QUARTER - STEER_IN, R, SPEED.steer) // vooruit rechtzetten
+    .pause(2.2, 1) // de chauffeur zet de achterdeuren open
+    .straight(DOCKED_X - LANE_X, SPEED.back, true)
+    .build();
+}
+
 const routes = new Map<string, Route>();
+function bayRoute(bay: number, dock = -1) {
+  const key = `bay|${bay}|${dock}`;
+  let r = routes.get(key);
+  if (!r) routes.set(key, (r = dock < 0 ? toBay(WAIT_BAYS[bay]) : fromBay(WAIT_BAYS[bay], DOCKS[dock]?.z ?? 0)));
+  return r;
+}
+/** Zo lang (s) doet een vrachtwagen over aankomen op wachtplaats `bay`. */
+export const parkSeconds = (bay: number) => (WAIT_BAYS[bay] ? bayRoute(bay).seconds : 1);
+/** Zo lang (s) doet hij erover om van wachtplaats `bay` naar dock `dock` te rijden. */
+export const bayDriveSeconds = (bay: number, dock: number) => (WAIT_BAYS[bay] ? bayRoute(bay, dock).seconds : 1);
+
+/**
+ * Waar een vrachtwagen uit de sim staat: op weg naar zijn wachtplaats (parking), daar geparkeerd (parked), op
+ * weg naar zijn dock (arriving: van de weg, of van zijn wachtplaats als hij die heeft), aan het dock of vertrekkend.
+ */
+export function truckPoseOf(t: { status: string; dock: number; bay?: number; t: number }): VehiclePose {
+  const bay = t.bay === undefined ? undefined : WAIT_BAYS[t.bay];
+  if (bay && (t.status === 'parking' || t.status === 'parked')) {
+    if (t.status === 'parked' || t.t >= 1) return { x: bay.x, z: bay.z, r: 0, doors: 0 };
+    const route = bayRoute(t.bay!);
+    return route.at(t.t * route.seconds);
+  }
+  if (bay && t.status === 'arriving' && t.t < 1) {
+    const route = bayRoute(t.bay!, t.dock);
+    return route.at(t.t * route.seconds);
+  }
+  return truckPose(t.dock, t.status === 'departing', t.t);
+}
+
 function truckRoute(dock: number, departing: boolean) {
   const key = `${dock}|${departing}`;
   let r = routes.get(key);

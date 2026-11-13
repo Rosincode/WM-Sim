@@ -692,5 +692,12 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   }
 
   update(0);
-  return { group, update, setFirstPerson, setFace };
+  return {
+    group,
+    update,
+    setFirstPerson,
+    setFace,
+    /** De rechterpols: hang hier iets aan dat de figuur in zijn hand houdt (met de onderarm naar voren is +z omhoog en +x naar binnen). */
+    rightHand: arms[1].wrist as THREE.Object3D,
+  };
 }

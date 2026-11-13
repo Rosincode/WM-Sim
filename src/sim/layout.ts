@@ -259,6 +259,58 @@ export const ROOMS = (() => {
   return { office, canteen };
 })();
 
+/** De kolommen langs de wanden van de hal staan om de zoveel meter (x), vanaf de dockwand. */
+const COLUMN_PITCH = 7;
+/** Midden (x) van een deur van 2 × `half` breed in de noordwand: zo dicht mogelijk bij x, binnen de kamer en vrij van de kolommen. */
+function roomDoor(x: number, r: Rect, half: number) {
+  const within = (v: number) => Math.min(r.maxX - half - 0.6, Math.max(r.minX + half + 0.6, v));
+  let c = within(x);
+  const column = WALL_X + Math.round((c - WALL_X) / COLUMN_PITCH) * COLUMN_PITCH;
+  const clear = half + 0.45;
+  if (Math.abs(c - column) < clear) c = within(column + (c < column ? -clear : clear));
+  return { x: c, half };
+}
+/** De deuren in de noordwand van de hal: die van de kantine ligt waar het looppad op de wand uitkomt (als het past). */
+export const ROOM_DOORS = {
+  office: roomDoor(ROOMS.office.maxX - 1.2, ROOMS.office, 0.55),
+  canteen: roomDoor(WALKWAY_X, ROOMS.canteen, 0.6),
+};
+
+/**
+ * De inrichting van de kantine: het keukenblok met het koffieapparaat langs de oostwand, en de tafels met hun
+ * stoelen. De chauffeurs (src/sim/drivers.ts) halen hier koffie; src/ui/scene/rooms.ts zet de meubels neer.
+ */
+export const CANTEEN = (() => {
+  const r = ROOMS.canteen;
+  /** Binnenkant (z) van de wand naar de hal. */
+  const front = r.maxZ - 0.18;
+  /** Het keukenblok: midden, en zijn lengte langs z. De voorkant kijkt de kamer in (-x). */
+  const counter = { x: r.maxX - 0.53, z: r.minZ + 2.6, length: 3.2 };
+  /** Het koffieapparaat op het keukenblok. */
+  const machine: Point = { x: counter.x, z: counter.z + 0.2 };
+  const tableX = r.minX + Math.min(3.2, (r.maxX - r.minX) / 2 - 0.6);
+  const tables: Point[] = [r.minZ + 2.2, r.minZ + 4.9].filter((z) => z + 1.2 <= front).map((z) => ({ x: tableX, z }));
+  /** Zo ver (x) naast het midden van de tafel staan de stoelen; aan elke lange kant drie. */
+  const CHAIR_DX = [-0.6, 0, 0.6];
+  /** Elke stoel: waar hij staat, en waar je heen kijkt als je erop zit (naar de tafel). */
+  const seats: Pose[] = tables.flatMap((t) =>
+    CHAIR_DX.flatMap((dx) => [{ x: t.x + dx, z: t.z - 0.62, r: 0 }, { x: t.x + dx, z: t.z + 0.62, r: Math.PI }]),
+  );
+  return {
+    front,
+    counter,
+    machine,
+    tables,
+    seats,
+    /** Waar je staat om koffie te pakken, met je gezicht naar het apparaat. */
+    coffeeStand: { x: counter.x - 0.7, z: machine.z, r: Math.PI / 2 } as Pose,
+    /** De stoelen (index in seats) op de hoek aan de kant van het keukenblok: daar schuif je vanaf de zijkant zo aan. */
+    cornerSeats: seats.flatMap((s, i) => (s.x > tableX + 0.3 ? [i] : [])),
+    /** De looplijn (x) tussen de tafels en het keukenblok. */
+    aisleX: tableX + 1.25,
+  };
+})();
+
 /** Parkeerplaats tegen de zuidwand bij de docks: vakken voor de heftruck en de pompwagen. */
 export const PARKING = (() => {
   const { width, depth } = model.parking;
