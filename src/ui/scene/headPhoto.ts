@@ -126,7 +126,7 @@ export function readPhoto(image: HTMLImageElement | HTMLCanvasElement): HeadLook
   if (hasMask) {
     for (let i = 0; i < MW * MH; i++) mask[i] = smoothstep(strip[i * 4] / 255, 0.3, 0.7);
     const avg = average((c, r) => mask[r * MW + c] > 0.8);
-    hairRGB = avg && avg.count >= 12 ? avg.rgb : null;
+    hairRGB = avg && avg.count >= 40 ? avg.rgb : null;
     if (!hairRGB) mask.fill(0);
   } else hairRGB = byColour();
 
@@ -249,8 +249,10 @@ export function readPhoto(image: HTMLImageElement | HTMLCanvasElement): HeadLook
       off = 0;
     } else if (!Number.isNaN(sideTop)) off++;
   }
-  const sides = hasHair && sideTop - sideEnd > 0.012;
+  const sides = hasHair && sideTop - sideEnd > 0.035; // een krans loopt van de slaap tot onder het oor: een los vlekje (schaduw, glans) is geen haar
   if (hasHair && !crown && !sides) mask.fill(0);
+  // kale kruin: wat er midden bovenop voor haar is aangezien (glans, schaduw) is geen haar
+  else if (hasHair && !crown) for (let r = 0; r < MH; r++) for (let c = col(-0.055); c <= col(0.055); c++) mask[r * MW + c] = 0;
   const anyHair = hasHair && (crown || sides);
   // Buiten de foto (zijkanten, achterhoofd): haar vanaf de kruin (of, bij een kale kruin, vanaf waar het opzij begint)
   // tot boven de oren, en achterop tot in de nek; bij langer haar tot waar het op de foto opzij reikt.
