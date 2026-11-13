@@ -164,8 +164,12 @@ export function createRooms({ scene, roof, solid }: Options) {
     for (const [mat, geo] of item) put(mat, geo.rotateY(ry).translate(x, 0, z));
     if (!block) return;
     const turned = Math.abs(Math.sin(ry)) > 0.5; // een kwartslag gedraaid: breedte en diepte wisselen
-    solid(x, z, turned ? block[1] : block[0], turned ? block[0] : block[1], 0, block[2]);
+    solid(x, z, turned ? block[1] : block[0], turned ? block[0] : block[1], 0, reach(block[2]));
   };
+  // Het plafond is massief: je stoot je hoofd eraan. Waar je niet rechtop op kunt staan (koelkast, kast, automaat,
+  // deurblad) loopt het blok door tot het plafond, zodat je er niet op kunt klimmen en door het dak naar buiten komt.
+  const reach = (top: number) => (top > ROOM_HEIGHT - 1.85 ? ROOM_HEIGHT : top);
+  solid((all.minX + all.maxX) / 2, (back + HALL_WALL - 0.02) / 2, all.maxX - all.minX, HALL_WALL - 0.02 - back, ROOM_HEIGHT, ROOM_HEIGHT + 0.3);
 
   /**
    * Wand langs x (op z = at) of langs z (op x = at) met openingen: een deur begint op de vloer, een raam krijgt
@@ -231,7 +235,7 @@ export function createRooms({ scene, roof, solid }: Options) {
       [STYLE.steel, rb(0.14, 0.025, 0.11, 0.01, w - 0.11, 1.03, 0)], // klink, steekt aan beide kanten uit
     ];
     for (const [mat, geo] of leaf) put(mat, geo.rotateY(OPEN).translate(hingeX, 0, hingeZ));
-    solid(hingeX + (Math.cos(OPEN) * w) / 2, hingeZ - (Math.sin(OPEN) * w) / 2, 0.2, w, 0, d.height);
+    solid(hingeX + (Math.cos(OPEN) * w) / 2, hingeZ - (Math.sin(OPEN) * w) / 2, 0.2, w, 0, reach(d.height));
   }
 
   // ---------- Kantoor: twee bureaus aan het raam met uitzicht op het terrein, kasten langs de tussenwand ----------
