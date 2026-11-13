@@ -143,8 +143,8 @@ export function mountRobots({
       .join('');
     const html = `<div style="margin-bottom:8px">${source}</div>
       ${dispatch.error ? `<div style="margin-bottom:8px;color:#ff8a80">Robotopdrachten ophalen mislukt: ${esc(dispatch.error)}</div>` : ''}
-      <div style="margin-bottom:8px">Elk pad heeft zijn eigen robot voor pallets: een tilrobot (alleen de vloer) of een robot-heftruck
-        (alle niveaus). De pickrobots picken open orders van elk niveau en zetten ze klaar op een uitslaglocatie; de voorraadteller
+      <div style="margin-bottom:8px">Elk pad heeft twee robots voor pallets: een tilrobot voor alles op de vloer (wegzetten en halen) en een
+        robot-heftruck voor alles op de hogere niveaus. De pickrobots picken open orders van elk niveau en zetten ze klaar op een uitslaglocatie; de voorraadteller
         scant de palletstickers in de stellingen en boekt verplaatste pallets. Alles gaat langs de WMS, zonder dat er iemand aan te pas komt.</div>
       <h4>Geek+-robots</h4><table>${robots || '<tr><td>In deze hal is geen ruimte voor de robotbaan.</td></tr>'}</table>
       <h4>Opdrachten</h4><table>${tasks || '<tr><td>Geen lopende opdrachten</td></tr>'}</table>`;

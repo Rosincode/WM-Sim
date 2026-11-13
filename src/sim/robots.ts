@@ -18,7 +18,8 @@ import type { WmsReply } from './wms';
 // elke stap terug aan de WMS (gestart, afgerond, mislukt). Zoals overal in de sim geldt: eerst de WMS, dan
 // fysiek. Pas als de WMS het afronden heeft geaccepteerd zet de robot de pallet neer.
 //
-// Per pad tussen de stellingen is er één robot voor pallets (om en om een tilrobot en een robot-heftruck). De
+// Elk pad tussen de stellingen heeft twee robots voor pallets: een tilrobot voor alles op de vloer (wegzetten en
+// halen) en een robot-heftruck voor alles op de hogere niveaus. De
 // laadstations staan in één strakke rij tegen de oostwand, soort bij soort en op gelijke afstand van elkaar. De
 // robots rijden over de paden (één robot per pad tegelijk) en wisselen van pad via de robotbaan aan de oostkant
 // van de hal. Bij de docks rijden ze niet tussen de pallets door: ze komen via de vrije strook midden voor een
@@ -174,8 +175,12 @@ export const ROBOT_DOCK_X = Math.min(
 );
 /** De robots die niet bij een pad horen. */
 const EXTRA: RobotKind[] = ['count', 'pick', 'pick'];
-/** De soort van elke robot: per pad om en om een tilrobot en een robot-heftruck, daarna de overige. */
-export const ROBOT_KINDS: RobotKind[] = FITS ? [...ROBOT_AISLES.map((_, i): RobotKind => (i % 2 ? 'fork' : 'lift')), ...EXTRA] : [];
+/** De soort van elke robot: eerst per pad een tilrobot, dan per pad een robot-heftruck, daarna de overige. */
+export const ROBOT_KINDS: RobotKind[] = FITS
+  ? [...ROBOT_AISLES.map((): RobotKind => 'lift'), ...ROBOT_AISLES.map((): RobotKind => 'fork'), ...EXTRA]
+  : [];
+/** Het pad waar robot i bij hoort (-1 = bij geen enkel pad: de pickrobots en de voorraadteller). */
+const homeAisle = (i: number) => (i < 2 * ROBOT_AISLES.length ? i % ROBOT_AISLES.length : -1);
 /** De volgorde in de rij laadstations: soort bij soort. */
 const ROW_ORDER: RobotKind[] = ['lift', 'fork', 'pick', 'count'];
 const ROW = ROBOT_KINDS.map((_, i) => i).sort((a, b) => ROW_ORDER.indexOf(ROBOT_KINDS[a]) - ROW_ORDER.indexOf(ROBOT_KINDS[b]) || a - b);
@@ -192,7 +197,7 @@ export const ROBOT_CHARGERS: Point[] = ROBOT_KINDS.map((_, i) => ({
 const PREFIX: Record<RobotKind, string> = { lift: 'GKP', fork: 'GKF', pick: 'PCK', count: 'INV' };
 /** Het nummer van robot i: dat van zijn pad, of het volgnummer binnen zijn soort. */
 const robotId = (i: number) => {
-  const n = i < ROBOT_AISLES.length ? i + 1 : ROBOT_KINDS.slice(ROBOT_AISLES.length, i + 1).filter((k) => k === ROBOT_KINDS[i]).length;
+  const n = homeAisle(i) >= 0 ? homeAisle(i) + 1 : ROBOT_KINDS.slice(2 * ROBOT_AISLES.length, i + 1).filter((k) => k === ROBOT_KINDS[i]).length;
   return `${PREFIX[ROBOT_KINDS[i]]}-${String(n).padStart(2, '0')}`;
 };
 /** Zo ver (m) steekt een robot uit vanaf zijn midden aan de kant waarmee hij tegen het laadstation staat. */
@@ -543,17 +548,20 @@ export function createRobotFleet(world: RobotWorld) {
           void fail(null, spot, task);
           continue;
         }
-        // Hoger dan de vloer kan alleen een robot-heftruck; werk op de vloer gaat eerst naar een tilrobot
+        // Alles wat van of naar een hoger niveau moet doet een robot-heftruck; werk op de vloer doet een tilrobot.
+        // De robot van het pad zelf gaat voor; is die bezig, dan de dichtstbijzijnde van dezelfde soort.
         const high = spot.level > 1 || world.level(task.toLocationId) > 1;
-        const able = robots.filter((r) => r.kind === 'fork' || (!high && r.kind === 'lift'));
+        const able = robots.filter((r) => r.kind === (high ? 'fork' : 'lift'));
         if (!able.length) {
           open = open.filter((t) => t !== task);
-          void fail(null, 'er is geen robot-heftruck: de tilrobots komen alleen bij de vloer', task);
+          void fail(null, high ? 'er is geen robot-heftruck voor de hogere niveaus' : 'er is geen tilrobot voor de vloer', task);
           continue;
         }
+        const own = spot.strip !== undefined ? nearestAisle(spot.strip) : aislesFor(spot)[0];
+        const other = (r: Robot) => Number(homeAisle(robots.indexOf(r)) !== own);
         robot = able
           .filter((r) => free(r) && !r.load && r.battery >= LOW_BATTERY)
-          .sort((a, b) => (high ? 0 : Number(a.kind === 'fork') - Number(b.kind === 'fork')) || dist(a, spot) - dist(b, spot))[0];
+          .sort((a, b) => other(a) - other(b) || dist(a, spot) - dist(b, spot))[0];
       }
       if (!robot) continue;
       open = open.filter((t) => t !== task);
