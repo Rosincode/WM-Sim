@@ -432,6 +432,31 @@ export function readPhoto(image: HTMLImageElement | HTMLCanvasElement): HeadLook
   const top = patch(0, topEdge - 0.012, TOP_W, 0.024);
   const chin = patch(0, 0.018 - HEAD.hy, 0.05, 0.022);
 
+  // Onder de neus staan op de foto de neusgaten en de schaduw van de neus. Op het hoofd heeft de neus zelf al
+  // vorm en schaduw, en van opzij wordt dat een donkere vlek: daar de foto lichter maken, naar de huidskleur toe.
+  // Niet bij een snor: die is zelf donker en moet blijven.
+  {
+    const luma = (r: number, g: number, b: number) => 0.299 * r + 0.587 * g + 0.114 * b;
+    const skinL = luma(skinRGB[0], skinRGB[1], skinRGB[2]);
+    const noseY = headY(NOSE_V);
+    const lip = average((c, r) => Math.abs(colX(c)) < 0.015 && rowY(r) < noseY - 0.012 && rowY(r) > noseY - 0.022);
+    if (!lip || luma(lip.rgb[0], lip.rgb[1], lip.rgb[2]) > 0.7 * skinL) {
+      const floor = 0.8 * skinL;
+      const toRow = (y: number) => Math.round((PHOTO.top + (HEAD.hy - y) / PHOTO.h) * H);
+      const toCol = (x: number) => Math.round((0.5 + x / PHOTO.w) * W);
+      for (let r = toRow(noseY + 0.008); r <= toRow(noseY - 0.02); r++) {
+        const y = HEAD.hy - ((r + 0.5) / H - PHOTO.top) * PHOTO.h;
+        for (let c = toCol(-0.024); c <= toCol(0.024); c++) {
+          const x = ((c + 0.5) / W - 0.5) * PHOTO.w;
+          const i = (r * W + c) * 4;
+          const near = Math.exp(-((x / 0.013) ** 2) - ((y - noseY + 0.006) / 0.008) ** 2);
+          const t = Math.min(1, 1.5 * near) * smoothstep(floor - luma(px[i], px[i + 1], px[i + 2]), 0, 25);
+          for (let ch = 0; ch < 3; ch++) px[i + ch] += (0.85 * skinRGB[ch] - px[i + ch]) * t;
+        }
+      }
+    }
+  }
+
   // Kleur van het hele hoofd: de foto op de voorkant, en daarbuiten de foto doorgetrokken: de structuur van de
   // bovenkant over de kruin en het achterhoofd (haar tot de verzonnen haargrens in de nek, of kale huid), de huid
   // van de zijkant achter de oren langs, de kin tot de nek. Waar haar zit wordt de foto gelezen op de plek van
