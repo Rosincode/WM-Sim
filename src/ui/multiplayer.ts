@@ -73,8 +73,8 @@ interface Options {
   };
   /** De pompwagen: wie hem vasthoudt stuurt de stand mee met zijn positie. */
   jack: { getState(): JackState; applyState(s: JackState): void; grip(side: 1 | -1, point: THREE.Vector3): unknown; held(): boolean; /** Twee spelers pakten hem tegelijk. */ release(): void };
-  /** De radio in de hal: de gekozen zender (-1 = uit) geldt voor alle spelers. */
-  radio: { readonly station: number; setStation(i: number): void; onChange(l: () => void): void };
+  /** De radio in de hal: de gekozen zender (-1 = uit) en het volume (0 t/m 10) gelden voor alle spelers. */
+  radio: { readonly station: number; readonly volume: number; setStation(i: number): void; setVolume(l: number): void; onChange(l: () => void): void };
   /** Staat deze speler op de heftruck? Dan zijn plek t.o.v. de truck (y: hoogte boven de vorken), anders null. */
   rider(): { x: number; z: number; y?: number } | null;
   /** Is deze speler los van de grond (springen, vallen)? */
@@ -456,7 +456,7 @@ export function mountMultiplayer(o: Options) {
   // ---------- Radio: de laatst gekozen zender geldt voor iedereen ----------
   let radioRev = 0;
   let radioWriter = room.id;
-  const sendRadio = () => room.send('r', { rev: radioRev, w: radioWriter, s: o.radio.station });
+  const sendRadio = () => room.send('r', { rev: radioRev, w: radioWriter, s: o.radio.station, v: o.radio.volume });
   o.radio.onChange(() => {
     radioRev++;
     radioWriter = room.id;
@@ -469,6 +469,7 @@ export function mountMultiplayer(o: Options) {
         radioRev = data.rev;
         radioWriter = data.w;
         o.radio.setStation(num(data.s, -1));
+        o.radio.setVolume(num(data.v, o.radio.volume));
       } else if (data.rev < radioRev) {
         sendRadio(); // de afzender loopt achter (schakelde voordat hij verbonden was): stuur de actuele stand terug
       }

@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import { onTop } from './scene/style';
 
 // Radio in het magazijn: speelt de live stream van een echte zender (internetradio).
-// M (als je erbij staat): uit → PiratenRadio.nl → 100% NL → uit. Verder weg klinkt hij zachter.
-// De radio is van iedereen: wat één speler kiest, horen alle spelers (zie src/ui/multiplayer.ts).
+// M (als je erbij staat): uit → PiratenRadio.nl → 100% NL → uit. + en -: harder en zachter. Verder weg klinkt hij zachter.
+// De radio is van iedereen: de zender en het volume die één speler kiest, gelden voor alle spelers (zie src/ui/multiplayer.ts).
 // De voorkant (luidspreker en display) wijst naar de -Z-kant.
 
 const STATIONS = [
@@ -12,7 +12,9 @@ const STATIONS = [
 ];
 /** Binnen deze afstand bedien je de radio met M. */
 const NEAR = 2.5;
-const MAX_VOLUME = 0.6;
+/** Volumeknop: stand 0 (stil) t/m 10 (voluit). */
+const MAX_LEVEL = 10;
+const DEFAULT_LEVEL = 6;
 
 export function createRadio() {
   const group = new THREE.Group();
@@ -50,6 +52,7 @@ export function createRadio() {
   group.add(display);
 
   let station = -1; // -1 = uit
+  let level = DEFAULT_LEVEL;
   let failed = false;
   let distance = Infinity;
 
@@ -63,8 +66,14 @@ export function createRadio() {
     ctx.font = 'bold 34px system-ui, sans-serif';
     ctx.fillText(s ? s.name : 'UIT', 128, s ? 36 : 48, 236);
     if (s) {
-      ctx.font = '22px system-ui, sans-serif';
-      ctx.fillText(failed ? 'geen verbinding' : '● LIVE', 128, 72, 236);
+      ctx.font = '20px system-ui, sans-serif';
+      ctx.fillText(failed ? 'geen verbinding' : '● LIVE', 128, 62, 236);
+      // Volumebalk: een blokje per stand
+      for (let i = 0; i < MAX_LEVEL; i++) {
+        ctx.globalAlpha = i < level ? 1 : 0.22;
+        ctx.fillRect(33 + i * 19.4, 80, 15, 8);
+      }
+      ctx.globalAlpha = 1;
     }
     texture.needsUpdate = true;
   }
@@ -111,13 +120,27 @@ export function createRadio() {
     draw();
   }
 
+  function setLevel(l: number) {
+    const next = THREE.MathUtils.clamp(Math.round(l), 0, MAX_LEVEL);
+    if (next === level) return false;
+    level = next;
+    draw();
+    return true;
+  }
+
   const changeListeners: (() => void)[] = [];
   window.addEventListener('keydown', (e) => {
     const t = e.target;
-    if (e.code !== 'KeyM' || e.repeat || t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return;
-    if (distance > NEAR) return;
-    tune(station + 1 < STATIONS.length ? station + 1 : -1);
-    changeListeners.forEach((l) => l());
+    if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return;
+    if (distance > NEAR || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.code === 'KeyM' && !e.repeat) {
+      tune(station + 1 < STATIONS.length ? station + 1 : -1);
+      changeListeners.forEach((l) => l());
+      return;
+    }
+    // + en - (ook op het numerieke deel): harder en zachter, alleen als hij aan staat
+    const step = e.key === '+' || e.key === '=' ? 1 : e.key === '-' || e.key === '_' ? -1 : 0;
+    if (step && station >= 0 && setLevel(level + step)) changeListeners.forEach((l) => l());
   });
   // Een andere speler zette de radio aan voordat deze speler iets had aangeraakt: nu mag het geluid wel.
   const retry = () => {
@@ -137,7 +160,15 @@ export function createRadio() {
     setStation(i: number) {
       tune(Number.isInteger(i) && i >= 0 && i < STATIONS.length ? i : -1);
     },
-    /** Deze speler schakelde zelf de radio (met M). */
+    /** De stand van de volumeknop (0 t/m 10); geldt net als de zender voor alle spelers. */
+    get volume() {
+      return level;
+    },
+    /** Een andere speler draaide aan de volumeknop: overnemen. */
+    setVolume(l: number) {
+      if (Number.isFinite(l)) setLevel(l);
+    },
+    /** Deze speler schakelde zelf de radio (met M) of zette hem harder of zachter (+ en -). */
     onChange(l: () => void) {
       changeListeners.push(l);
     },
@@ -152,13 +183,13 @@ export function createRadio() {
       }
       const next = STATIONS[station + 1];
       if (!s) return `<b>M</b>: radio aanzetten (${STATIONS[0].name})`;
-      return `Radio: <b>${s.name}</b>${failed ? ' (geen verbinding)' : ''} · <b>M</b>: ${next ? next.name : 'uitzetten'}`;
+      return `Radio: <b>${s.name}</b>${failed ? ' (geen verbinding)' : ''} · <b>M</b>: ${next ? next.name : 'uitzetten'} · <b>+</b>/<b>-</b>: volume ${level}/${MAX_LEVEL}`;
     },
     /** listener: waar de speler staat; hoe verder weg, hoe zachter de radio. */
     update(listener: THREE.Vector3) {
       group.getWorldPosition(world);
       distance = Math.hypot(listener.x - world.x, listener.z - world.z);
-      if (station >= 0) audio.volume = MAX_VOLUME * THREE.MathUtils.clamp(6 / Math.max(distance, 1), 0.35, 1); // in de hele hal goed te horen
+      if (station >= 0) audio.volume = (level / MAX_LEVEL) * THREE.MathUtils.clamp(6 / Math.max(distance, 1), 0.35, 1); // in de hele hal goed te horen
     },
   };
 }
