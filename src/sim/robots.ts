@@ -276,6 +276,8 @@ export function createRobotFleet(world: RobotWorld) {
   let open: RobotTask[] = [];
   /** Afgehandelde opdrachten: een stand uit de WMS van net daarvoor mag ze niet opnieuw aanbieden. */
   const finished = new Set<string>();
+  /** De robots die de WMS kent: alleen die krijgen een opdracht, want een andere kan hem niet terugmelden. null = allemaal. */
+  let known: Set<string> | null = null;
   let obstacles: () => Obstacle[] = () => [];
   /** Telt de resets van de hal: een antwoord van de WMS op een vraag van vóór de reset telt niet meer. */
   let resets = 0;
@@ -560,7 +562,7 @@ export function createRobotFleet(world: RobotWorld) {
         // Alles wat van of naar een hoger niveau moet doet een robot-heftruck; werk op de vloer doet een tilrobot.
         // De robot van het pad zelf gaat voor; is die bezig, dan de dichtstbijzijnde van dezelfde soort.
         const high = spot.level > 1 || world.level(task.toLocationId) > 1;
-        const able = robots.filter((r) => r.kind === (high ? 'fork' : 'lift'));
+        const able = robots.filter((r) => r.kind === (high ? 'fork' : 'lift') && (!known || known.has(r.id)));
         if (!able.length) {
           open = open.filter((t) => t !== task);
           void fail(null, high ? 'er is geen robot-heftruck voor de hogere niveaus' : 'er is geen tilrobot voor de vloer', task);
@@ -882,6 +884,10 @@ export function createRobotFleet(world: RobotWorld) {
      */
     setTasks(list: RobotTask[]) {
       open = list.filter((t) => !finished.has(t.id) && !robots.some((r) => r.task?.id === t.id));
+    },
+    /** De robots die de WMS kent (zie `known`); null = de game speelt de robotsturing zelf na en elke robot doet mee. */
+    setKnown(ids: string[] | null) {
+      known = ids && new Set(ids);
     },
     /** Alle opdrachten die nog lopen: wachtend op een robot, of onderweg. */
     tasks: (): (RobotTask & { robotId?: string })[] => [

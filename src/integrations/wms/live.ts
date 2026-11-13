@@ -1,5 +1,7 @@
 import type { Item, Location, Order } from '../../shared/contract';
-import { WmsError, type WmsClient, type WmsCredentials, type WmsDelivery, type WmsItem, type WmsLocation, type WmsPallet } from './types';
+import {
+  WmsError, type WmsClient, type WmsCredentials, type WmsDelivery, type WmsItem, type WmsLocation, type WmsPallet, type WmsRobotTask,
+} from './types';
 
 // URL-opbouw van de WMS-API (basis: https://<host>/t/wm_sim/api):
 //   GET  {base}/{entiteit}                      -> lijst als { data: [...] }
@@ -11,7 +13,8 @@ import { WmsError, type WmsClient, type WmsCredentials, type WmsDelivery, type W
 //   POST {base}/{entiteit}/{id}/_flows/{flow}   -> actie op één record. Met invoer: { choice: 'bevestigen', input: {...} },
 //                                                  zonder invoer: {}. Gelukt = 200, geweigerd = 409 met { error }.
 // Acties: customer_order (start_picking, confirm_pick, stage_order, load_order), order_line (confirm_pick_line),
-// stock (putaway, register_pallet), truck_visit (truck_check_out). De volledige beschrijving staat in
+// stock (putaway, register_pallet), truck_visit (truck_check_out), goods_receipt (unload, count),
+// robot_task (start_robot_task, complete_robot_task, fail_robot_task). De volledige beschrijving staat in
 // GET {base}/_openapi. Locaties, artikelen en voorraad zijn via de API alleen te lezen.
 // Verwijzingen (sku, dock_id, *_location_id, order_id op een regel, truck_visit_id) zijn de platform-id (uuid,
 // veld `id`), niet de tekstsleutel. Deze file vertaalt tussen beide; de rest van de game kent alleen
@@ -31,7 +34,14 @@ type OrderLineRow = Row & { order_id: string; sku: string; qty: number; picked_q
 type TruckVisitRow = Row & {
   truck_id: string; status?: string | null; direction?: string | null; dock_id?: string | null; created_at?: string | null;
 };
-type ReceiptRow = Row & { sku: string; qty: number; dock_id: string; pallet_id?: string | null; created_at?: string | null };
+type ReceiptRow = Row & {
+  sku: string; qty: number; dock_id: string; pallet_id?: string | null; created_at?: string | null; status?: string | null;
+};
+type RobotRow = Row & { robot_id: string };
+type RobotTaskRow = Row & {
+  task_id?: string | null; pallet_id: string; from_location_id: string; to_location_id: string;
+  from_code?: string | null; to_code?: string | null; status?: string | null; robot_id?: string | null;
+};
 
 /** Twee kanten van een verwijzing: platform-id -> tekstsleutel en terug. */
 type Refs = { keyById: Map<string, string>; idByKey: Map<string, string> };
@@ -143,6 +153,62 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
         locations = null;
         throw err;
       }));
+
+  let robots: Promise<Refs> | null = null;
+  /** task_id (tekst, RT-…) -> platform-id van de robotopdracht. */
+  const taskIds = new Map<string, string>();
+
+  const loadRobots = () =>
+    (robots ??= list<RobotRow>('robot')
+      .then((rows) => toRefs(rows.map((r) => [r.id, r.robot_id])))
+      .catch((err) => {
+        robots = null;
+        throw err;
+      }));
+
+  async function robotUuid(robotId: string): Promise<string> {
+    const id = (await loadRobots()).idByKey.get(robotId);
+    if (!id) throw new WmsError(`Robot ${robotId} staat niet in de WMS.`, 409);
+    return id;
+  }
+
+  async function taskUuid(taskId: string): Promise<string> {
+    let id = taskIds.get(taskId);
+    if (!id) {
+      const row = (await list<RobotTaskRow>('robot_task', { task_id: taskId })).find((r) => r.task_id === taskId);
+      if (!row) throw new WmsError(`Robotopdracht ${taskId} staat niet in de WMS.`, 409);
+      taskIds.set(taskId, (id = row.id));
+    }
+    return id;
+  }
+
+  const refusedWith = (err: unknown, text: RegExp) => err instanceof WmsError && err.status === 409 && text.test(err.message);
+
+  /** De ontvangsten van een pallet uit een levering van de WMS (goods_receipt.pallet_id = het stickernummer). */
+  const receiptsOf = async (palletId: string) =>
+    (await list<ReceiptRow>('goods_receipt', { pallet_id: palletId })).filter((r) => r.pallet_id === palletId);
+
+  /** Lost de ontvangst; een pallet die al gelost blijkt is geen fout. */
+  async function unloadRow(row: ReceiptRow) {
+    try {
+      await flow('goods_receipt', row.id, 'unload');
+    } catch (err) {
+      if (!refusedWith(err, /is al gelost/i)) throw err;
+    }
+  }
+
+  /** false = de WMS heeft van deze pallet geen ontvangst die nog geteld moet worden. */
+  async function countReceipt(palletId: string, qty: number): Promise<boolean> {
+    const row = (await receiptsOf(palletId)).find((r) => r.status === 'received' || r.status === 'unloaded');
+    if (!row) return false;
+    if (row.status === 'received') await unloadRow(row); // het lossen is de WMS ontgaan: eerst dat, dan tellen
+    try {
+      await flow('goods_receipt', row.id, 'count', { counted_qty: qty });
+    } catch (err) {
+      if (!refusedWith(err, /is al geteld/i)) throw err;
+    }
+    return true;
+  }
 
   const learn = (refs: Refs, id: string, key: string) => {
     refs.idByKey.set(key, id);
@@ -302,7 +368,15 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
       const toRef = await locationId(toLocationId);
       // Een pallet met sticker verhuist in zijn geheel: de WMS weet zelf waar hij stond en wat erop staat.
       if (palletId && (await isPallet(palletId))) {
-        await post('pallet_move', { pallet_id: palletId, to_location_id: toRef });
+        const move = () => post('pallet_move', { pallet_id: palletId, to_location_id: toRef });
+        try {
+          await move();
+        } catch (err) {
+          // Een pallet uit een levering van de WMS moet eerst geteld zijn. Zet een speler hem met de hand weg zonder
+          // dat de telrobot langs is geweest, dan telt het scannen bij het wegzetten als de telling.
+          if (!refusedWith(err, /nog niet geteld/i) || !(await countReceipt(palletId, qty))) throw err;
+          await move();
+        }
         return;
       }
       // Zonder (bekende) sticker: losse voorraad van de voorraadregel op de van-locatie.
@@ -314,7 +388,7 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
       const skuRefs = await Promise.all(lines.map((l) => itemId(l.sku))); // eerst controleren, dan pas de order aanmaken
       const order = await post<OrderRow>('customer_order', orderId ? { order_id: orderId } : {});
       orderIds.set(order.order_id, order.id);
-      // Regel voor regel: de vorm van de body van order_line/_batch ligt niet vast.
+      // Regel voor regel: zo blijft bij een fout duidelijk welke regel de WMS weigerde.
       for (let i = 0; i < lines.length; i++) {
         await post('order_line', { order_id: order.id, line_no: i + 1, sku: skuRefs[i], qty: lines[i].qty });
       }
@@ -399,6 +473,68 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
       }
       for (const id of receipts.keys()) if (!visits.some((v) => v.id === id)) receipts.delete(id);
       return out;
+    },
+
+    async unloadReceipt({ palletId }) {
+      const row = (await receiptsOf(palletId)).find((r) => r.status === 'received');
+      if (!row) return false;
+      await unloadRow(row);
+      return true;
+    },
+
+    countReceipt: ({ palletId, qty }) => countReceipt(palletId, qty),
+
+    async getRobots() {
+      return [...(await loadRobots()).idByKey.keys()];
+    },
+
+    async getRobotTasks(running = false) {
+      const [open, busy, loc, robot] = await Promise.all([
+        list<RobotTaskRow>('robot_task', { status: 'open' }),
+        running ? list<RobotTaskRow>('robot_task', { status: 'in_progress' }) : [],
+        loadLocations(),
+        loadRobots(),
+      ]);
+      const code = (text: string | null | undefined, ref: string) => text || loc.keyById.get(ref) || ref;
+      return [...open.filter((r) => r.status === 'open'), ...busy.filter((r) => r.status === 'in_progress')].map((r): WmsRobotTask => {
+        const id = r.task_id || r.id;
+        taskIds.set(id, r.id);
+        const robotId = r.status === 'in_progress' ? (r.robot_id && robot.keyById.get(r.robot_id)) || '?' : undefined;
+        return {
+          id,
+          palletId: r.pallet_id,
+          fromLocationId: code(r.from_code, r.from_location_id),
+          toLocationId: code(r.to_code, r.to_location_id),
+          ...(robotId && { robotId }),
+        };
+      });
+    },
+
+    async startRobotTask({ taskId, robotId }) {
+      const [taskRef, robotRef] = await Promise.all([taskUuid(taskId), robotUuid(robotId)]);
+      await flow('robot_task', taskRef, 'start_robot_task', { robot: robotRef });
+    },
+
+    async completeRobotTask({ taskId, robotId }) {
+      const [taskRef, robotRef] = await Promise.all([taskUuid(taskId), robotUuid(robotId)]);
+      await flow('robot_task', taskRef, 'complete_robot_task', { robot: robotRef });
+      taskIds.delete(taskId);
+    },
+
+    async failRobotTask({ taskId, robotId, reason, palletOnRobot }) {
+      const taskRef = await taskUuid(taskId);
+      // Een robot die de WMS niet kent kan de opdracht ook niet gestart hebben: dan zonder robot melden.
+      const robotRef = robotId ? (await loadRobots()).idByKey.get(robotId) : undefined;
+      try {
+        await flow('robot_task', taskRef, 'fail_robot_task', {
+          ...(robotRef && { robot: robotRef }),
+          reason: reason.slice(0, 300),
+          draagt_pallet: palletOnRobot,
+        });
+      } catch (err) {
+        if (!refusedWith(err, /is al afgerond/i)) throw err;
+      }
+      taskIds.delete(taskId);
     },
 
     async logScan({ kind, barcode, ok, locationId: at }) {

@@ -1,7 +1,7 @@
-import { onProcessEvent } from '../sim/events';
+import { onProcessEvent, publish, type ProcessEvent } from '../sim/events';
 import { DOCKS } from '../sim/layout';
 import type { RobotFleet, RobotTask } from '../sim/robots';
-import { robotApi } from './wmsGateway';
+import { robotApi, type WmsRobotApi } from './wmsGateway';
 
 // Haalt de robotopdrachten op waar de Geek+-robots mee werken (src/sim/robots.ts).
 // - Kent de WMS-client de robotacties (docs/wms/08), dan komen de opdrachten uit de WMS: die is leidend.
@@ -13,6 +13,10 @@ import { robotApi } from './wmsGateway';
 // In multiplayer doet alleen de host dit; de andere spelers krijgen de robots via de gedeelde wereld.
 
 const POLL_SECONDS = 2;
+/** Uit de WMS halen gaat rustiger: die staat maar 120 aanroepen per minuut toe en plant zelf om de paar minuten. */
+const WMS_POLL_SECONDS = 5;
+/** Elke zoveelste keer haalt de game ook de lopende opdrachten en de robots van de WMS op. */
+const FULL_EVERY = 6;
 /** Zoveel nagespeelde opdrachten staan er hooguit te wachten op een robot: zo blijft het plan actueel. */
 const MAX_WAITING = 3;
 const ENABLED_KEY = 'wm-sim.robots';
@@ -103,14 +107,62 @@ export function createRobotDispatch({
     return waiting;
   }
 
+  /** De WMS-client waar de opdrachten nu vandaan komen, het aantal keren dat hij is uitgelezen, en de weesopdrachten. */
+  let source: WmsRobotApi | null = null;
+  let polls = 0;
+  let orphans = new Set<string>();
+
+  /**
+   * Opdrachten waar volgens de WMS een robot mee bezig is, maar in de hal niet (de game is herstart of de hal is
+   * gereset): die meldt de game af als mislukt, anders blijft de robot in de WMS voor altijd bezet. Direct na het
+   * verbinden meteen; daarna pas als de opdracht twee keer achter elkaar wees blijkt (hij kan net gestart zijn).
+   */
+  async function failOrphans(api: WmsRobotApi, running: (RobotTask & { robotId?: string })[], first: boolean) {
+    const active = new Set(fleet.tasks().map((t) => t.id));
+    const seen = new Set<string>();
+    for (const t of running) {
+      if (active.has(t.id)) continue;
+      if (!first && !orphans.has(t.id)) {
+        seen.add(t.id);
+        continue;
+      }
+      const e: ProcessEvent = {
+        type: 'RobotTaskFailed', taskId: t.id, robotId: t.robotId === '?' ? undefined : t.robotId,
+        reason: 'de robot in de hal is deze opdracht kwijt (de game is herstart of de hal is gereset)', palletOnRobot: false,
+      };
+      try {
+        await api.failRobotTask(e);
+        publish(e, { ok: true, linked: true });
+      } catch (err) {
+        publish(e, { ok: false, linked: true, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    orphans = seen;
+  }
+
   async function poll() {
     if (polling) return;
     polling = true;
     try {
       const api = bypass() ? null : robotApi();
       fromWms = !!api;
-      const tasks = api ? await api.getRobotTasks() : enabled ? plan() : [];
-      if (authority()) fleet.setTasks(tasks);
+      if (api !== source) {
+        source = api;
+        polls = 0;
+        orphans.clear();
+      }
+      if (!api) {
+        fleet.setKnown(null);
+        if (authority()) fleet.setTasks(enabled ? plan() : []);
+      } else {
+        // Af en toe ook de lopende opdrachten en de vloot: om weesopdrachten op te ruimen en bij te blijven
+        const full = polls % FULL_EVERY === 0;
+        if (full) fleet.setKnown(api.getRobots ? await api.getRobots() : null);
+        const tasks = await api.getRobotTasks(full);
+        if (full && authority()) await failOrphans(api, tasks.filter((t) => t.robotId), polls === 0);
+        polls++;
+        if (authority()) fleet.setTasks(tasks.filter((t) => !t.robotId));
+      }
       error = '';
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
@@ -122,7 +174,7 @@ export function createRobotDispatch({
   return {
     update(dt: number) {
       if ((timer -= dt) > 0) return;
-      timer = POLL_SECONDS;
+      timer = fromWms ? WMS_POLL_SECONDS : POLL_SECONDS;
       if (authority()) void poll();
     },
     /** true: de opdrachten komen uit de WMS; false: de game speelt de robotsturing na. */

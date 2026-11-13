@@ -31,6 +31,11 @@ export type ProcessEvent =
   | { type: 'LoadCompleted'; truckId: string; dockId: string; orderIds: string[] }
   /** De telrobot heeft alle pallets van de levering geteld en de aantallen kloppen: ze mogen worden weggezet. */
   | { type: 'CountConfirmed'; truckId: string; dockId: string; pallets: number; qty: number }
+  // --- Een levering die de WMS zelf heeft aangemeld: de ontvangst staat daar al, op de dockdeur (docs/wms/10) ---
+  /** De pallet is gelost: in de WMS gaat hij van de dockdeur (dockId) naar de inslagbaan (locationId). */
+  | { type: 'PalletUnloaded'; palletId: string; sku: string; qty: number; dockId: string; locationId: string }
+  /** De pallet is geteld op de inslagbaan: pas daarna staat de WMS toe dat hij wordt weggezet. */
+  | { type: 'PalletCounted'; palletId: string; sku: string; qty: number; locationId: string }
   // --- Geek+-robots: terugmelding op een robotopdracht van de WMS (docs/wms/08) ---
   /** Een robot begint aan de opdracht. */
   | { type: 'RobotTaskStarted'; taskId: string; robotId: string; palletId: string; fromLocationId: string; locationId: string }
@@ -58,6 +63,8 @@ export const WMS_ACTIONS: Record<ProcessEventType, string> = {
   UnloadCompleted: 'complete_unloading',
   LoadCompleted: 'complete_loading',
   CountConfirmed: 'confirm_count',
+  PalletUnloaded: 'unload',
+  PalletCounted: 'count',
   RobotTaskStarted: 'start_robot_task',
   RobotTaskCompleted: 'complete_robot_task',
   RobotTaskFailed: 'fail_robot_task',

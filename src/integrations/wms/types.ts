@@ -21,6 +21,12 @@ export type WmsPallet = { id: string; sku: string; qty: number; locationId: stri
  */
 export type WmsDelivery = { truckId: string; dockId: string; pallets: { palletId?: string; sku: string; qty: number }[] };
 
+/**
+ * Robotopdracht uit de WMS (entiteit `robot_task`): breng deze pallet van de ene locatie naar de andere.
+ * `robotId` is gezet bij een opdracht waar al een robot aan begonnen is (status in_progress).
+ */
+export type WmsRobotTask = { id: string; palletId: string; fromLocationId: string; toLocationId: string; robotId?: string };
+
 /** Eén interface voor zowel de echte WMS als de mock. Alle sleutels zijn de tekstsleutels (SKU-001, DOCK-01, ORD-…, PAL-…). */
 export interface WmsClient {
   readonly mode: 'live' | 'mock';
@@ -60,6 +66,25 @@ export interface WmsClient {
    * Ontbreekt bij een WMS die geen leveringen aanmaakt (de mock): dan laat de hal zelf vrachtwagens komen.
    */
   getDeliveries?(): Promise<WmsDelivery[]>;
+  /**
+   * Lossen van een levering uit de WMS: de pallet gaat daar van de dockdeur (DOCK-NN) naar de inslagbaan (DOCK-NN-IN).
+   * false = de WMS heeft geen ontvangst van deze pallet die nog gelost moet worden; er is niets geboekt.
+   */
+  unloadReceipt?(p: { palletId: string }): Promise<boolean>;
+  /**
+   * Tellen van een geloste pallet op de inslagbaan; pas daarna mag hij worden weggezet.
+   * false = de WMS heeft geen ontvangst van deze pallet die nog geteld moet worden; er is niets geboekt.
+   */
+  countReceipt?(p: { palletId: string; qty: number }): Promise<boolean>;
+  // --- Robots (docs/wms/08). Ontbreken ze (de mock), dan speelt de game de robotsturing zelf na. ---
+  /** De nummers van de robots die de WMS kent (GKP-01, …): alleen die kunnen een opdracht terugmelden. */
+  getRobots?(): Promise<string[]>;
+  /** De opdrachten met status open; met `running` ook die waar een robot mee bezig is (in_progress). */
+  getRobotTasks?(running?: boolean): Promise<WmsRobotTask[]>;
+  startRobotTask?(p: { taskId: string; robotId: string }): Promise<void>;
+  /** De robot staat met de pallet op de doellocatie: de WMS boekt de pallet om. */
+  completeRobotTask?(p: { taskId: string; robotId: string }): Promise<void>;
+  failRobotTask?(p: { taskId: string; robotId?: string; reason: string; palletOnRobot: boolean }): Promise<void>;
   /** Logboek van scans; verandert niets aan de voorraad. */
   logScan(p: { kind: 'truck' | 'pallet' | 'location' | 'order'; barcode: string; ok: boolean; locationId?: string }): Promise<void>;
   /**

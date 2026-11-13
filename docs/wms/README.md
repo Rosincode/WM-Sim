@@ -16,10 +16,11 @@ URL-opbouw in de game staat alleen in `src/integrations/wms/live.ts`.
 | [05](05-grotere-hal-locaties.md) | De 30 docklocaties | actueel; de stellingen staan in 11 |
 | [06](06-wms-leidend-scanner.md) | De WMS beslist; schermen in de WMS-app; iframe | actueel; het iframe werkt nog niet |
 | [07](07-palletstickers.md) | Pallets met een sticker, palletverplaatsing | actueel |
-| [08](08-geekplus-robots.md) | Robots en robotopdrachten | voorstel: `robot` en `robot_task` bestaan nog niet in de WMS |
+| [08](08-geekplus-robots.md) | Robots en robotopdrachten | het voorstel; gebouwd, zie 12 |
 | [09](09-realistisch-datamodel.md) | Alle aanroepen van de game op een rij, rechten, open punten | actueel |
 | [10](10-leveringen-uit-de-wms.md) | Leveringen uit de WMS, robots lossen en tellen | actueel |
 | [11](11-dubbele-stellingen.md) | 16 stellingen rug-aan-rug, codes `R1A` … `R8B` | **nog te doen in de WMS** |
+| [12](12-robotkoppeling.md) | Robotopdrachten uit de WMS, lossen en tellen | de game gebruikt het; **nog te doen in de WMS**: 8 robots, `pos_y`, limiet |
 
 ## Wat er in de WMS nog moet gebeuren
 

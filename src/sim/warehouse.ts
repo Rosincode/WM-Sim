@@ -382,6 +382,17 @@ export function createWarehouse({
     return done(`${truckId} uitgemeld${now.loaded.length ? ` met ${plural(now.loaded.length, 'order')}` : ''}.`);
   }
 
+  /**
+   * Boekt het lossen van een pallet naar de inslagbaan. Een eigen vrachtwagen van de hal: het lossen is de ontvangst.
+   * Een levering uit de WMS is daar al ontvangen, op de dockdeur: de pallet gaat in de WMS naar de inslagbaan.
+   * Heeft de WMS de ontvangst zonder pallet geboekt, dan is lossen alleen fysiek.
+   */
+  function bookUnload(t: Truck | undefined, pallet: Pallet, inId: string): Promise<WmsReply> {
+    if (!t?.wms) return ask({ type: 'GoodsReceived', sku: pallet.sku, qty: pallet.qty, dockId: inId, palletId: pallet.id });
+    if (pallet.unlabeled) return Promise.resolve({ ok: true, linked: false });
+    return ask({ type: 'PalletUnloaded', palletId: pallet.id, sku: pallet.sku, qty: pallet.qty, dockId: t.dockId, locationId: inId });
+  }
+
   async function unload(truckId: string): Promise<ScanResult> {
     const t = truck(truckId);
     const pallet = t?.cargo[0];
@@ -389,10 +400,7 @@ export function createWarehouse({
     const { inId } = DOCKS[t.dock];
     const lane = laneIn[t.dock];
     if (!lane.includes(null)) return refused(`${inId} staat vol: zet eerst pallets weg.`);
-    // Een levering uit de WMS is daar al ontvangen: lossen is dan alleen nog fysiek.
-    const r: WmsReply = t.wms
-      ? { ok: true, linked: false }
-      : await ask({ type: 'GoodsReceived', sku: pallet.sku, qty: pallet.qty, dockId: inId, palletId: pallet.id });
+    const r = await bookUnload(t, pallet, inId);
     scanned('pallet', pallet.id, r.ok, inId);
     if (!r.ok) return wmsRefused(r);
     const now = truck(truckId);
@@ -779,11 +787,7 @@ export function createWarehouse({
       racked.set(pallet.id, { ...pallet, locationId: locId, slot });
     },
     async received(pallet, laneId, dockId) {
-      // Een levering uit de WMS is daar al ontvangen (op de dockdeur); anders boekt het lossen de ontvangst.
-      const t = inbound().find((x) => x.dockId === dockId);
-      const r: WmsReply = t?.wms
-        ? { ok: true, linked: false }
-        : await ask({ type: 'GoodsReceived', sku: pallet.sku, qty: pallet.qty, dockId: laneId, palletId: pallet.id });
+      const r = await bookUnload(inbound().find((x) => x.dockId === dockId), pallet, laneId);
       scanned('pallet', pallet.id, r.ok, laneId);
       return r;
     },
@@ -955,6 +959,10 @@ export function createWarehouse({
     if (before.pallet.unlabeled) {
       const r = await ask({ type: 'PalletLabeled', palletId: id, sku: before.pallet.sku, qty: before.pallet.qty, locationId: inId });
       if (!r.ok) return (say(`Telrobot: de WMS weigert de palletsticker voor ${what(before.pallet)} op ${inId}: ${r.error}`, 'err'), false);
+    } else {
+      // Een pallet die al een sticker had kan uit een levering van de WMS komen: die wil de telling horen
+      const r = await ask({ type: 'PalletCounted', palletId: id, sku: before.pallet.sku, qty: before.pallet.qty, locationId: inId });
+      if (!r.ok) return (say(`Telrobot: de WMS weigert de telling van ${id} op ${inId}: ${r.error}`, 'err'), false);
     }
     const now = lanePallet(id);
     if (!now) return false; // intussen opgepakt
@@ -1004,10 +1012,7 @@ export function createWarehouse({
       const t = truck(truckId);
       if (!t) return false;
       const { inId } = DOCKS[t.dock];
-      // Een levering uit de WMS is daar al ontvangen (op de dockdeur); anders boekt het lossen de ontvangst.
-      const r: WmsReply = t.wms
-        ? { ok: true, linked: false }
-        : await ask({ type: 'GoodsReceived', sku: pallet.sku, qty: pallet.qty, dockId: inId, palletId: pallet.id });
+      const r = await bookUnload(t, pallet, inId);
       scanned('pallet', pallet.id, r.ok, inId);
       if (!r.ok) return (say(`WMS weigert de ontvangst van ${what(pallet)} op ${inId}: ${r.error}`, 'err'), false);
       const lane = laneIn[t.dock];

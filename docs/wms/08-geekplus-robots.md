@@ -3,9 +3,9 @@
 In de hal rijden robots die pallets lossen, tellen, wegzetten en aanvullen, en die orders picken. De
 bedoeling is dat de WMS ze aanstuurt met **robotopdrachten** en dat de game elke stap terugmeldt.
 
-**Stand:** de entiteiten `robot` en `robot_task` en de drie acties uit hoofdstuk 3 t/m 5 bestaan nog
-niet in de WMS. Tot dat zo is bedenkt de game de opdrachten zelf (hoofdstuk 2). De hoofdstukken 3
-t/m 6 zijn het voorstel voor wat de WMS kan bouwen; de game is er al op voorbereid.
+**Stand:** de WMS heeft `robot`, `robot_task` en de drie acties gebouwd en de game gebruikt ze: zie
+[12](12-robotkoppeling.md). Hoofdstuk 2 geldt alleen nog zonder WMS-login (de mock): dan bedenkt de
+game de opdrachten zelf. De hoofdstukken 3 t/m 6 zijn het oorspronkelijke voorstel; de API is leidend.
 
 De rolverdeling in dat voorstel:
 

@@ -6,24 +6,26 @@ import type { WmsGateway } from '../sim/wms';
 // Vult de poort van de sim (src/sim/wms.ts) in met de WMS-client: elke processtap wordt een API-aanroep
 // en het antwoord van de WMS gaat terug naar de sim. Een palletverplaatsing komt hier binnen als PutawayDone:
 // met een sticker die de WMS kent verhuist de pallet, anders gaat het aantal als losse voorraad over.
-// Alleen de robotopdrachten (docs/wms/08) heeft de WMS nog niet; die stappen gaan door zonder aanroep.
+// De robotacties (docs/wms/08) heeft alleen de echte WMS; op de mock gaan die stappen door zonder aanroep.
 
 /**
- * De robotacties van de WMS (docs/wms/08). Ze zitten nog niet in de WMS-client (src/integrations/wms): zodra de
- * client deze methodes krijgt, haalt de game zijn robotopdrachten uit de WMS en meldt hij ze daar terug.
+ * De robotacties van de WMS (docs/wms/08). Heeft de WMS-client ze, dan haalt de game zijn robotopdrachten uit de
+ * WMS en meldt hij ze daar terug; anders speelt de game de robotsturing zelf na (src/ui/robotDispatch.ts).
  */
 export type WmsRobotApi = {
-  /** Robotopdrachten die nog geen robot hebben (status open). */
-  getRobotTasks(): Promise<RobotTask[]>;
+  /** De nummers van de robots die de WMS kent. */
+  getRobots?(): Promise<string[]>;
+  /** De opdrachten met status open; met `running` ook die waar een robot mee bezig is (dan met robotId). */
+  getRobotTasks(running?: boolean): Promise<(RobotTask & { robotId?: string })[]>;
   startRobotTask(p: { taskId: string; robotId: string }): Promise<void>;
   /** De WMS boekt de voorraad om van de van- naar de naar-locatie van de opdracht. */
   completeRobotTask(p: { taskId: string; robotId: string }): Promise<void>;
   failRobotTask(p: { taskId: string; robotId?: string; reason: string; palletOnRobot: boolean }): Promise<void>;
 };
 
-/** De robotacties van de huidige WMS-client, of null als die ze (nog) niet heeft. */
+/** De robotacties van de huidige WMS-client, of null als die ze niet heeft. */
 export function robotApi(): WmsRobotApi | null {
-  const client = wms.client as Partial<WmsRobotApi>;
+  const client = wms.client;
   return client.getRobotTasks && client.startRobotTask && client.completeRobotTask && client.failRobotTask
     ? (client as WmsRobotApi)
     : null;
@@ -66,6 +68,11 @@ async function call(e: ProcessEvent): Promise<boolean> {
     case 'OrderLoaded':
       await client.loadOrder({ orderId: e.orderId, truckId: e.truckId });
       return true;
+    // Een levering uit de WMS: lossen en tellen. false = de WMS heeft van deze pallet geen ontvangst die daarop wacht.
+    case 'PalletUnloaded':
+      return (await client.unloadReceipt?.({ palletId: e.palletId })) ?? false;
+    case 'PalletCounted':
+      return (await client.countReceipt?.({ palletId: e.palletId, qty: e.qty })) ?? false;
     // Geek+-robots (docs/wms/08). Zolang de client de robotacties niet heeft, boekt het afronden van een
     // robotopdracht de pallet om als palletverplaatsing; starten en mislukken blijven dan lokaal.
     case 'RobotTaskStarted': {
