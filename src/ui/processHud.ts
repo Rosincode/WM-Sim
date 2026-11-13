@@ -120,7 +120,7 @@ export function createProcessHud(sim: Warehouse) {
       c?.kind === 'pallet'
         ? `Je draagt ${c.pallet.id} (${c.pallet.qty}× ${c.pallet.sku})`
         : c?.kind === 'order'
-          ? `Je hebt rolcontainer ${c.orderId}`
+          ? `Je hebt de pallet van ${c.orderId}`
           : 'Handen vrij';
     const html = `
       <div class="goal">${esc(obj?.text ?? 'Wachten op werk…')}</div>

@@ -28,7 +28,7 @@
     "printer": { "dx": 0.56, "dz": 0.12 }
   },
 
-  "rollContainers": { "x": -11.3, "z": 5 },
+  "orderPallets": { "x": -11.3, "z": 5 },
 
   "rooms": { "depth": 7.5, "officeWidth": 6, "canteenWidth": 9 },
 

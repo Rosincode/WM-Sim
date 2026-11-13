@@ -1,12 +1,13 @@
 import * as THREE from 'three';
-import { DRIVER_DOORS, JACK_HANDLE, JACK_REACH, dockFloorY, dockScreen, jackPark, type Driver, type Drivers } from '../sim/drivers';
+import { DRIVER_DOORS, JACK_HANDLE, JACK_REACH, dockFloorY, dockScreen, jackPark, type Driver, type DriverObstacle, type Drivers } from '../sim/drivers';
 import { DOCKS, HALL } from '../sim/layout';
 import type { Obstacle } from '../sim/robots';
 import type { Truck } from '../sim/warehouse';
 import { createCharacter, type HandTarget } from './scene/character';
 import { createDockScreen, type DockScreenState } from './scene/dockScreen';
 import { createElectricJack } from './scene/electricJack';
-import { dropLoad, pallet, setPalletColor, skuColor, type OrderLoads } from './warehouseView';
+import type { Solid } from './scene/warehouse';
+import { dropLoad, loadTop, type OrderLoads, type PalletLoads } from './warehouseView';
 
 // De chauffeurs in beeld: de figuur zelf, de elektrische pompwagen bij elk dock, het aanraakscherm naast elke
 // dockdeur, en de deuren die voor hem open en dicht gaan. Leest alleen de sim (src/sim/drivers.ts).
@@ -23,7 +24,9 @@ export function mountDrivers({
   exterior,
   drivers,
   trucks,
+  palletLoads,
   orderLoads,
+  obstacles,
 }: {
   scene: THREE.Scene;
   hall: { setDockDoor(i: number, open: number): void; setDriverDoor(i: number, open: number): void };
@@ -31,20 +34,29 @@ export function mountDrivers({
   drivers: Drivers;
   /** De vrachtwagens die nu op het terrein zijn. */
   trucks: () => Truck[];
-  /** De pallet van een order (met de gepickte dozen), voor op de vorken. */
+  /** De pallet uit de wagen (met zijn dozen) en de pallet van een order (met de gepickte dozen), voor op de vorken. */
+  palletLoads: PalletLoads;
   orderLoads: OrderLoads;
+  /** Waar de chauffeurs voor blijven staan: spelers, de heftruck, de pompwagen en losse pallets. */
+  obstacles: () => DriverObstacle[];
 }) {
+  drivers.setObstacles(obstacles);
   // Per dock: de pompwagen met wat erop staat, het scherm en hoe ver de deur open is
   const docks = DOCKS.map((d) => {
     const jack = createElectricJack();
-    const load = pallet();
-    load.visible = false;
     const screen = createDockScreen();
     const at = dockScreen(d);
     screen.group.position.set(at.x + 0.035, SCREEN_Y, at.z);
     screen.group.rotation.y = Math.PI / 2;
-    scene.add(jack.group, load, screen.group);
-    return { jack, load, order: null as THREE.Object3D | null, orderKey: '', screen, open: 0, lift: 0 };
+    scene.add(jack.group, screen.group);
+    return {
+      jack, screen, open: 0, lift: 0,
+      /** Wat er op de vorken staat: de pallet uit de wagen of de pallet van een order, met zijn dozen. */
+      load: null as THREE.Object3D | null,
+      loadKey: '',
+      /** Botsvlakken voor de speler: de pompwagen en wat erop staat draaien mee. */
+      pose: { x: 0, z: 0, r: 0 },
+    };
   });
   const doors = DRIVER_DOORS.map(() => 0);
 
@@ -94,33 +106,26 @@ export function mountDrivers({
     const carrying = !!held && (!!held.load || !!held.order);
     v.lift = THREE.MathUtils.clamp(v.lift + (carrying ? dt : -dt) / 0.5, 0, 1);
     v.jack.setLift(v.lift);
-    // Wat er op de vorken staat: de pallet uit de wagen, of de pallet van een order
-    v.load.visible = !!held?.load;
-    const orderKey = held?.order ? orderLoads.key(held.order) : '';
-    if (orderKey !== v.orderKey) {
-      v.orderKey = orderKey;
-      if (v.order) dropLoad(v.order);
-      v.order = held?.order ? orderLoads.build(held.order) : null;
-      if (v.order) {
+    Object.assign(v.pose, { x: pose.x, z: pose.z, r: pose.r });
+    // Wat er op de vorken staat: de pallet uit de wagen of de pallet van een order, met precies zijn dozen
+    const key = held?.load ? palletLoads.key(held.load) : held?.order ? `order:${orderLoads.key(held.order)}` : '';
+    if (key !== v.loadKey) {
+      v.loadKey = key;
+      if (v.load) dropLoad(v.load);
+      v.load = held?.load ? palletLoads.build(held.load) : held?.order ? orderLoads.build(held.order) : null;
+      if (v.load) {
         // Geen schaduw: anders moet de schaduwkaart elke frame opnieuw voor een rijdende pompwagen
-        v.order.traverse((o) => (o.castShadow = false));
-        scene.add(v.order);
+        v.load.traverse((o) => (o.castShadow = false));
+        scene.add(v.load);
       }
     }
-    if (!held) return;
+    if (!held || !v.load) return;
+    // De vorken steken onder de dwarsplanken van de pallet. Zijn lange kant ligt in de rijrichting: zo past hij
+    // tussen de wielkasten van de vrachtwagen en staat hij recht op de baan.
     const x = held.x + fx * JACK_REACH;
     const z = held.z + fz * JACK_REACH;
-    if (held.load) {
-      v.load.position.set(x, dockFloorY(x) + 0.05 + 0.09 * v.lift, z);
-      v.load.rotation.y = held.r;
-      setPalletColor(v.load, skuColor(held.load.sku));
-      (v.load.userData.sticker as THREE.Object3D).visible = !held.load.unlabeled;
-    }
-    if (v.order) {
-      // de vorken steken onder de dwarsplanken van de pallet; zijn lange kant ligt in de rijrichting
-      v.order.position.set(x, dockFloorY(x) + 0.012 + 0.09 * v.lift, z);
-      v.order.rotation.y = held.r - Math.PI / 2;
-    }
+    v.load.position.set(x, dockFloorY(x) + 0.012 + 0.09 * v.lift, z);
+    v.load.rotation.y = held.r - Math.PI / 2;
   }
 
   let screenRefresh = 0;
@@ -190,6 +195,21 @@ export function mountDrivers({
         screenRefresh = 0.3;
         docks.forEach((v, i) => v.screen.set(screenState(i)));
       }
+    },
+    /** Waar de speler tegenaan loopt: de chauffeurs, de pompwagens bij de docks en wat er op hun vorken staat. */
+    solids(): Solid[] {
+      const out: Solid[] = [];
+      for (const d of drivers.drivers) {
+        const g = people.get(d.id)?.character.group;
+        if (g) out.push({ minX: g.position.x - 0.28, maxX: g.position.x + 0.28, minZ: g.position.z - 0.28, maxZ: g.position.z + 0.28, minY: g.position.y, maxY: g.position.y + 1.8 });
+      }
+      for (const v of docks) {
+        const y = v.jack.group.position.y;
+        out.push({ pose: v.pose, minX: -0.32, maxX: 0.32, minZ: -0.45, maxZ: 0.2, minY: y, maxY: y + 0.7 });
+        out.push({ pose: v.pose, minX: -0.3, maxX: 0.3, minZ: 0.2, maxZ: 1.36, minY: y, maxY: y + 0.12 });
+        if (v.load) out.push({ pose: v.pose, minX: -0.5, maxX: 0.5, minZ: JACK_REACH - 0.6, maxZ: JACK_REACH + 0.6, minY: y, maxY: y + 0.1 + loadTop(v.load) });
+      }
+      return out;
     },
     /** Waar de robots voor stoppen: de chauffeurs en hun pompwagens. */
     obstacles(): Obstacle[] {

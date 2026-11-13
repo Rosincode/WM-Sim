@@ -85,7 +85,7 @@ function handlesOf(m: WarehouseModel): Handle[] {
   });
 
   object('Bureau met pc, radio en printer', m.desk);
-  object('Rolcontainers', m.rollContainers);
+  object('Lege pallets voor orders', m.orderPallets);
   object('Heftruck (startplek)', m.equipment.forklift);
   object('Pompwagen (startplek)', m.equipment.palletJack);
   object('Speler (startplek)', m.playerStart);
@@ -146,7 +146,7 @@ function outlineOf(m: WarehouseModel): number[] {
   rect(wallX + rooms.officeWidth + rooms.canteenWidth / 2, -hall.depth / 2 - rooms.depth / 2, rooms.canteenWidth, rooms.depth);
   rect(wallX + m.parking.width / 2, hall.depth / 2 - m.parking.depth / 2, m.parking.width, m.parking.depth);
   rect(m.desk.x, m.desk.z, 1.5, 0.75);
-  rect(m.rollContainers.x, m.rollContainers.z, 2.8, 0.8);
+  rect(m.orderPallets.x, m.orderPallets.z, 1.2, 1.0);
   posed(m.equipment.forklift, 1.2, 2.6);
   posed(m.equipment.palletJack, 0.7, 1.6);
   posed(m.playerStart, 0.6, 0.6);

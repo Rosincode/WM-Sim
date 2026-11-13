@@ -17,11 +17,19 @@ interface Options {
   walkable?: Zone[];
   /** Bronnen van blokken (stellingen, pallets, heftruck) waar de speler tegenaan loopt, op staat of onderdoor loopt. */
   solids?: (() => Solid[])[];
+  /**
+   * Wat de speler voor zich uit heeft (een pallet die hij draagt, de pompwagen): cirkels op `ahead` m voor hem.
+   * Ook die botsen, zodat hij er nergens mee doorheen loopt. underPallets = schuift onder een pallet (vorken).
+   */
+  probes?: () => Probe[];
+  /** De blokken waar die cirkels tegen botsen (standaard dezelfde als `solids`). */
+  probeSolids?: (() => Solid[])[];
   initialMode?: ViewMode;
   onModeChange?: (mode: ViewMode) => void;
 }
 
 type Zone = { minX: number; maxX: number; minZ: number; maxZ: number };
+export type Probe = { ahead: number; radius: number; underPallets?: boolean };
 
 /**
  * Voertuig (of stoel) waarin de speler zit: `seat` is de plek van de speler, `eye` die van de camera in first person (lokaal).
@@ -41,7 +49,7 @@ const PLAYER_HEIGHT = 1.8;
 const STEP = 0.35; // zo hoog stap je zonder springen ergens op (pallet, vorken)
 const FOOT = 0.2; // zo ver mogen je voeten over een rand steken
 
-export function createPlayerView({ camera, canvas, controls, player, hud, bounds, walkable = [], solids = [], initialMode = 'overview', onModeChange }: Options) {
+export function createPlayerView({ camera, canvas, controls, player, hud, bounds, walkable = [], solids = [], probes, probeSolids, initialMode = 'overview', onModeChange }: Options) {
   const zones = [bounds, ...walkable];
   let mode: ViewMode = 'overview';
   let closeMode: Exclude<ViewMode, 'overview'> = 'first'; // laatst gebruikte dichtbij-modus
@@ -276,6 +284,32 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
           p.z = lz;
         }
       }
+    // Wat je voor je uit hebt (een pallet, de pompwagen) loopt ook nergens doorheen: het duwt jou terug
+    const ahead = probes?.() ?? [];
+    if (ahead.length) {
+      const lists = probeSolids ? probeSolids.map((source) => source()) : all;
+      for (const probe of ahead)
+        for (const list of lists)
+          for (const s of list) {
+            if (s.maxY <= feet + STEP || s.minY >= feet + PLAYER_HEIGHT - 0.02 || (probe.underPallets && s.pallet)) continue;
+            const cx = p.x + forward.x * probe.ahead;
+            const cz = p.z + forward.z * probe.ahead;
+            toLocal(s, cx, cz);
+            const overlapX = Math.min(lx - (s.minX - probe.radius), s.maxX + probe.radius - lx);
+            const overlapZ = Math.min(lz - (s.minZ - probe.radius), s.maxZ + probe.radius - lz);
+            if (overlapX <= 0 || overlapZ <= 0) continue;
+            const fromX = lx;
+            const fromZ = lz;
+            if (overlapX < overlapZ) lx = lx < (s.minX + s.maxX) / 2 ? s.minX - probe.radius : s.maxX + probe.radius;
+            else lz = lz < (s.minZ + s.maxZ) / 2 ? s.minZ - probe.radius : s.maxZ + probe.radius;
+            const mx = lx - fromX;
+            const mz = lz - fromZ;
+            const c = s.pose ? Math.cos(s.pose.r) : 1;
+            const n = s.pose ? Math.sin(s.pose.r) : 0;
+            p.x += mx * c + mz * n;
+            p.z += -mx * n + mz * c;
+          }
+    }
     const walked = Math.hypot(p.x - startX, p.z - startZ) / Math.max(dt, 1e-4);
     walk = (p.x - startX) * forward.x + (p.z - startZ) * forward.z < -1e-5 ? -walked : walked;
     moving += (Math.min(1, walked / 5) - moving) * (1 - Math.exp(-dt * 10));

@@ -89,11 +89,12 @@ export function createGeekRobot() {
 }
 
 /**
- * Laadstation tegen de oostwand. De tilrobot staat er met zijn neus tegenaan (hij kijkt naar +x); de
- * robot-heftruck met zijn rug, en heeft een langer vak op de vloer.
- * @param long vak voor een robot-heftruck
+ * Laadstation tegen de oostwand, voor elke robot hetzelfde: de kast met de laadcontacten en een vak op de vloer
+ * waar ook de langste robot in past. De robots staan er met hun neus tegenaan (ze kijken naar +x); alleen de
+ * robot-heftruck met zijn rug.
+ * @param width breedte (m) van het vak: de rij laadstations sluit zo precies op elkaar aan
  */
-export function createRobotCharger(long = false) {
+export function createRobotCharger(width = 1.4) {
   const p = (parts ??= makeParts());
   const g = new THREE.Group();
   const part = (mat: THREE.Material, w: number, h: number, d: number, x: number, y: number, z: number) => {
@@ -108,11 +109,11 @@ export function createRobotCharger(long = false) {
   part(p.black, 0.08, 0.05, 0.3, 0.62, 0.12, 0); // laadcontacten
   part(new THREE.MeshBasicMaterial({ color: '#3ddc84' }), 0.01, 0.03, 0.12, 0.655, 0.36, 0);
   const mark = new THREE.Mesh(
-    new THREE.PlaneGeometry(long ? 2.3 : 1.5, long ? 1.3 : 1.0),
+    new THREE.PlaneGeometry(2.6, width),
     onTop(new THREE.MeshStandardMaterial({ color: '#1769e0', transparent: true, opacity: 0.3, depthWrite: false })),
   );
   mark.rotation.x = -Math.PI / 2;
-  mark.position.set(long ? -0.5 : -0.05, 0.015, 0);
+  mark.position.set(-0.72, 0.015, 0);
   g.add(mark);
   return g;
 }

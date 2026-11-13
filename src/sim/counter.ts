@@ -21,6 +21,9 @@ export type Counter = {
   v: number;
 };
 
+/** Iets waar de telrobot voor stopt: een speler, een voertuig, een andere robot. */
+export type CounterObstacle = Point & { rad: number };
+
 /** Wat de telrobot van de fysieke wereld nodig heeft; ingevuld door src/sim/warehouse.ts. */
 export interface CounterWorld {
   /** false: een andere speler is host en beslist. */
@@ -58,6 +61,7 @@ export function createCounter(world: CounterWorld) {
   let resets = 0;
   let snapshot = parked();
   let snapshotAt = -1;
+  let obstacles: () => CounterObstacle[] = () => [];
 
   /** Eerst terug naar de rijlijn, daarlangs naar de baan, en dan naast de baan naar de pallet. */
   function pathTo(target: Point): Point[] {
@@ -75,6 +79,13 @@ export function createCounter(world: CounterWorld) {
       const turn = angle(Math.atan2(dx, dz), robot.r);
       robot.r += Math.max(-TURN * dt, Math.min(TURN * dt, turn));
       if (Math.abs(turn) > 0.25) return; // eerst draaien, dan rijden
+      // Staat er iets of iemand in de weg, dan wacht hij: hij rijdt nergens doorheen
+      const blocked = obstacles().some((o) => {
+        const along = ((o.x - robot.x) * dx + (o.z - robot.z) * dz) / d;
+        const side = ((o.x - robot.x) * dz - (o.z - robot.z) * dx) / d;
+        return along > 0 && along < 0.6 + o.rad && Math.abs(side) < 0.3 + o.rad;
+      });
+      if (blocked) return;
       const step = Math.min(d, SPEED * dt);
       robot.x += (dx / d) * step;
       robot.z += (dz / d) * step;
@@ -151,6 +162,10 @@ export function createCounter(world: CounterWorld) {
     /** De telrobot (alleen lezen). */
     robot: robot as Readonly<Counter>,
     update,
+    /** Waar de telrobot voor stopt: spelers, voertuigen en de andere robots. */
+    setObstacles(source: () => CounterObstacle[]) {
+      obstacles = source;
+    },
     statusText() {
       if (busy) return 'wacht op de WMS';
       if (robot.phase === 'toPallet') return `rijdt naar ${robot.palletId}`;

@@ -11,7 +11,7 @@
 //                   (gezien vanaf de dockkant), R2A en R2B die van pad 2, enzovoort
 //   docks           dockdeuren in de westwand (x = -width/2), elk met een inslag- en een uitslagbaan
 //   desk            bureau met de pc; radio en printer staan erop (dx/dz ten opzichte van het bureau)
-//   rollContainers  lege rolcontainers: hier begin je aan een order
+//   orderPallets    stapel lege pallets: hier pak je er een om aan een order te beginnen
 //   rooms           kantoor en kantine: aanbouw buiten tegen de noordwand, bij de dockwand (het kantoor op de hoek);
 //                   depth is de diepte van de aanbouw, vanuit de hal door een deur in de noordwand te bereiken
 //   parking         parkeerplaats in de andere hoek van de dockwand (zuid): een vak voor de heftruck en een voor
@@ -75,7 +75,9 @@ function loadDraft(): WarehouseModel | null {
   try {
     const text = globalThis.localStorage?.getItem(MODEL_DRAFT_KEY);
     if (!text) return null;
-    const m: unknown = JSON.parse(text);
+    const m = JSON.parse(text) as Record<string, unknown> | null;
+    // Een concept van vóór de orderpallets noemde die plek nog rollContainers
+    if (m && m.rollContainers && !m.orderPallets) m.orderPallets = m.rollContainers;
     // Onbruikbaar (bijvoorbeeld van een oudere versie) of inmiddels gelijk aan het bestand: het concept vervalt.
     if (modelError(m) || JSON.stringify(m) === JSON.stringify(base)) {
       localStorage.removeItem(MODEL_DRAFT_KEY);
@@ -218,8 +220,8 @@ export const PER_PALLET = 20;
 export const POINTS = {
   /** De pc met de WMS-app. */
   terminal: { x: desk.x, z: desk.z },
-  /** Lege rolcontainers: hier begin je aan een order. */
-  containers: { ...model.rollContainers },
+  /** De stapel lege pallets: hier pak je er een om aan een order te beginnen. */
+  orderPallets: { ...model.orderPallets },
 } satisfies Record<string, Point>;
 
 /** Wat er op het bureau staat. */

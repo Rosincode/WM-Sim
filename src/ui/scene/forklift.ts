@@ -20,6 +20,8 @@ interface Options {
   place: (locId: string, load: Load, fromLocId: string, slot: number) => void;
   /** Aangeroepen na een mutatie zodat de hal de stellingen opnieuw tekent. */
   onStockChange: () => void;
+  /** Wat er verder in de hal staat of rijdt (pallets op de banen, robots, chauffeurs, de pompwagen): daar rijdt de truck niet doorheen. */
+  obstacles?: () => Solid[];
 }
 
 /** key: bepaalt hoe de dozen op de pallet gestapeld zijn, zodat hij er bij elke speler hetzelfde uitziet. */
@@ -51,10 +53,10 @@ const MAX_REVERSE = 2.6;
 
 // ---------- Vormen ----------
 /** Punt in het zijaanzicht: z (naar voren), y (omhoog) en eventueel de straal van de afgeronde hoek. */
-type P = [z: number, y: number, r?: number];
+export type P = [z: number, y: number, r?: number];
 
 /** Zijaanzicht met afgeronde hoeken, uitgetrokken over de breedte (x, rond het midden). */
-function profile(pts: P[], width: number, bevel = 0.012) {
+export function profile(pts: P[], width: number, bevel = 0.012) {
   const shape = new THREE.Shape();
   const n = pts.length;
   pts.forEach(([z, y, r = 0], i) => {
@@ -85,7 +87,7 @@ function profile(pts: P[], width: number, bevel = 0.012) {
 }
 
 /** Punten op een cirkelboog in het zijaanzicht; hoek 0 wijst naar voren, een kwartslag is recht omhoog. */
-function arc(cz: number, cy: number, r: number, from: number, to: number, steps = 14): P[] {
+export function arc(cz: number, cy: number, r: number, from: number, to: number, steps = 14): P[] {
   return Array.from({ length: steps + 1 }, (_, i) => {
     const a = from + ((to - from) * i) / steps;
     return [cz + Math.cos(a) * r, cy + Math.sin(a) * r] as P;
@@ -93,7 +95,7 @@ function arc(cz: number, cy: number, r: number, from: number, to: number, steps 
 }
 
 /** Buis langs een reeks punten, met ronde bochten. */
-function tube(pts: [number, number, number][], radius: number, corner: number) {
+export function tube(pts: [number, number, number][], radius: number, corner: number) {
   const v = pts.map((p) => new THREE.Vector3(...p));
   const path = new THREE.CurvePath<THREE.Vector3>();
   let from = v[0];
@@ -108,7 +110,7 @@ function tube(pts: [number, number, number][], radius: number, corner: number) {
   return new THREE.TubeGeometry(path, 90, radius, 10);
 }
 
-export function createForklift({ hall, colliders, bounds, take, place, onStockChange }: Options) {
+export function createForklift({ hall, colliders, bounds, take, place, onStockChange, obstacles }: Options) {
   const g = new THREE.Group();
   // Materialen van de huisstijl, gedeeld met de pompwagen
   const { paint: red, dark, black, steel, rubber, seat } = STYLE;
@@ -412,7 +414,7 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
     if (carried)
       list.push({ pose, lift: true, minX: -0.6, maxX: 0.6, minZ: FORK_Z - 0.5, maxZ: FORK_Z + 0.5, minY: forkH + 0.025, maxY: forkH + 0.025 + loadTop(carried) });
     for (const l of loose)
-      list.push({ pose: { x: l.x, z: l.z, r: l.r }, minX: -0.6, maxX: 0.6, minZ: -0.5, maxZ: 0.5, minY: 0, maxY: loadTop(l) });
+      list.push({ pose: { x: l.x, z: l.z, r: l.r }, minX: -0.6, maxX: 0.6, minZ: -0.5, maxZ: 0.5, minY: 0, maxY: loadTop(l), pallet: true });
     return list;
   }
 
@@ -608,6 +610,35 @@ export function createForklift({ hall, colliders, bounds, take, place, onStockCh
         hit = true;
         if (ox < oz) p.x = p.x < (c.minX + c.maxX) / 2 ? c.minX - RADIUS : c.maxX + RADIUS;
         else p.z = p.z < (c.minZ + c.maxZ) / 2 ? c.minZ - RADIUS : c.maxZ + RADIUS;
+      }
+      // Alles wat verder in de hal staat of rijdt, en de pallets die los op de vloer staan: het chassis duwt zich
+      // ervan weg. (De vorken reiken verder dan het chassis: zo steek je ze nog steeds onder een pallet.)
+      // Alleen als je zelf rijdt: een geparkeerde truck laat zich niet wegduwen.
+      const blocks = driving ? (obstacles?.() ?? []) : [];
+      if (driving) for (const l of loose) blocks.push({ pose: { x: l.x, z: l.z, r: l.r }, minX: -0.6, maxX: 0.6, minZ: -0.5, maxZ: 0.5, minY: 0, maxY: 1 });
+      for (const s of blocks) {
+        if (s.maxY < 0.12 || s.minY > 1.2) continue;
+        const c = s.pose ? Math.cos(s.pose.r) : 1;
+        const n = s.pose ? Math.sin(s.pose.r) : 0;
+        const dx = p.x - (s.pose?.x ?? 0);
+        const dz = p.z - (s.pose?.z ?? 0);
+        let lx = dx * c - dz * n;
+        let lz = dx * n + dz * c;
+        const nx = THREE.MathUtils.clamp(lx, s.minX, s.maxX);
+        const nz = THREE.MathUtils.clamp(lz, s.minZ, s.maxZ);
+        const far = Math.hypot(lx - nx, lz - nz);
+        if (far >= RADIUS) continue;
+        hit = true;
+        if (far > 1e-6) {
+          lx = nx + ((lx - nx) / far) * RADIUS;
+          lz = nz + ((lz - nz) / far) * RADIUS;
+        } else if (Math.min(lx - s.minX, s.maxX - lx) < Math.min(lz - s.minZ, s.maxZ - lz)) {
+          lx = lx < (s.minX + s.maxX) / 2 ? s.minX - RADIUS : s.maxX + RADIUS;
+        } else {
+          lz = lz < (s.minZ + s.maxZ) / 2 ? s.minZ - RADIUS : s.maxZ + RADIUS;
+        }
+        p.x = (s.pose?.x ?? 0) + lx * c + lz * n;
+        p.z = (s.pose?.z ?? 0) - lx * n + lz * c;
       }
       if (hit) speed *= 0.5;
 

@@ -4,6 +4,7 @@ import { AISLE_Z, DOCKS, DOCK_PITCH, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVE
 import { DOCK_RAMP, DRIVER_DOORS, TRUCK, dockScreen, jackBay } from '../../sim/drivers';
 import { createRooms, ROOM_DOORS } from './rooms';
 import { STYLE, onTop } from './style';
+import { EXTINGUISHER_SIZE, extinguisherParts } from './extinguisher';
 import * as tex from './textures';
 
 // Het magazijngebouw: vloer, wanden, dak, docks, stellingen, pallets en verlichting.
@@ -37,6 +38,8 @@ export type Solid = {
   pose?: { x: number; z: number; r: number };
   /** Beweegt mee met de vorken van de heftruck. */
   lift?: boolean;
+  /** Een pallet met lading: de vorken van een pompwagen schuiven eronder. */
+  pallet?: boolean;
 };
 /** pallet: het label is een palletsticker; locationId is leeg als de pallet los op de vloer staat. */
 export type ScanTarget = { code: string; position: THREE.Vector3; pallet?: { sku: string; qty: number; locationId: string | null } };
@@ -621,9 +624,19 @@ export function createWarehouse(scene: THREE.Scene) {
   solid(TX + 0.65, TZ + 0.7, 0.6, 0.5, 0, 0.4);
 
   // Brandblussers en nooduitgang
+  // Elke blusser hangt aan een standaard en kijkt de hal in: met zijn rug naar de dichtstbijzijnde wand.
   const extinguishers = new Batch();
-  for (const { x, z } of FURNITURE.fireExtinguishers) extinguishers.add(x, 1.0, z, 0.075, 0.5, 0.075);
-  scene.add(extinguishers.build(UNIT_CYL, red));
+  for (const { x, z } of FURNITURE.fireExtinguishers) {
+    const toWall = [
+      { dist: z + D / 2, ry: 0 },
+      { dist: D / 2 - z, ry: Math.PI },
+      { dist: x + W / 2, ry: Math.PI / 2 },
+      { dist: W / 2 - x, ry: -Math.PI / 2 },
+    ].reduce((a, b) => (b.dist < a.dist ? b : a));
+    extinguishers.add(x, 0, z, 1, 1, 1, 0, toWall.ry, 0);
+    solid(x, z, EXTINGUISHER_SIZE.w, EXTINGUISHER_SIZE.d, 0, EXTINGUISHER_SIZE.h);
+  }
+  for (const part of extinguisherParts()) scene.add(extinguishers.build(part.geometry, part.material, part.shadows));
   const exitDoor = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.1, 0.06), paint('#5d6b63', 0.5, 0.3));
   exitDoor.position.set(EXIT_X, 1.05, D / 2 - 0.04);
   scene.add(exitDoor);
@@ -804,6 +817,7 @@ export function createWarehouse(scene: THREE.Scene) {
         s.rotation.y = ry;
         g.add(s);
       }
+    g.userData.top = loadHeight(sku, qty); // bovenkant van de lading, voor botsingen
     return g;
   }
 
@@ -884,6 +898,7 @@ export function createWarehouse(scene: THREE.Scene) {
       }
       x0 += strip.w;
     }
+    g.userData.top = list.reduce((top, c) => Math.max(top, c.y + c.sy / 2), PALLET_H); // bovenkant van de lading, voor botsingen
     if (list.length === 0) return g;
     const boxes = new THREE.InstancedMesh(UNIT_BOX, cartonMats, list.length);
     list.forEach((c, i) => {
@@ -953,7 +968,7 @@ export function createWarehouse(scene: THREE.Scene) {
     }
     solids = [
       ...fixedSolids,
-      ...rackPallets.map((p) => ({ minX: p.x - 0.6, maxX: p.x + 0.6, minZ: p.z - 0.5, maxZ: p.z + 0.5, minY: p.y, maxY: p.top })),
+      ...rackPallets.map((p) => ({ minX: p.x - 0.6, maxX: p.x + 0.6, minZ: p.z - 0.5, maxZ: p.z + 0.5, minY: p.y, maxY: p.top, pallet: true })),
     ];
     pallets.count = np;
     cartons.count = nc;
@@ -1020,12 +1035,12 @@ export function createWarehouse(scene: THREE.Scene) {
     setDriverDoor,
     /** De bureaus in het kantoor: monitor met de WMS-app en de stoel waarop je ervoor gaat zitten. */
     desks: rooms.desks,
+    /** Alle stoelen (kantoor en kantine) als zitplek: plek op de vloer, voorkant = +z. */
+    seats: rooms.seats,
     /** Alles waar de speler tegenaan loopt of op kan staan: stellingen, pallets in de stellingen en vaste aankleding. */
     solids: () => solids,
     loadHeight,
     scanTargets,
-    /** Alle stoelen (kantoor en kantine) als zitplek: plek op de vloer, voorkant = +z. */
-    seats: rooms.seats,
     setPallets,
     setLoose,
     /** De pallets die nu in de stellingen staan. */

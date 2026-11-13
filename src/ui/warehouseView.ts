@@ -1,13 +1,16 @@
 import * as THREE from 'three';
-import { DOCKS, LANE_LENGTH, LANE_SLOTS, LEVEL_Y, POINTS, laneSlot, shelfLocations, type Point } from '../sim/layout';
+import { DOCKS, LANE_LENGTH, LANE_SLOTS, LEVEL_Y, POINTS, laneSlot, type Point } from '../sim/layout';
 import { TRUCK, cargoSpot } from '../sim/drivers';
 import type { Truck, Warehouse } from '../sim/warehouse';
 import { createPcMesh } from './scene/pc';
 import { createTruck } from './scene/truck';
 import { onTop } from './scene/style';
-import { palletSticker } from './scene/textures';
+import type { Collider, Solid } from './scene/warehouse';
 
 // 3D-weergave van de processtaat. Leest alleen de sim; wijzigt niets.
+// Elke pallet is een echte pallet met dozen: precies zoveel als er volgens de sim op staan (in de vrachtwagen,
+// op de banen, op een pompwagen en in je handen), net als in de stellingen. De hal bouwt ze (buildLoad en
+// buildOrderLoad in src/ui/scene/warehouse.ts).
 
 export const SKU_COLORS: Record<string, string> = {
   'SKU-001': '#4fc3f7',
@@ -16,60 +19,12 @@ export const SKU_COLORS: Record<string, string> = {
   'SKU-004': '#e57373',
   'SKU-005': '#ba68c8',
 };
-/** Vaste kleur per artikel; artikelen die de WMS erbij heeft gekregen krijgen een eigen kleur op basis van hun code. */
+/** Vaste kleur per artikel (voor lijsten in de HUD); artikelen die de WMS erbij heeft gekregen krijgen een eigen kleur op basis van hun code. */
 export function skuColor(sku: string) {
   if (SKU_COLORS[sku]) return SKU_COLORS[sku];
   let h = 0;
   for (const ch of sku) h = (h * 31 + ch.charCodeAt(0)) % 360;
   return `hsl(${h}, 55%, 60%)`;
-}
-
-function box(w: number, h: number, d: number, color: string) {
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshStandardMaterial({ color }));
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  return mesh;
-}
-
-let stickerMat: THREE.Material | null = null;
-
-export function pallet(color = '#a5784a') {
-  const g = new THREE.Group();
-  const base = box(1, 0.12, 1, '#8d6e4a');
-  base.position.y = 0.06;
-  const load = box(0.9, 0.7, 0.9, color);
-  load.position.y = 0.47;
-  // Palletsticker op de pallet zelf, in het midden van beide lange kanten; alleen zichtbaar als de pallet er een heeft
-  stickerMat ??= onTop(new THREE.MeshStandardMaterial({ map: palletSticker(), roughness: 0.6 }));
-  const sticker = new THREE.Group();
-  for (const side of [1, -1]) {
-    const s = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.11), stickerMat);
-    s.position.set(0, 0.06, side * 0.503);
-    s.rotation.y = side > 0 ? 0 : Math.PI;
-    sticker.add(s);
-  }
-  g.add(base, load, sticker);
-  g.userData.load = load;
-  g.userData.sticker = sticker;
-  return g;
-}
-
-export function setPalletColor(g: THREE.Object3D, color: string) {
-  ((g.userData.load as THREE.Mesh).material as THREE.MeshStandardMaterial).color.set(color);
-}
-
-/** Rolcontainer voor een orderpick. */
-export function tote() {
-  const g = new THREE.Group();
-  const cage = new THREE.Mesh(
-    new THREE.BoxGeometry(0.8, 1.2, 0.7),
-    new THREE.MeshStandardMaterial({ color: '#b0bec5', wireframe: true }),
-  );
-  cage.position.y = 0.7;
-  const goods = box(0.7, 0.5, 0.6, '#ffcc80');
-  goods.position.y = 0.35;
-  g.add(cage, goods);
-  return g;
 }
 
 /** Tekstlabel dat altijd naar de camera kijkt; tekent alleen opnieuw als de tekst verandert. */
@@ -116,79 +71,92 @@ function floorMark(p: Point, w: number, d: number, color: string) {
   return m;
 }
 
-/** Haalt een losse lading (orderpallet) uit beeld en geeft zijn buffers vrij; de vormen en materialen zijn gedeeld. */
+/** Haalt een losse lading (pallet met dozen) uit beeld en geeft zijn buffers vrij; de vormen en materialen zijn gedeeld. */
 export function dropLoad(o: THREE.Object3D) {
   o.removeFromParent();
   o.traverse((c) => c instanceof THREE.InstancedMesh && c.dispose());
 }
 
+/** Bovenkant (m boven zijn voet) van een lading die de hal heeft gebouwd. */
+export const loadTop = (o: THREE.Object3D) => (typeof o.userData.top === 'number' ? (o.userData.top as number) : 1);
+
+/** Een pallet zoals de sim hem kent. */
+export type PalletInfo = { id: string; sku: string; qty: number; unlabeled?: boolean };
+/** Een pallet met zijn dozen in beeld: `key` verandert als er een andere pallet staat of het aantal anders is. */
+export type PalletLoads = { key(p: PalletInfo): string; build(p: PalletInfo): THREE.Object3D };
 /** Een orderpallet in beeld: `key` verandert als er een andere order staat of er iets bij gepickt is. */
 export type OrderLoads = { key(orderId: string): string; build(orderId: string): THREE.Object3D };
 
-/** Een vrachtwagen met wat er in de laadruimte staat: de pallets die nog gelost moeten worden, of de geladen orders. */
-function truckView(direction: Truck['direction'], orders: OrderLoads) {
-  const truck = createTruck(direction);
-  const cargo: (THREE.Object3D | undefined)[] = [];
-  const keys: string[] = [];
-  const place = (i: number, o: THREE.Object3D) => {
-    const spot = cargoSpot(0, i);
-    o.position.set(spot.x - TRUCK.rear, TRUCK.floor, spot.z);
-    truck.group.add(o);
-    return o;
+/** Een plek waar een lading kan staan: houdt bij wat er nu staat en bouwt alleen opnieuw als dat verandert. */
+function loadSlot() {
+  let key = '';
+  let mesh: THREE.Object3D | null = null;
+  return {
+    get mesh() {
+      return mesh;
+    },
+    /** Zet neer wat bij `next` hoort ('' = niets). `place` krijgt de nieuwe lading om hem op zijn plek te zetten. */
+    show(next: string, build: () => THREE.Object3D, place: (o: THREE.Object3D) => void) {
+      if (next === key) return mesh;
+      key = next;
+      if (mesh) dropLoad(mesh);
+      mesh = next ? build() : null;
+      if (mesh) place(mesh);
+      return mesh;
+    },
   };
+}
+
+/** Een vrachtwagen met wat er in de laadruimte staat: de pallets die nog gelost moeten worden, of de geladen orders. */
+function truckView(direction: Truck['direction']) {
+  const truck = createTruck(direction);
+  const cargo: ReturnType<typeof loadSlot>[] = [];
   return {
     mesh: truck.group,
     setDoors: truck.setDoors,
-    /** Zet op plek i in de laadruimte de pallet van een levering (sku) of van een geladen order (orderId), of haalt hem weg. */
-    cargoAt(i: number, sku: string | null, orderId?: string) {
-      if (direction === 'out') {
-        const key = orderId ? orders.key(orderId) : '';
-        if (key === (keys[i] ?? '')) return;
-        keys[i] = key;
-        const old = cargo[i];
-        if (old) dropLoad(old);
-        const made = orderId ? place(i, orders.build(orderId)) : undefined;
+    /** Zet op plek i in de laadruimte de lading die bij `key` hoort, of haalt hem weg (''). */
+    cargoAt(i: number, key: string, build: () => THREE.Object3D) {
+      (cargo[i] ??= loadSlot()).show(key, build, (o) => {
+        const spot = cargoSpot(0, i);
+        o.position.set(spot.x - TRUCK.rear, TRUCK.floor, spot.z);
         // Geen schaduw: anders moet de schaduwkaart elke frame opnieuw voor een rijdende wagen
-        made?.traverse((o) => (o.castShadow = false));
-        cargo[i] = made;
-        return;
-      }
-      const p = (cargo[i] ??= sku === null ? undefined : place(i, pallet()));
-      if (!p) return;
-      p.visible = sku !== null;
-      if (sku) setPalletColor(p, skuColor(sku));
+        o.traverse((c) => (c.castShadow = false));
+        truck.group.add(o);
+      });
     },
     slots: () => cargo.length,
   };
 }
 type TruckView = ReturnType<typeof truckView>;
 
+/** Aantal lege pallets op de stapel waar je een pallet voor een order pakt. */
+const STACK = 6;
+const STACK_STEP = 0.146;
+
 export function createWarehouseView(
   scene: THREE.Scene,
   player: THREE.Object3D,
   sim: Warehouse,
   opts: {
-    rackStock?: boolean;
-    /** Bouwt de pallet van een order: van elk artikel het aantal dozen (de hal, src/ui/scene/warehouse.ts). */
-    orderLoad?: (lines: { sku: string; qty: number }[], key: string) => THREE.Object3D;
-  } = {},
+    /** Bouwt een pallet met precies `qty` dozen van een artikel (de hal, src/ui/scene/warehouse.ts). */
+    palletLoad: (sku: string, qty: number, key: string, sticker: boolean) => THREE.Object3D;
+    /** Bouwt de pallet van een order: van elk artikel het aantal dozen (de hal). */
+    orderLoad: (lines: { sku: string; qty: number }[], key: string) => THREE.Object3D;
+  },
 ) {
   const root = new THREE.Group();
   scene.add(root);
 
+  // --- Pallets met hun dozen: wat er volgens de sim op staat ---
+  const palletLoads: PalletLoads = {
+    key: (p) => `${p.id}|${p.sku}|${p.qty}|${p.unlabeled ? 0 : 1}`,
+    build: (p) => opts.palletLoad(p.sku, p.qty, p.id, !p.unlabeled),
+  };
   // --- Orderpallets: wat er voor een order gepickt is, op een pallet zoals in de stelling ---
   const orderLines = (id: string) => (sim.order(id)?.lines ?? []).map((l) => ({ sku: l.sku, qty: l.picked }));
   const orderLoads: OrderLoads = {
     key: (id) => `${id}|${orderLines(id).map((l) => `${l.sku}:${l.qty}`).join(',')}`,
-    build(id) {
-      if (opts.orderLoad) return opts.orderLoad(orderLines(id), id);
-      // reservevorm zonder hal: de rolcontainer, met zijn lange kant langs x zoals de pallet
-      const g = new THREE.Group();
-      const t = tote();
-      t.rotation.y = Math.PI / 2;
-      g.add(t);
-      return g;
-    },
+    build: (id) => opts.orderLoad(orderLines(id), id),
   };
 
   // --- Vaste objecten: per dock een inslag- en uitslagbaan, en de pc (orderterminal + WMS-aanmelding) ---
@@ -200,16 +168,24 @@ export function createWarehouseView(
   pc.group.position.set(POINTS.terminal.x, 0, POINTS.terminal.z);
   root.add(pc.group);
 
-  // Lege rolcontainers: hier pak je er een voor de volgende order
-  for (const dx of [-0.95, 0, 0.95]) {
-    const t = tote();
-    t.children[1].visible = false; // nog niets in
-    t.position.set(POINTS.containers.x + dx, 0, POINTS.containers.z);
-    root.add(t);
+  // De stapel lege pallets: hier pak je er een voor de volgende order
+  const stackAt = POINTS.orderPallets;
+  for (let i = 0; i < STACK; i++) {
+    const p = opts.orderLoad([], 'leeg');
+    p.position.set(stackAt.x, i * STACK_STEP, stackAt.z);
+    root.add(p);
   }
 
-  const labels = { containers: label(3.4), truckIn: label(4.5), truckOut: label(4.5) };
-  labels.containers.sprite.position.set(POINTS.containers.x, 2.2, POINTS.containers.z);
+  // Waar je tegenaan loopt (en de heftruck tegenaan rijdt): het bureau en de stapel lege pallets
+  const box = (x: number, z: number, w: number, d: number, maxY: number): Solid => ({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2, minY: 0, maxY });
+  const fixedSolids: Solid[] = [
+    box(POINTS.terminal.x, POINTS.terminal.z, 1.5, 0.75, 1.0),
+    box(stackAt.x, stackAt.z, 1.2, 1.0, STACK * STACK_STEP),
+  ];
+  const colliders: Collider[] = fixedSolids.map(({ minX, maxX, minZ, maxZ }) => ({ minX, maxX, minZ, maxZ }));
+
+  const labels = { stack: label(3.4), truckIn: label(4.5), truckOut: label(4.5) };
+  labels.stack.sprite.position.set(stackAt.x, 2.2, stackAt.z);
   Object.values(labels).forEach((l) => root.add(l.sprite));
   // Baanlabels verschijnen alleen als er iets staat (of als je er een order moet klaarzetten).
   const laneLabels = DOCKS.map((d) => {
@@ -221,41 +197,19 @@ export function createWarehouseView(
   });
 
   // --- Vrachtwagens ---
-  const trucks = { in: truckView('in', orderLoads), out: truckView('out', orderLoads) };
+  const trucks = { in: truckView('in'), out: truckView('out') };
   root.add(trucks.in.mesh, trucks.out.mesh);
   /** Leveringen die de WMS heeft aangemeld: hooguit één vrachtwagen per dock, pas gemaakt als er een komt. */
   const deliveryTrucks = new Map<number, { truck: TruckView; text: ReturnType<typeof label> }>();
 
   // --- Pallets in de banen: op de inslagbaan wat gelost is, op de uitslagbaan de klaargezette orders ---
-  const laneInMeshes = DOCKS.map((d) =>
-    Array.from({ length: LANE_SLOTS }, (_, i) => {
-      const p = pallet();
-      const s = laneSlot(d.laneIn, i);
-      p.position.set(s.x, 0, s.z);
-      p.visible = false;
-      root.add(p);
-      return p;
-    }),
-  );
-  const laneOutViews = DOCKS.map(() => Array.from({ length: LANE_SLOTS }, () => ({ key: '', mesh: null as THREE.Object3D | null })));
+  const lanes = DOCKS.map(() => ({
+    in: Array.from({ length: LANE_SLOTS }, loadSlot),
+    out: Array.from({ length: LANE_SLOTS }, loadSlot),
+  }));
 
-  // --- Voorraad in de stellingen: één pallet per locatie, kleur per artikel ---
-  // Alleen als de hal de voorraad niet zelf tekent (rackStock): anders zijn het honderden onzichtbare
-  // pallets die elke frame voor niets worden bijgewerkt.
-  const showRackStock = opts.rackStock !== false;
-  const stockMeshes = new Map<string, THREE.Group>();
-  for (const l of showRackStock ? shelfLocations() : []) {
-    const p = pallet();
-    p.position.set(l.x, LEVEL_Y[l.level] + 0.04, l.z);
-    p.visible = false;
-    root.add(p);
-    stockMeshes.set(l.id, p);
-  }
-
-  // --- Wat de speler draagt ---
-  const carriedPallet = pallet();
-  const carriedTote = tote();
-  root.add(carriedPallet, carriedTote);
+  // --- Wat de speler draagt: de pallet zelf, vlak boven de vloer voor hem uit ---
+  const carried = loadSlot();
 
   // --- Doelmarkering ---
   const beam = new THREE.Mesh(
@@ -275,13 +229,15 @@ export function createWarehouseView(
     if (!t) return;
     const dock = DOCKS[t.dock];
     const eased = 1 - (1 - t.t) ** 2;
-    view.mesh.position.set(TRUCK.rear - (1 - eased) * 34, 0, dock.z); // achterkant trailer tegen de dockdeur
+    view.mesh.position.set(TRUCK.rear - (1 - eased) * 34, 0, dock.z); // achterkant van de laadbak tegen de dockdeur
     view.setDoors(THREE.MathUtils.clamp((t.t - 0.5) / 0.25, 0, 1)); // de achterdeuren gaan open voordat hij tegen het dock staat
     // Wat er in de laadruimte staat: de pallets die nog gelost moeten worden, of de orders die al geladen zijn
     const n = Math.max(view.slots(), t.cargo.length, t.loaded.length);
     for (let i = 0; i < n; i++) {
-      if (t.direction === 'in') view.cargoAt(i, t.cargo[i]?.sku ?? null);
-      else view.cargoAt(i, null, t.loaded[i]);
+      const p = t.direction === 'in' ? t.cargo[i] : undefined;
+      const id = t.direction === 'out' ? t.loaded[i] : undefined;
+      if (p) view.cargoAt(i, palletLoads.key(p), () => palletLoads.build(p));
+      else view.cargoAt(i, id ? orderLoads.key(id) : '', () => orderLoads.build(id!));
     }
     text.sprite.position.set(dock.truck.x + 1, 4.3, dock.z);
   }
@@ -296,6 +252,21 @@ export function createWarehouseView(
     return `${t.id} · ${status}`;
   };
 
+  /** Bouwt wat iemand draagt uit de omschrijving van carryLabel() (ook voor andere spelers), of null. */
+  function carryMesh(text: string): THREE.Object3D | null {
+    const [kind, a, b, c, d] = text.split('|');
+    if (kind === 'O' && a) return orderLoads.build(a);
+    if (kind === 'P' && a && c) return palletLoads.build({ sku: a, qty: Number(b) || 0, id: c, unlabeled: d === '0' });
+    return null;
+  }
+  /** Wat de speler draagt, als tekst die bij elke speler dezelfde lading oplevert ('' = niets). */
+  function carryLabel() {
+    const c = sim.carry;
+    if (c?.kind === 'pallet') return `P|${c.pallet.sku}|${c.pallet.qty}|${c.pallet.id}|${c.pallet.unlabeled ? 0 : 1}`;
+    if (c?.kind === 'order') return `O|${orderLoads.key(c.orderId)}`;
+    return '';
+  }
+
   function update(dt: number) {
     time += dt;
 
@@ -303,14 +274,14 @@ export function createWarehouseView(
     placeTruck(trucks.out, labels.truckOut, sim.trucks.out);
     for (const t of sim.deliveries) {
       if (deliveryTrucks.has(t.dock)) continue;
-      const made = { truck: truckView('in', orderLoads), text: label(4.5) };
+      const made = { truck: truckView('in'), text: label(4.5) };
       root.add(made.truck.mesh, made.text.sprite);
       deliveryTrucks.set(t.dock, made);
     }
     for (const [dock, v] of deliveryTrucks) placeTruck(v.truck, v.text, sim.deliveries.find((t) => t.dock === dock) ?? null);
 
     const open = sim.orders.filter((o) => o.status === 'open').length;
-    labels.containers.set(open ? `Rolcontainers · ${open} order${open === 1 ? '' : 's'}` : '');
+    labels.stack.set(open ? `Lege pallets · ${open} order${open === 1 ? '' : 's'}` : '');
 
     const staging = sim.carry?.kind === 'order' && sim.order(sim.carry.orderId)?.status === 'picked';
     DOCKS.forEach((d, i) => {
@@ -318,51 +289,25 @@ export function createWarehouseView(
       const outCount = sim.laneOut[i].filter(Boolean).length;
       laneLabels[i].in.set(inCount ? `${d.inId} · ${inCount}/${LANE_SLOTS}` : '');
       laneLabels[i].out.set(outCount || (staging && i === sim.outDock) ? `${d.outId} · ${outCount}/${LANE_SLOTS}` : '');
-      sim.laneIn[i].forEach((p, k) => {
-        laneInMeshes[i][k].visible = !!p;
-        if (!p) return;
-        setPalletColor(laneInMeshes[i][k], skuColor(p.sku));
-        (laneInMeshes[i][k].userData.sticker as THREE.Object3D).visible = !p.unlabeled;
-      });
-      sim.laneOut[i].forEach((id, k) => {
-        const v = laneOutViews[i]?.[k];
-        const key = id ? orderLoads.key(id) : '';
-        if (!v || key === v.key) return;
-        v.key = key;
-        if (v.mesh) dropLoad(v.mesh);
-        v.mesh = id ? orderLoads.build(id) : null;
-        if (!v.mesh) return;
-        const s = laneSlot(d.laneOut, k);
-        v.mesh.position.set(s.x, 0, s.z);
-        root.add(v.mesh);
-      });
+      const put = (lane: Point, k: number) => (o: THREE.Object3D) => {
+        const s = laneSlot(lane, k);
+        o.position.set(s.x, 0, s.z);
+        root.add(o);
+      };
+      sim.laneIn[i].forEach((p, k) => lanes[i]?.in[k]?.show(p ? palletLoads.key(p) : '', () => palletLoads.build(p!), put(d.laneIn, k)));
+      sim.laneOut[i].forEach((id, k) => lanes[i]?.out[k]?.show(id ? orderLoads.key(id) : '', () => orderLoads.build(id!), put(d.laneOut, k)));
     });
 
-    // Voorraad: per locatie de grootste voorraadregel tonen
-    if (showRackStock) {
-      const top = new Map<string, { sku: string; qty: number }>();
-      for (const s of sim.stockList()) {
-        const cur = top.get(s.locationId);
-        if (!cur || s.qty > cur.qty) top.set(s.locationId, s);
-      }
-      for (const [id, mesh] of stockMeshes) {
-        const s = top.get(id);
-        mesh.visible = !!s;
-        if (s) setPalletColor(mesh, skuColor(s.sku));
-      }
-    }
-
-    // Gedragen object voor de speler
-    const c = sim.carry;
-    forward.set(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y));
-    const carried = c?.kind === 'pallet' ? carriedPallet : c?.kind === 'order' ? carriedTote : null;
-    carriedPallet.visible = carried === carriedPallet;
-    carriedTote.visible = carried === carriedTote;
-    if (carried) {
-      carried.position.copy(player.position).addScaledVector(forward, 0.9);
-      carried.position.y += c?.kind === 'pallet' ? 0.25 : 0;
-      carried.rotation.y = player.rotation.y;
-      if (c?.kind === 'pallet') setPalletColor(carriedPallet, skuColor(c.pallet.sku));
+    // Wat de speler draagt: voor hem uit, de korte kant van de pallet naar hem toe
+    const mesh = carried.show(carryLabel(), () => carryMesh(carryLabel()) ?? new THREE.Group(), (o) => {
+      o.traverse((c) => (c.castShadow = false)); // loopt mee: geen schaduw (zie de vrachtwagen)
+      root.add(o);
+    });
+    if (mesh) {
+      forward.set(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y));
+      mesh.position.copy(player.position).addScaledVector(forward, CARRY_AHEAD);
+      mesh.position.y += 0.03;
+      mesh.rotation.y = player.rotation.y;
     }
 
     // Doelmarkering
@@ -377,5 +322,23 @@ export function createWarehouseView(
     }
   }
 
-  return { update, pcDisplay: pc.screen, orderLoads };
+  /** Waar de speler tegenaan loopt: het bureau, de stapel lege pallets en elke pallet die op een baan staat. */
+  function solids(): Solid[] {
+    const out = [...fixedSolids];
+    DOCKS.forEach((d, i) => {
+      for (const [slots, lane] of [[lanes[i].in, d.laneIn], [lanes[i].out, d.laneOut]] as const)
+        slots.forEach((slot, k) => {
+          if (!slot.mesh) return;
+          const s = laneSlot(lane, k);
+          out.push({ minX: s.x - 0.6, maxX: s.x + 0.6, minZ: s.z - 0.5, maxZ: s.z + 0.5, minY: 0, maxY: loadTop(slot.mesh), pallet: true });
+        });
+    });
+    return out;
+  }
+
+  return { update, pcDisplay: pc.screen, palletLoads, orderLoads, solids, colliders, carryLabel, carryMesh };
 }
+
+/** Zo ver (m) voor de speler staat het midden van de pallet die hij draagt, en de halve maat van die pallet. */
+export const CARRY_AHEAD = 1.1;
+export const CARRY_RADIUS = 0.6;

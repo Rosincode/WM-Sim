@@ -1,5 +1,5 @@
 import type { ProcessEvent } from './events';
-import { AISLE_Z, HALL, LEVEL_Y, ROW_AISLE, ROW_Z, SECTION_PITCH, SECTION_X, dist, type Point } from './layout';
+import { AISLE_Z, DOCKS, HALL, LANE_LENGTH, LEVEL_Y, ROW_AISLE, ROW_Z, SECTION_PITCH, SECTION_X, WALKWAY_X, dist, type Point } from './layout';
 import type { Pallet } from './warehouse';
 import type { WmsReply } from './wms';
 
@@ -9,8 +9,8 @@ import type { WmsReply } from './wms';
 // - de robot-heftruck (fork): een onbemande stapelaar met een mast. Hij pakt een pallet vanuit het pad met zijn
 //   vorken en komt daarmee ook bij de hogere niveaus van de stellingen.
 // - de pickrobot (pick): pickt orders zonder dat er een mens aan te pas komt. Hij heeft een grijparm op een mast
-//   en pakt daarmee dozen van een pallet op elk niveau, legt ze in de rolcontainer die hij achter zich meevoert
-//   en zet de order klaar op een uitslaglocatie. Elke stap gaat langs de WMS, net als bij een speler.
+//   en pakt daarmee dozen van een pallet op elk niveau, legt ze op de pallet van de order die hij achter zich meevoert
+//   en zet die pallet klaar op een uitslaglocatie. Elke stap gaat langs de WMS, net als bij een speler.
 // - de voorraadteller (count): rijdt met een uitschuifbare cameramast door de paden en scant de palletstickers op alle
 //   niveaus. Een pallet die verplaatst is en nog niet geboekt, boekt hij daarmee op de plek waar hij staat.
 // De WMS stuurt ze aan met robotopdrachten (breng pallet X van locatie A naar locatie B). De game speelt de
@@ -18,10 +18,12 @@ import type { WmsReply } from './wms';
 // elke stap terug aan de WMS (gestart, afgerond, mislukt). Zoals overal in de sim geldt: eerst de WMS, dan
 // fysiek. Pas als de WMS het afronden heeft geaccepteerd zet de robot de pallet neer.
 //
-// Elk pad tussen de stellingen heeft zijn eigen robot (om en om een tilrobot en een robot-heftruck), met een
-// laadstation aan het eind van dat pad tegen de oostwand. Ze rijden over de paden (één robot per pad tegelijk)
-// en wisselen van pad via de robotbaan aan de oostkant van de hal. De pickrobots en de telrobot hebben hun
-// laadstation tussen die van de paden in.
+// Per pad tussen de stellingen is er één robot voor pallets (om en om een tilrobot en een robot-heftruck). De
+// laadstations staan in één strakke rij tegen de oostwand, soort bij soort en op gelijke afstand van elkaar. De
+// robots rijden over de paden (één robot per pad tegelijk) en wisselen van pad via de robotbaan aan de oostkant
+// van de hal. Bij de docks rijden ze niet tussen de pallets door: ze komen via de vrije strook midden voor een
+// dock bij een baan, en de pickrobot rijdt achteruit de uitslagbaan in vanaf de halkant. Robots rijden nergens
+// doorheen: ze wachten op elkaar en op alles wat in de weg staat.
 // Multiplayer: iedereen laat de robots lokaal rijden; alleen de host beslist (oppakken, neerzetten, de WMS vragen).
 
 /**
@@ -46,15 +48,16 @@ type Waypoint = Point & { a: number; detour?: boolean; h?: number; back?: boolea
 /**
  * Een palletplek met zijn niveau in de stelling (1 = op de vloer).
  * aisle = de robot blijft in het midden van dit pad staan (telrobot); stage = de plek op een uitslaglocatie
- * waar de pickrobot zijn rolcontainer achteruit neerzet.
+ * waar de pickrobot de pallet van zijn order achteruit neerzet; strip = de plek ligt op een baan bij de docks:
+ * de vrije strook (z) van waaruit een robot erbij komt zonder tussen andere pallets door te rijden.
  */
-export type RobotSpot = Point & { level: number; aisle?: number; stage?: boolean };
+export type RobotSpot = Point & { level: number; aisle?: number; stage?: boolean; strip?: number };
 export type Robot = {
   id: string;
   kind: RobotKind;
   /** Hoogte (m) van de vorken (robot-heftruck), de grijparm (pickrobot) of de cameramast (telrobot); 0 bij een tilrobot. */
   fork: number;
-  /** Pickrobot: de order waarvan hij de rolcontainer meevoert. */
+  /** Pickrobot: de order waarvan hij de pallet meevoert. */
   order: string | null;
   /** Pickrobot: de locatie waar hij heen rijdt of bezig is. */
   goal: string;
@@ -139,8 +142,8 @@ const LIFT_SPEED: Record<RobotKind, number> = { lift: 0, fork: 0.9, pick: 1.1, c
 const PICK_REACH = 1.35;
 /** Zo hoog (m) boven de palletplek pakt de grijparm een doos. */
 const PICK_HEIGHT = 0.3;
-/** Zo ver (m) achter het midden van een pickrobot staat de rolcontainer. */
-export const ROBOT_HITCH = 0.95;
+/** Zo ver (m) achter het midden van een pickrobot staat het midden van de pallet van zijn order. */
+export const ROBOT_HITCH = 1.15;
 /** Zo lang (s) is de grijparm bezig met één greep. */
 export const ROBOT_PICK_SECONDS = 2.4;
 /** Zo ver (m) schuift de cameramast van de telrobot uit in een pad. */
@@ -161,40 +164,49 @@ const LANE = 0.55;
 const HOLD = 1.3;
 /** Past de vloot in deze hal? Er moet een pad zijn, en ruimte voor de robotbaan naast de stellingen. */
 const FITS = ROBOT_AISLES.length > 0 && ROBOT_CORRIDOR_X >= RACK_MAX_X + 1.4;
-/** De robots die geen eigen pad hebben: ze staan tussen de laadstations van de paden in, het dichtst bij het midden. */
-const EXTRA: RobotKind[] = ['count', 'pick', 'pick'];
-const EXTRA_Z = (() => {
-  const first = ROBOT_AISLES[0] ?? 0;
-  const last = ROBOT_AISLES[ROBOT_AISLES.length - 1] ?? 0;
-  const between = ROBOT_AISLES.slice(1)
-    .map((z, i) => (ROBOT_AISLES[i] + z) / 2)
-    .sort((a, b) => Math.abs(a - (first + last) / 2) - Math.abs(b - (first + last) / 2));
-  return [...between, last + 2.5, first - 2.5, last + 5].filter((z) => Math.abs(z) < HALL.d / 2 - 1.5).slice(0, EXTRA.length);
-})();
 /**
- * De laadstations tegen de oostwand: één per pad, aan het eind van dat pad (elk pad heeft zijn eigen robot),
- * en daartussen die van de telrobot en de pickrobots.
+ * De rijlijn (x) tussen de banen bij de docks en de stellingen: van hieruit rijdt een robot een strook of een baan
+ * in. Hij ligt naast het looppad, aan de kant van de stellingen.
  */
-export const ROBOT_CHARGERS: Point[] = FITS ? [...ROBOT_AISLES, ...EXTRA_Z].map((z) => ({ x: HALL.w / 2 - 1.2, z })) : [];
-/** De soort robot per laadstation: per pad om en om een tilrobot en een robot-heftruck, daarna de overige. */
-export const ROBOT_KINDS: RobotKind[] = ROBOT_CHARGERS.map((_, i) =>
-  i < ROBOT_AISLES.length ? (i % 2 ? 'fork' : 'lift') : EXTRA[i - ROBOT_AISLES.length],
+export const ROBOT_DOCK_X = Math.min(
+  SECTION_X[0] - SECTION_PITCH / 2 - 1.4,
+  Math.max((DOCKS[0]?.laneIn.x ?? 0) + LANE_LENGTH / 2 + 1.6, WALKWAY_X + 1.6),
 );
+/** De robots die niet bij een pad horen. */
+const EXTRA: RobotKind[] = ['count', 'pick', 'pick'];
+/** De soort van elke robot: per pad om en om een tilrobot en een robot-heftruck, daarna de overige. */
+export const ROBOT_KINDS: RobotKind[] = FITS ? [...ROBOT_AISLES.map((_, i): RobotKind => (i % 2 ? 'fork' : 'lift')), ...EXTRA] : [];
+/** De volgorde in de rij laadstations: soort bij soort. */
+const ROW_ORDER: RobotKind[] = ['lift', 'fork', 'pick', 'count'];
+const ROW = ROBOT_KINDS.map((_, i) => i).sort((a, b) => ROW_ORDER.indexOf(ROBOT_KINDS[a]) - ROW_ORDER.indexOf(ROBOT_KINDS[b]) || a - b);
+/** Afstand (m) tussen twee laadstations in de rij. */
+export const ROBOT_CHARGER_PITCH = Math.min(2.2, (HALL.d - 8) / Math.max(1, ROBOT_KINDS.length));
+/**
+ * De laadstations: één strakke rij tegen de oostwand, midden in de hal, allemaal op dezelfde lijn en op gelijke
+ * afstand van elkaar. Ze staan vóór de kolommen langs de wand (er staat er dus nooit een in een kolom).
+ */
+export const ROBOT_CHARGERS: Point[] = ROBOT_KINDS.map((_, i) => ({
+  x: HALL.w / 2 - 1.35,
+  z: +((ROW.indexOf(i) - (ROBOT_KINDS.length - 1) / 2) * ROBOT_CHARGER_PITCH).toFixed(3),
+}));
 const PREFIX: Record<RobotKind, string> = { lift: 'GKP', fork: 'GKF', pick: 'PCK', count: 'INV' };
 /** Het nummer van robot i: dat van zijn pad, of het volgnummer binnen zijn soort. */
 const robotId = (i: number) => {
   const n = i < ROBOT_AISLES.length ? i + 1 : ROBOT_KINDS.slice(ROBOT_AISLES.length, i + 1).filter((k) => k === ROBOT_KINDS[i]).length;
   return `${PREFIX[ROBOT_KINDS[i]]}-${String(n).padStart(2, '0')}`;
 };
+/** Zo ver (m) steekt een robot uit vanaf zijn midden aan de kant waarmee hij tegen het laadstation staat. */
+const PARK_END: Record<RobotKind, number> = { lift: 0.5, count: 0.4, pick: 0.62, fork: 0.78 };
 /**
- * Waar robot i bij zijn laadstation staat: met zijn neus ertegenaan. Alleen de robot-heftruck staat er met
- * zijn rug tegenaan, de vorken naar de hal.
+ * Waar robot i bij zijn laadstation staat: met zijn neus tegen de laadcontacten. Alleen de robot-heftruck staat er
+ * met zijn rug tegenaan, de vorken naar de hal. Elke robot staat even ver van de contacten, dus soort bij soort
+ * precies op één lijn.
  */
-const parkPose = (i: number) =>
-  ROBOT_KINDS[i] === 'fork'
-    ? { x: ROBOT_CHARGERS[i].x - 0.25, z: ROBOT_CHARGERS[i].z, r: -Math.PI / 2 }
-    : // de grijparm van de pickrobot steekt voor zijn neus uit
-      { x: ROBOT_CHARGERS[i].x - (ROBOT_KINDS[i] === 'pick' ? 0.12 : 0), z: ROBOT_CHARGERS[i].z, r: Math.PI / 2 };
+const parkPose = (i: number) => ({
+  x: ROBOT_CHARGERS[i].x + 0.52 - PARK_END[ROBOT_KINDS[i]],
+  z: ROBOT_CHARGERS[i].z,
+  r: ROBOT_KINDS[i] === 'fork' ? -Math.PI / 2 : Math.PI / 2,
+});
 
 const angle = (to: number, from: number) => Math.atan2(Math.sin(to - from), Math.cos(to - from));
 const nearestAisle = (z: number) => ROBOT_AISLES.reduce((best, az, i) => (Math.abs(az - z) < Math.abs(ROBOT_AISLES[best] - z) ? i : best), 0);
@@ -203,6 +215,8 @@ function aislesFor(p: Point): number[] {
   const row = ROW_Z.findIndex((z) => Math.abs(z - p.z) < 0.01);
   return [row < 0 ? nearestAisle(p.z) : ROW_AISLE[row]];
 }
+/** De vrije strook (z) midden voor het dichtstbijzijnde dock: tussen zijn inslag- en zijn uitslagbaan. */
+const stripNear = (z: number) => DOCKS.reduce((best, d) => (Math.abs(d.z - z) < Math.abs(best - z) ? d.z : best), DOCKS[0]?.z ?? z);
 
 export function createRobotFleet(world: RobotWorld) {
   const parked = (i: number): Robot => ({
@@ -230,6 +244,8 @@ export function createRobotFleet(world: RobotWorld) {
       r.id,
       {
         wait: '', blocked: 0, busy: false,
+        /** Seconden die de robot al op een andere robot wacht. */
+        held: 0,
         /** Aftellen (s): de greep van de pickrobot, een nieuwe poging na vastlopen, de rust van de telrobot. */
         timer: r.kind === 'count' ? 20 : 0,
         /** Waarom een pickrobot is vastgelopen. */
@@ -264,24 +280,50 @@ export function createRobotFleet(world: RobotWorld) {
   function route(r: Robot, goal: RobotSpot | null): Waypoint[] {
     const path: Waypoint[] = [];
     const fork = r.kind === 'fork';
-    const goalAisles = !goal ? [] : goal.aisle !== undefined ? [goal.aisle] : aislesFor(goal);
+    /** Ligt het doel op een baan bij de docks? Dan hoort het bij het pad dat het dichtst bij de strook of de baan ligt. */
+    const atDocks = !!goal && (goal.strip !== undefined || !!goal.stage);
+    const goalAisles = !goal ? [] : goal.aisle !== undefined ? [goal.aisle] : atDocks ? [nearestAisle(goal.strip ?? goal.z)] : aislesFor(goal);
     /** Het laatste stuk: vanaf het midden van het pad naar de pallet. */
     const reach = (a: number): Waypoint[] => {
       if (!goal) return [];
       const az = ROBOT_AISLES[a];
+      const y = LEVEL_Y[goal.level] ?? 0;
+      // De pickrobot zet de pallet van zijn order neer: over de rijlijn naar de kop van de uitslagbaan, en dan
+      // achteruit de baan in tot de pallet boven zijn plek staat. Zo rijdt hij langs geen enkele andere pallet.
+      if (goal.stage)
+        return [{ x: ROBOT_DOCK_X, z: az, a }, { x: ROBOT_DOCK_X, z: goal.z, a }, { x: goal.x + ROBOT_HITCH, z: goal.z, a, back: true }];
+      if (goal.strip !== undefined && r.kind !== 'count') {
+        // Een pallet op een baan: over de rijlijn naar de vrije strook midden voor het dock, daardoor tot naast de
+        // pallet en dan pas opzij ernaartoe
+        const side = goal.z >= goal.strip ? 1 : -1;
+        const road: Waypoint[] = [{ x: ROBOT_DOCK_X, z: az, a }, { x: ROBOT_DOCK_X, z: goal.strip, a }, { x: goal.x, z: goal.strip, a }];
+        return [...road, r.kind === 'fork' ? { x: goal.x, z: goal.z - side * ROBOT_FORK_REACH, a, h: y } : { x: goal.x, z: goal.z, a }];
+      }
       const mid = { x: goal.x, z: az, a };
       const side = goal.z >= az ? 1 : -1;
-      const y = LEVEL_Y[goal.level] ?? 0;
       if (r.kind === 'count') return [{ ...mid, h: ROBOT_COUNT_TOP }];
       if (r.kind === 'fork') return [mid, { x: goal.x, z: goal.z - side * ROBOT_FORK_REACH, a, h: y }];
       if (r.kind === 'lift') return [mid, { x: goal.x, z: goal.z, a }];
-      // De pickrobot: met zijn rug naar de uitslaglocatie om de rolcontainer neer te zetten, anders met zijn arm naar de pallet
-      if (goal.stage) return [mid, { x: goal.x, z: goal.z - side * ROBOT_HITCH, a, back: true }];
+      // De pickrobot: met zijn arm naar de pallet
       return [mid, { x: goal.x, z: goal.z - side * PICK_REACH, a, h: y + PICK_HEIGHT }];
     };
     let z = r.z;
     const corridor = (toZ: number) => ROBOT_CORRIDOR_X + (toZ >= z ? LANE : -LANE);
-    if (r.aisle >= 0) {
+    if (r.aisle >= 0 && r.x < ROBOT_DOCK_X - 0.01) {
+      // Bij de docks: eerst terug naar de rijlijn. Een pickrobot staat op de uitslagbaan en rijdt er recht uit. De
+      // andere gaan terug naar hun strook en daardoor naar de rijlijn; een robot-heftruck doet dat achteruit, zodat
+      // zijn vorken (met de pallet) niet tussen de pallets op de banen door zwaaien.
+      const a = r.aisle;
+      const az = ROBOT_AISLES[a];
+      let sz = r.z;
+      if (r.kind !== 'pick') {
+        sz = stripNear(r.z);
+        if (Math.abs(r.z - sz) > 0.01) path.push({ x: r.x, z: sz, a, back: fork, h: fork ? r.fork : 0 });
+      }
+      path.push({ x: ROBOT_DOCK_X, z: sz, a, back: fork }, { x: ROBOT_DOCK_X, z: az, a });
+      if (goal && goalAisles.includes(a)) return [...path, ...reach(a)];
+      z = az;
+    } else if (r.aisle >= 0) {
       const az = ROBOT_AISLES[r.aisle];
       if (Math.abs(r.z - az) > 0.01) {
         // Eerst terug naar het midden van het pad. Een robot-heftruck en een pickrobot rijden achteruit de stelling
@@ -299,8 +341,11 @@ export function createRobotFleet(world: RobotWorld) {
     const laneX = corridor(toZ);
     const dir = toZ >= z ? 1 : -1;
     const far = Math.abs(toZ - z) > 2 * HOLD;
-    // Het pad blijft bezet tot de robot er op de robotbaan een stukje vandaan is: dan pas mag de volgende erin
-    path.push({ x: laneX, z, a: r.aisle });
+    // Het pad blijft bezet tot de robot er op de robotbaan een stukje vandaan is: dan pas mag de volgende erin.
+    // Van zijn laadstation rijdt een robot achteruit weg (de robot-heftruck staat er al met zijn rug naartoe):
+    // hij draait pas op de robotbaan, waar er ruimte voor is.
+    const leaving = r.aisle < 0 && !fork && r.x > ROBOT_CORRIDOR_X + LANE + 0.5;
+    path.push({ x: laneX, z, a: r.aisle, back: leaving });
     if (r.aisle >= 0 && far) path.push({ x: laneX, z: z + dir * HOLD, a: -1 });
     if (goal) {
       // Wachten op een vrij pad doet de robot naast de ingang, niet ervoor: zo kan de robot die eruit komt erlangs
@@ -327,9 +372,9 @@ export function createRobotFleet(world: RobotWorld) {
     const along = dx * hx + dz * hz;
     const side = dx * hz - dz * hx;
     // Een robot-heftruck is langer (de vorken steken vooruit) en met een pallet ook breder; een pickrobot
-    // heeft zijn rolcontainer achter zich
-    const reach = r.kind === 'fork' ? (back ? 0.95 : 1.5) : r.kind === 'pick' ? (back ? 1.7 : 0.8) : 0.7;
-    const width = r.kind === 'fork' ? 0.55 : r.kind === 'pick' ? 0.5 : 0.4;
+    // heeft de pallet van zijn order achter zich
+    const reach = r.kind === 'fork' ? (back ? 0.95 : 1.5) : r.kind === 'pick' ? (back ? 1.9 : 0.8) : 0.7;
+    const width = r.kind === 'fork' ? 0.55 : r.kind === 'pick' ? 0.55 : 0.4;
     return along > 0 && along < reach + rad && Math.abs(side) < width + rad ? { along, side } : null;
   }
 
@@ -362,8 +407,16 @@ export function createRobotFleet(world: RobotWorld) {
       return;
     }
     if (moving) {
-      // Voorrang: een robot wacht op een robot met een lager nummer (tenzij die zelf op een vrij pad wacht)
-      if (robots.some((o) => o !== r && o.id < r.id && state(o).wait !== 'pad bezet' && ahead(r, o, 0.5, back))) return void (l.wait = 'robot voor');
+      // Robots rijden niet door elkaar heen: staat er een voor, dan wacht deze. Zien ze elkaar allebei voor zich,
+      // dan gaat het laagste nummer eerst. Een robot die wacht op het pad waar deze in staat, kan pas verder als
+      // deze weg is: daar wacht hij dus niet op. Duurt het wachten erg lang, dan rijdt hij toch door (geen patstelling).
+      const inFront = robots.some((o) => {
+        if (o === r || !ahead(r, o, 0.5, back)) return false;
+        if (state(o).wait === 'pad bezet' && r.aisle >= 0 && o.path[0]?.a === r.aisle) return false;
+        return o.id < r.id || !o.path[0] || !ahead(o, r, 0.5, !!o.path[0].back);
+      });
+      l.held = inFront ? l.held + dt : 0;
+      if (inFront && l.held < 20) return void (l.wait = 'robot voor');
       const list = obstacles();
       const hit = list.map((o) => ahead(r, o, o.rad, back)).find(Boolean);
       if (hit) {
@@ -765,6 +818,8 @@ export function createRobotFleet(world: RobotWorld) {
       if (!r || !(s.v > r.v) || !Array.isArray(s.path)) continue;
       const here = dist(r, s) < 1.5 ? { x: r.x, z: r.z, r: r.r } : null; // staat hij hier al bijna goed, dan niet verspringen
       Object.assign(r, structuredClone(s), here);
+      // Een robot die vrij is staat bij zijn laadstation; in een wereld van een oudere versie stonden die ergens anders
+      if (r.phase === 'idle' && !r.path.length) Object.assign(r, parkPose(robots.indexOf(r)));
     }
     snapshotAt = -1;
   }
@@ -827,6 +882,8 @@ export function createRobotFleet(world: RobotWorld) {
     space: world.space,
     refill: world.refill,
     statusText,
+    /** Staat de robot stil omdat er iets of iemand voor hem staat? */
+    blocked: (r: Robot) => state(r).wait === 'obstakel',
     /** Wacht de robot ergens op (obstakel, bezet pad, de WMS)? */
     waiting: (r: Robot) => !!state(r).wait || state(r).busy,
     /** Mogen de pickrobots orders pakken, en mag de telrobot zijn rondes rijden? Een lopende order maakt de robot af. */

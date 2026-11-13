@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  ROBOT_CHARGERS, ROBOT_FORK_REACH, ROBOT_HITCH, ROBOT_KINDS, ROBOT_PICK_SECONDS,
+  ROBOT_CHARGERS, ROBOT_CHARGER_PITCH, ROBOT_FORK_REACH, ROBOT_HITCH, ROBOT_PICK_SECONDS,
   type Obstacle, type RobotFleet, type RobotKind,
 } from '../sim/robots';
 import { menu } from './menu';
@@ -8,12 +8,13 @@ import type { RobotDispatch } from './robotDispatch';
 import { COUNT_ROBOT_BODY, createCountRobot } from './scene/countRobot';
 import { FORK_ROBOT_BODY, createForkRobot } from './scene/forkRobot';
 import { ROBOT_DECK, ROBOT_HALF, createGeekRobot, createRobotCharger } from './scene/geekRobot';
-import { PICK_ROBOT_BODY, PICK_ROBOT_CAGE, createPickRobot } from './scene/pickRobot';
+import { PICK_ROBOT_BODY, PICK_ROBOT_DECK, createPickRobot } from './scene/pickRobot';
 import type { Hall, Solid } from './scene/warehouse';
 import type { SoundSource } from './sounds';
+import { dropLoad, loadTop, type OrderLoads } from './warehouseView';
 
 // De Geek+-robots in beeld: de tilrobots, de robot-heftrucks, de pickrobots en de voorraadteller, wat ze dragen,
-// hun laadstations (één per pad aan het eind ervan, de overige ertussen) en het onderdeel 'Robots' in het menu.
+// hun laadstations (één strakke rij tegen de oostwand) en het onderdeel 'Robots' in het menu.
 // Leest alleen de sim (src/sim/robots.ts); de palletopdrachten komen via src/ui/robotDispatch.ts.
 
 const LED = { free: '#3ddc84', busy: '#35a7ff', waiting: '#ffa000' };
@@ -27,24 +28,25 @@ export function mountRobots({
   hall,
   fleet,
   dispatch,
-  orderFill,
+  orderLoads,
   obstacles,
 }: {
   scene: THREE.Scene;
   hall: Hall;
   fleet: RobotFleet;
   dispatch: RobotDispatch;
-  /** Hoe ver de order gepickt is (0 t/m 1): zo vol is de rolcontainer op een pickrobot. */
-  orderFill: (orderId: string) => number;
-  /** Waar de robots voor stoppen: de speler, de heftruck en de pompwagen. */
+  /** De pallet van een order met de dozen die er al voor gepickt zijn: die staat achter op de pickrobot. */
+  orderLoads: OrderLoads;
+  /** Waar de robots voor stoppen: spelers, chauffeurs, de heftruck, de pompwagen en losse pallets. */
   obstacles: () => Obstacle[];
 }) {
   fleet.setObstacles(obstacles);
-  ROBOT_CHARGERS.forEach((c, i) => {
-    const charger = createRobotCharger(ROBOT_KINDS[i] === 'fork' || ROBOT_KINDS[i] === 'pick');
+  // Elk laadstation is hetzelfde en ze staan op één lijn: de vakken op de vloer sluiten bijna op elkaar aan
+  for (const c of ROBOT_CHARGERS) {
+    const charger = createRobotCharger(Math.min(1.8, ROBOT_CHARGER_PITCH - 0.4));
     charger.position.set(c.x, 0, c.z);
     scene.add(charger);
-  });
+  }
 
   const views = fleet.robots.map((robot) => {
     const lifter = robot.kind === 'lift' ? createGeekRobot() : null;
@@ -62,6 +64,9 @@ export function mountRobots({
       counter,
       load: null as THREE.Object3D | null,
       loadKey: '',
+      /** Pickrobot: de pallet van zijn order op het laadplateau. */
+      order: null as THREE.Object3D | null,
+      orderKey: '',
       lift: 0,
       /** Hoe lang (s) de pickrobot al met deze greep bezig is. */
       grab: 0,
@@ -184,13 +189,25 @@ export function mountRobots({
         v.fork?.setFork(r.fork, v.lift);
         v.counter?.setMast(r.fork);
         if (v.picker) {
-          // Eén greep: de arm schuift uit naar de doos, pakt hem, trekt hem terug en legt hem in de rolcontainer
+          // Eén greep: de arm schuift uit naar de doos, pakt hem, trekt hem terug en legt hem op de pallet van de order
           v.grab = r.phase === 'picking' ? v.grab + dt : 0;
           const t = Math.min(1, v.grab / ROBOT_PICK_SECONDS);
           const reach = r.phase !== 'picking' ? 0 : t < 0.35 ? smooth(t / 0.35) : t < 0.5 ? 1 : t < 0.85 ? 1 - smooth((t - 0.5) / 0.35) : 0;
           v.reach = reach;
           v.picker.setArm(r.fork, reach, r.phase === 'picking' && t >= 0.45 && t < 0.9);
-          v.picker.setCage(r.order ? orderFill(r.order) : null);
+          // De pallet van de order op het laadplateau, met precies de dozen die er al voor gepickt zijn
+          const orderKey = r.order ? orderLoads.key(r.order) : '';
+          if (orderKey !== v.orderKey) {
+            v.orderKey = orderKey;
+            if (v.order) dropLoad(v.order);
+            v.order = r.order ? orderLoads.build(r.order) : null;
+            if (v.order) {
+              v.order.traverse((o) => (o.castShadow = false)); // rijdt mee: geen schaduw (zie de pallet hierboven)
+              v.order.position.set(0, PICK_ROBOT_DECK.top, -ROBOT_HITCH);
+              v.order.rotation.y = Math.PI / 2; // de lange kant in de rijrichting, zoals hij op de uitslagbaan komt te staan
+              v.picker.group.add(v.order);
+            }
+          }
         }
         // De pallet staat vast op de robot en draait dus mee; bij het neerzetten staat hij weer recht in de stelling
         if (v.fork) v.load?.position.set(r.x + Math.sin(r.r) * ROBOT_FORK_REACH, r.fork + 0.03 * v.lift, r.z + Math.cos(r.r) * ROBOT_FORK_REACH);
@@ -214,8 +231,9 @@ export function mountRobots({
         else if (v.counter) box(-COUNT_ROBOT_BODY.x, COUNT_ROBOT_BODY.x, -COUNT_ROBOT_BODY.z, COUNT_ROBOT_BODY.z, COUNT_ROBOT_BODY.top + r.fork);
         else if (v.picker) {
           box(-PICK_ROBOT_BODY.x, PICK_ROBOT_BODY.x, PICK_ROBOT_BODY.back, PICK_ROBOT_BODY.front, PICK_ROBOT_BODY.top);
-          // het laadplateau, met de rolcontainer als de robot een order heeft
-          box(-PICK_ROBOT_CAGE.x, PICK_ROBOT_CAGE.x, -ROBOT_HITCH - PICK_ROBOT_CAGE.z, -ROBOT_HITCH + PICK_ROBOT_CAGE.z, r.order ? PICK_ROBOT_CAGE.top : 0.14);
+          // het laadplateau, met de pallet van de order als de robot er een heeft
+          box(-PICK_ROBOT_DECK.x, PICK_ROBOT_DECK.x, -ROBOT_HITCH - PICK_ROBOT_DECK.z, -ROBOT_HITCH + PICK_ROBOT_DECK.z, PICK_ROBOT_DECK.top);
+          if (v.order) out.push({ pose: v.pose, minX: -0.5, maxX: 0.5, minZ: -ROBOT_HITCH - 0.6, maxZ: -ROBOT_HITCH + 0.6, minY: PICK_ROBOT_DECK.top, maxY: PICK_ROBOT_DECK.top + loadTop(v.order) });
         } else box(-ROBOT_HALF.x, ROBOT_HALF.x, -ROBOT_HALF.z, ROBOT_HALF.z, ROBOT_DECK);
         if (!r.load) continue;
         // De pallet: bij een tilrobot erbovenop, bij een robot-heftruck op de vorken ervoor
@@ -226,5 +244,7 @@ export function mountRobots({
       }
       return out;
     },
+    /** Waar de telrobot bij de docks voor stopt: de robots die niet zelf al voor iets stilstaan. */
+    obstacles: (): Obstacle[] => fleet.robots.filter((r) => !fleet.blocked(r)).map((r) => ({ x: r.x, z: r.z, rad: 0.5 })),
   };
 }

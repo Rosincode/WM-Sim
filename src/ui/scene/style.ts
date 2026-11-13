@@ -28,7 +28,7 @@ export const STYLE = {
   wood: mat('#b98a5a', 0.75, 0),
   /** Blauw accent: stoelen in kantoor en kantine. */
   blue: mat('#1e4f9c', 0.7, 0.05),
-  /** Karton: losse dozen (op een grijparm, in een rolcontainer). */
+  /** Karton: een losse doos (op een grijparm). */
   carton: mat('#b98f62', 0.85, 0),
   /** Groen: planten. */
   green: mat('#3f7d4a', 0.9, 0),
@@ -36,6 +36,8 @@ export const STYLE = {
   carpet: mat('#566270', 0.95, 0),
   /** Vloer van de kantine. */
   vinyl: mat('#cbc5b8', 0.8, 0),
+  /** Donker glas: ruiten van voertuigen (je kijkt er niet doorheen). */
+  tinted: mat('#20262d', 0.35, 0.1),
   /** Glas in ramen: doorzichtig. */
   glass: new THREE.MeshStandardMaterial({ color: '#bcd6e8', roughness: 0.1, metalness: 0, transparent: true, opacity: 0.16, depthWrite: false }),
 };

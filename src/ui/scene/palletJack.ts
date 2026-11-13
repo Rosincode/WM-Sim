@@ -248,7 +248,7 @@ export function createPalletJack({ hall, bounds, take, place, onStockChange, loo
     ];
     if (carried) {
       const base = carried.mesh.position.y;
-      list.push({ pose, minX: -0.6, maxX: 0.6, minZ: FORK_Z - 0.5, maxZ: FORK_Z + 0.5, minY: base, maxY: base + hall.loadHeight(carried.load.sku, carried.load.qty) });
+      list.push({ pose, minX: -0.6, maxX: 0.6, minZ: FORK_Z - 0.5, maxZ: FORK_Z + 0.5, minY: base, maxY: base + hall.loadHeight(carried.load.sku, carried.load.qty), pallet: true });
     }
     return list;
   }
@@ -287,6 +287,19 @@ export function createPalletJack({ hall, bounds, take, place, onStockChange, loo
   return {
     group: g,
     solids,
+    /**
+     * Voor wie hem duwt: de pompwagen (en de pallet erop) als cirkels voor de speler uit, zodat hij er nergens mee
+     * doorheen rijdt. De vorken schuiven wel onder een pallet.
+     */
+    probes() {
+      const list = [
+        { ahead: GRIP - 0.22, radius: 0.32 },
+        { ahead: GRIP + 0.35, radius: 0.3, underPallets: true },
+        { ahead: GRIP + 0.8, radius: 0.3, underPallets: true },
+      ];
+      if (carried) list.push({ ahead: GRIP + FORK_Z, radius: 0.55, underPallets: false });
+      return list;
+    },
     getState,
     applyState,
     pump,

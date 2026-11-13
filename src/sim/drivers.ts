@@ -33,7 +33,7 @@ export type Driver = {
   path: Waypoint[];
   /** Heeft de pompwagen van zijn dock in de hand. */
   jack: boolean;
-  /** Wat er op de vorken staat: een pallet (lossen) of de rolcontainer van een order (laden). */
+  /** Wat er op de vorken staat: een pallet uit de wagen (lossen) of de pallet van een order (laden). */
   load: Pallet | null;
   order: string | null;
   /** De dockdeur van zijn dock staat open. */
@@ -47,6 +47,9 @@ export type Driver = {
   /** Telt elke beslissing; in multiplayer wint de hoogste stand. */
   v: number;
 };
+
+/** Iets waar een chauffeur voor blijft staan: een speler, de heftruck, een pallet die los op de vloer staat. */
+export type DriverObstacle = Point & { rad: number };
 
 export type DriverTruck = {
   id: string;
@@ -76,7 +79,7 @@ export interface DriverWorld {
   unloadDone(truckId: string): Promise<boolean>;
   /** De plek op de uitslagbaan met de eerstvolgende klaargezette order, of -1. */
   staged(dock: number): number;
-  /** Pakt de rolcontainer van die plek: hij staat daarna op de vorken. */
+  /** Pakt de pallet van de order op die plek: hij staat daarna op de vorken. */
   takeStaged(dock: number, slot: number): string | null;
   /** Zet de order in de wagen: de WMS boekt het laden. */
   loaded(truckId: string, orderId: string): Promise<boolean>;
@@ -89,9 +92,10 @@ export interface DriverWorld {
 const X0 = -HALL.w / 2;
 /**
  * De vrachtwagen aan het dock: de achterkant van de trailer (x), de hoogte van de laadvloer, en waar de
- * chauffeur uit zijn cabine stapt (x, en hoe ver naast het midden van het dock).
+ * chauffeur uit zijn cabine stapt (x, en hoe ver naast het midden van het dock). clear = de vrije halve breedte
+ * tussen de wielkasten in de laadruimte: pallets, de pompwagen en de chauffeur blijven daarbinnen (zie cargoSpot).
  */
-export const TRUCK = { rear: X0 - 0.4, floor: 0.45, length: 8, cabX: X0 - 9.7, cabSide: 1.75 };
+export const TRUCK = { rear: X0 - 0.4, floor: 0.45, length: 8, cabX: X0 - 9.7, cabSide: 1.75, clear: 1.06 };
 /** De laadklep: loopt van de halvloer (x = low) schuin op naar de laadvloer van de wagen (x = high). */
 export const DOCK_RAMP = { low: X0 + 2.1, high: X0 - 0.35 };
 /** Hoogte van de vloer waar de chauffeur en zijn pompwagen op rijden: de hal, de laadklep of de laadvloer. */
@@ -99,7 +103,10 @@ export function dockFloorY(x: number) {
   const t = (DOCK_RAMP.low - x) / (DOCK_RAMP.low - DOCK_RAMP.high);
   return TRUCK.floor * Math.max(0, Math.min(1, t));
 }
-/** Palletplek i in de wagen: twee naast elkaar, vanaf de kopwand naar achteren. */
+/**
+ * Palletplek i in de wagen: twee naast elkaar, vanaf de kopwand naar achteren. De lange kant van de pallet
+ * (1,2 m) ligt in de lengte van de wagen; de korte kant (1,0 m) past zo tussen de wielkasten (TRUCK.clear).
+ */
 export function cargoSpot(dockZ: number, i: number): Point {
   const row = Math.min(Math.floor(i / 2), 5);
   return { x: TRUCK.rear - TRUCK.length + 0.85 + row * 1.3, z: dockZ + (i % 2 ? 0.52 : -0.52) };
@@ -145,6 +152,7 @@ export function createDrivers(world: DriverWorld) {
   let floor = 0;
   let snapshot: Driver[] = [];
   let snapshotAt = -1;
+  let obstacles: () => DriverObstacle[] = () => [];
 
   const dockOf = (d: Driver) => DOCKS[d.dock];
   const truckOf = (d: Driver) => world.trucks().find((t) => t.id === d.id);
@@ -183,7 +191,7 @@ export function createDrivers(world: DriverWorld) {
 
   // ========== Lopen en rijden (bij elke speler) ==========
 
-  function move(d: Driver, dt: number) {
+  function move(d: Driver, dt: number, inWay: DriverObstacle[]) {
     const wp = d.path[0];
     if (!wp) return;
     const dx = wp.x - d.x;
@@ -193,6 +201,16 @@ export function createDrivers(world: DriverWorld) {
       const turn = angle(Math.atan2(dx, dz) + (wp.back ? Math.PI : 0), d.r);
       d.r += Math.max(-TURN * dt, Math.min(TURN * dt, turn));
       if (Math.abs(turn) > (d.jack ? 0.3 : 0.9)) return; // de pompwagen draait eerst op zijn plek
+      // Staat er iets of iemand in de weg, dan wacht hij: hij loopt en rijdt nergens doorheen. Met de pompwagen
+      // vooruit steekt de pallet voor hem uit; achteruit loopt hij zelf voorop.
+      const reach = d.jack ? (wp.back ? 1.3 : 1.5) : 0.55;
+      const width = d.jack ? 0.55 : 0.3;
+      const blocked = inWay.some((o) => {
+        const along = ((o.x - d.x) * dx + (o.z - d.z) * dz) / far;
+        const side = ((o.x - d.x) * dz - (o.z - d.z) * dx) / far;
+        return along > 0 && along < reach + o.rad && Math.abs(side) < width + o.rad;
+      });
+      if (blocked) return;
       const step = Math.min(far, (d.jack ? JACK_SPEED : WALK) * dt);
       d.x += (dx / far) * step;
       d.z += (dz / far) * step;
@@ -340,7 +358,8 @@ export function createDrivers(world: DriverWorld) {
   }
 
   function update(dt: number) {
-    for (const d of drivers) move(d, dt);
+    const inWay = drivers.length ? obstacles() : [];
+    for (const d of drivers) move(d, dt, inWay);
     if (!world.authority()) return;
     const trucks = world.trucks();
     // Een wagen die aan het dock staat krijgt zijn chauffeur; rijdt de wagen weg, dan is de chauffeur mee
@@ -390,6 +409,10 @@ export function createDrivers(world: DriverWorld) {
     drivers: drivers as readonly Driver[],
     update,
     statusText,
+    /** Waar de chauffeurs voor blijven staan: spelers, de heftruck, de pompwagen, losse pallets. */
+    setObstacles(source: () => DriverObstacle[]) {
+      obstacles = source;
+    },
     /** De chauffeur aan een dock, of undefined. */
     at: (dock: number) => drivers.find((d) => d.dock === dock),
     /** Voor de gedeelde wereld; alleen ververst als de wereld verandert, zodat het lopen zelf niet als wijziging telt. */

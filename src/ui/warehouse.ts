@@ -51,8 +51,8 @@ export function mountWarehouse({
   scene,
   camera,
   player,
-  rackStock = true,
   perPallet,
+  palletLoad,
   orderLoad,
   desks = [],
   onPcOpen,
@@ -60,12 +60,12 @@ export function mountWarehouse({
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   player: THREE.Object3D;
-  /** false: de hal tekent de stellingvoorraad zelf (src/ui/scene/warehouse). */
-  rackStock?: boolean;
   /** Stuks op een volle pallet van een artikel. */
   perPallet?: (sku: string) => number;
+  /** Bouwt een pallet met precies `qty` dozen van een artikel (de hal, src/ui/scene/warehouse). */
+  palletLoad: (sku: string, qty: number, key: string, sticker: boolean) => THREE.Object3D;
   /** Bouwt de pallet van een order, met van elk artikel het aantal dozen (de hal). */
-  orderLoad?: (lines: { sku: string; qty: number }[], key: string) => THREE.Object3D;
+  orderLoad: (lines: { sku: string; qty: number }[], key: string) => THREE.Object3D;
   /** Werkplekken met de WMS-app naast de pc in de hal (de bureaus in het kantoor). */
   desks?: PcDesk[];
   /** De speler opent het scherm van zo'n werkplek (E): daar gaat hij bijvoorbeeld bij zitten. */
@@ -85,7 +85,7 @@ export function mountWarehouse({
   });
   // De Geek+-robots krijgen hun opdrachten uit de WMS, of nagespeeld zolang de WMS die nog niet uitgeeft.
   const robotDispatch = createRobotDispatch({ fleet: sim.robots, authority: () => sim.authority, bypass: mockOutOfStep });
-  const view = createWarehouseView(scene, player, sim, { rackStock, orderLoad });
+  const view = createWarehouseView(scene, player, sim, { palletLoad, orderLoad });
   const dockCounter = mountDockCounter(scene, sim.counter);
   const hud = createProcessHud(sim);
   // Aanmelden bij de WMS-API zit in het menu rechtsboven (K).
@@ -330,12 +330,19 @@ export function mountWarehouse({
     carriedOrder: () => (sim.carry?.kind === 'order' ? sim.carry.orderId : null),
     /** De pallets in de stellingen, voor de hal. */
     pallets: () => sim.pallets(),
-    /** Draagt de speler iets (pallet of orderbak)? Voor de houding van de figuur. */
+    /** Draagt de speler iets (een pallet of de pallet van een order)? Voor de houding van de figuur. */
     carrying: () => !!sim.carry,
     /** Wat de toets E op deze plek doet (enabled: false = kan nu niet), of null als hier niets te doen is. */
     action: () => action,
-    /** Wat de speler draagt, voor andere spelers: '' (niets), 'order' of het artikel van de pallet. */
-    carryLabel: () => (sim.carry?.kind === 'pallet' ? sim.carry.pallet.sku : sim.carry ? 'order' : ''),
+    /** Wat de speler draagt, als tekst voor andere spelers ('' = niets); carryMesh bouwt er dezelfde pallet met dozen van. */
+    carryLabel: view.carryLabel,
+    carryMesh: view.carryMesh,
+    /** Waar de speler tegenaan loopt: het bureau, de stapel lege pallets, de pallets op de banen en de telrobot. */
+    solids: () => [...view.solids(), ...dockCounter.solids()],
+    /** Vaste obstakels voor de heftruck (die rijdt nergens onderdoor): het bureau en de stapel lege pallets. */
+    colliders: view.colliders,
+    /** De telrobot bij de inslagbanen: waar hij staat en waar hij voor stopt. */
+    counter: sim.counter,
     /** De handscanner las een locatielabel of palletsticker: de sim legt de scan voor aan de WMS. null = alleen kijken. */
     scan: (code: string) => sim.scan(code, pos()),
     /** De stand uit de WMS, telkens als die verandert (voor het scherm van de handscanner). */
@@ -366,18 +373,15 @@ export function mountWarehouse({
     robots: {
       fleet: sim.robots,
       dispatch: robotDispatch,
-      /** Hoe ver een order gepickt is (0 t/m 1). */
-      orderFill(orderId: string) {
-        const lines = sim.order(orderId)?.lines ?? [];
-        const total = lines.reduce((n, l) => n + l.qty, 0);
-        return total ? lines.reduce((n, l) => n + l.picked, 0) / total : 0;
-      },
+      /** De pallet van een order, voor achter op een pickrobot. */
+      orderLoads: view.orderLoads,
     },
     /** De chauffeurs en de vrachtwagens op het terrein, voor src/ui/drivers.ts. */
     docks: {
       drivers: sim.drivers,
       trucks: () => [sim.trucks.in, sim.trucks.out, ...sim.deliveries].filter((t): t is NonNullable<typeof t> => !!t),
-      /** De pallet van een order, voor op de pompwagen van de chauffeur. */
+      /** De pallet uit de wagen en de pallet van een order, voor op de pompwagen van de chauffeur. */
+      palletLoads: view.palletLoads,
       orderLoads: view.orderLoads,
     },
     update(dt: number) {

@@ -7,7 +7,8 @@ import { menu } from './menu';
 import { createCharacter, type HandTarget } from './scene/character';
 import type { ForkliftState } from './scene/forklift';
 import type { JackState } from './scene/palletJack';
-import { SKU_COLORS } from './warehouseView';
+import type { Solid } from './scene/warehouse';
+import { CARRY_AHEAD, dropLoad } from './warehouseView';
 
 // Multiplayer: iedereen die de game opent komt in dezelfde kamer en deelt één magazijn.
 // - Elke speler stuurt ~10× per seconde zijn positie; de anderen tekenen daar een figuur.
@@ -32,7 +33,7 @@ type Pose = {
   /** Draaiing */ r: number;
   /** Rijdt in de heftruck */ d: 0 | 1;
   /** Zit op een stoel (aan een bureau in het kantoor) */ s?: 1;
-  /** Draagt: '' | 'order' | artikel van de pallet */ c: string;
+  /** Draagt: '' of de omschrijving van de pallet (zie carryLabel) */ c: string;
   /** Stand van de heftruck, alleen als deze speler rijdt */ f?: ForkliftState;
   /** Kijkrichting: omhoog/omlaag */ p: number;
   /** Kijkrichting opzij t.o.v. het lichaam (vanaf de stoel van de heftruck) */ ly: number;
@@ -59,7 +60,9 @@ interface Options {
   room: string;
   /** apply: saved = de wereld komt van de broker (niemand draagt nog iets), niet van een medespeler. */
   shared: { state(): SharedState; apply(s: SharedState, saved?: boolean): void; setAuthority(on: boolean): void };
+  /** Wat deze speler draagt, als tekst ('' = niets); carryMesh bouwt daar bij elke speler dezelfde pallet met dozen van. */
   carryLabel(): string;
+  carryMesh(label: string): THREE.Object3D | null;
   forklift: {
     getState(): ForkliftState;
     applyState(s: ForkliftState, withLoose?: boolean): void;
@@ -273,7 +276,9 @@ export function mountMultiplayer(o: Options) {
     character: ReturnType<typeof createCharacter>;
     tag: ReturnType<typeof nameTag>;
     bubble: ReturnType<typeof speechBubble>;
-    load: THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>;
+    /** De pallet die deze speler draagt, met zijn dozen. */
+    load: THREE.Object3D | null;
+    loadKey: string;
     color: string;
     target: THREE.Vector3;
     pose: Pose;
@@ -301,13 +306,10 @@ export function mountMultiplayer(o: Options) {
     tag.sprite.position.y = 2.2;
     const bubble = speechBubble();
     bubble.sprite.position.y = 2.42; // net boven het naambordje
-    const load = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ roughness: 0.8 }));
-    load.castShadow = true;
-    load.visible = false;
-    character.group.add(tag.sprite, bubble.sprite, load);
+    character.group.add(tag.sprite, bubble.sprite);
     o.scene.add(character.group);
     const avatar: Avatar = {
-      character, tag, bubble, load, color,
+      character, tag, bubble, load: null, loadKey: '', color,
       target: new THREE.Vector3(),
       pose: { n: '', x: 0, y: 0, z: 0, r: 0, d: 0, c: '', p: 0, ly: 0, t: 0, sc: 0, b: 0, bo: 1, w: 0, j: 0, k: 0, fv: '' },
       placed: false,
@@ -327,6 +329,7 @@ export function mountMultiplayer(o: Options) {
     const a = avatars.get(peer.id);
     if (!a) return;
     a.character.setFace(null); // textuur van de foto vrijgeven
+    if (a.load) dropLoad(a.load);
     a.character.group.removeFromParent();
     avatars.delete(peer.id);
     refreshChip();
@@ -708,6 +711,26 @@ export function mountMultiplayer(o: Options) {
   return {
     /** Naam van de speler die nu met de heftruck rijdt, of null. */
     forkliftDriver: () => remoteDriver()?.pose.n ?? null,
+    /** Waar deze speler tegenaan loopt: de andere spelers (wie in de heftruck of op een stoel zit hoort daarbij). */
+    solids(): Solid[] {
+      const out: Solid[] = [];
+      for (const a of avatars.values()) {
+        if (!a.placed || a.pose.d === 1 || a.pose.s === 1) continue;
+        const p = a.character.group.position;
+        out.push({ minX: p.x - 0.28, maxX: p.x + 0.28, minZ: p.z - 0.28, maxZ: p.z + 0.28, minY: p.y, maxY: p.y + 1.8 });
+      }
+      return out;
+    },
+    /** Waar robots en chauffeurs voor stoppen: de andere spelers. */
+    obstacles() {
+      const out: { x: number; z: number; rad: number }[] = [];
+      for (const a of avatars.values()) {
+        if (!a.placed || a.pose.d === 1) continue;
+        const p = a.character.group.position;
+        out.push({ x: p.x, z: p.z, rad: 0.4 });
+      }
+      return out;
+    },
     /** Naam van de speler die nu de pompwagen vasthoudt, of null. */
     jackHolder: () => remoteHolder()?.pose.n ?? null,
     update(dt: number) {
@@ -787,12 +810,17 @@ export function mountMultiplayer(o: Options) {
         });
         a.tag.set(a.pose.n, a.color);
         a.bubble.update(dt);
-        a.load.visible = !!a.pose.c && !a.pose.d;
-        if (a.load.visible) {
-          const order = a.pose.c === 'order';
-          a.load.scale.set(order ? 0.7 : 0.9, order ? 0.9 : 0.7, order ? 0.6 : 0.9);
-          a.load.position.set(0, order ? 0.55 : 0.75, 0.9);
-          a.load.material.color.set(order ? '#b0bec5' : (SKU_COLORS[a.pose.c] ?? '#a5784a'));
+        // Wat de speler draagt: dezelfde pallet met dozen als hij zelf ziet, voor hem uit
+        const loadKey = a.pose.d ? '' : a.pose.c;
+        if (loadKey !== a.loadKey) {
+          a.loadKey = loadKey;
+          if (a.load) dropLoad(a.load);
+          a.load = loadKey ? o.carryMesh(loadKey) : null;
+          if (a.load) {
+            a.load.traverse((c) => (c.castShadow = false)); // loopt mee: geen schaduw
+            a.load.position.set(0, 0.03, CARRY_AHEAD);
+            g.add(a.load);
+          }
         }
       }
 

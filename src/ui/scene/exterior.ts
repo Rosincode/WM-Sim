@@ -5,6 +5,7 @@ import logoUrl from '../assets/robodu-logo.jpg';
 import { onTop } from './style';
 import * as tex from './textures';
 import { ROOM_HEIGHT, ROOM_WINDOWS } from './rooms';
+import { createParkedTrailer } from './truck';
 import { Batch, EXIT_X, HALL, UNIT_BOX, UNIT_CYL, paint } from './warehouse';
 
 // Buitenkant van het magazijn: gevels met het RoBoDu-logo, het vrachtwagenterrein voor de docks,
@@ -269,13 +270,11 @@ export function createExterior(scene: THREE.Scene) {
   const tyre = paint('#141414', 0.9, 0);
 
   // ---------- Geparkeerde opleggers op het terrein ----------
-  const trailers = new Batch();
-  const chassis = new Batch();
+  // Zelfde stijl als de vrachtwagens aan de docks (src/ui/scene/truck.ts)
   for (const [x, z] of [[X0 - 30, YARD.minZ + 3], [X0 - 30, YARD.minZ + 7], [X0 - 14, YARD.maxZ - 3.5]]) {
-    trailers.add(x, 2.5, z, 12, 2.7, 2.5);
-    chassis.add(x, 0.95, z, 11.6, 0.3, 2.2);
-    chassis.add(x - 4.6, 0.4, z, 0.2, 0.8, 1.6); // steunpoten
-    for (const dx of [3.2, 4.5]) for (const dz of [-1.05, 1.05]) wheels.add(x + dx, 0.5, z + dz, 0.5, 0.3, 0.5, Math.PI / 2, 0, 0);
+    const trailer = createParkedTrailer();
+    trailer.position.set(x, 0, z);
+    root.add(trailer);
   }
 
   const carBodies = bodies.build(UNIT_BOX, paint('#ffffff', 0.35, 0.5));
@@ -284,8 +283,6 @@ export function createExterior(scene: THREE.Scene) {
     carBodies,
     cabins.build(UNIT_BOX, glass),
     wheels.build(UNIT_CYL, tyre),
-    trailers.build(UNIT_BOX, paint('#e6e9ec', 0.6, 0.1)),
-    chassis.build(UNIT_BOX, paint('#2b2e32', 0.6, 0.4)),
   );
 
   // ---------- Portiersloge met slagboom bij de inrit van het terrein ----------

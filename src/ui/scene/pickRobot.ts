@@ -6,21 +6,19 @@ import { STYLE } from './style';
 import { UNIT_CYL } from './warehouse';
 
 // De pickrobot: pickt orders zonder dat er een mens aan te pas komt. Een grijparm op een uitschuifbare mast
-// pakt dozen van een pallet op elk niveau van de stelling; achter de robot staat de rolcontainer van de order
-// op een laadplateau. Vooruit (de arm) is +z. Alleen weergave; wat de robots doen staat in src/sim/robots.ts.
+// pakt dozen van een pallet op elk niveau van de stelling; achter de robot staat de pallet van de order
+// op een laadplateau (die pallet, met de gepickte dozen, zet src/ui/robots.ts erop). Vooruit (de arm) is +z. Alleen weergave; wat de robots doen staat in src/sim/robots.ts.
 
 /** Halve breedte, achterkant, voorkant en hoogte van de robot zelf, voor botsingen. */
 export const PICK_ROBOT_BODY = { x: 0.4, back: -0.46, front: 0.62, top: 2.86 };
-/** De rolcontainer op het laadplateau: halve breedte, halve diepte en hoogte. */
-export const PICK_ROBOT_CAGE = { x: 0.39, z: 0.36, top: 1.68 };
+/** Het laadplateau achter de robot: halve breedte, halve lengte en de hoogte waarop de pallet van de order staat. */
+export const PICK_ROBOT_DECK = { x: 0.42, z: 0.6, top: 0.14 };
 /** Lengte (m) van de vaste en van de uitschuivende mast. */
 const MAST = 2.5;
 /** Zo ver (m) schuift de arm uit naar de doos op de pallet. */
 const ARM_OUT = 0.24;
 /** Laagste stand van de arm: net boven de vloer. */
 const ARM_MIN = 0.3;
-/** Aantal dozen dat een volle rolcontainer laat zien. */
-const CAGE_BOXES = 8;
 
 const rb = (w: number, h: number, d: number, r: number) => new RoundedBoxGeometry(w, h, d, 3, r);
 let geo: ReturnType<typeof makeGeo> | null = null;
@@ -38,12 +36,8 @@ const makeGeo = () => ({
   boom: rb(0.07, 0.07, 0.45, 0.012),
   pad: rb(0.3, 0.26, 0.03, 0.012),
   carton: rb(0.3, 0.24, 0.3, 0.012),
-  link: rb(0.2, 0.05, 0.12, 0.012),
-  deck: rb(0.78, 0.05, 0.86, 0.02),
-  cageBase: rb(0.76, 0.03, 0.7, 0.01),
-  railSide: rb(0.02, 0.02, 0.68, 0.006),
-  railBack: rb(0.74, 0.02, 0.02, 0.006),
-  cageBox: rb(0.33, 0.3, 0.3, 0.012),
+  link: rb(0.2, 0.05, 0.2, 0.012),
+  deck: rb(PICK_ROBOT_DECK.x * 2, 0.05, PICK_ROBOT_DECK.z * 2, 0.02),
 });
 
 export function createPickRobot() {
@@ -108,25 +102,10 @@ export function createPickRobot() {
   const carton = add(arm, g.carton, STYLE.carton, 0, 0, 0.765);
   carton.visible = false;
 
-  // Laadplateau achter de robot, met de rolcontainer van de order
-  add(group, g.link, STYLE.dark, 0, 0.115, -0.49);
-  add(group, g.deck, STYLE.dark, 0, 0.115, -ROBOT_HITCH);
-  for (const side of [1, -1]) cyl(group, STYLE.rubber, 'x', 0.045, 0.04, side * 0.3, 0.045, -ROBOT_HITCH - 0.28);
-  const cage = new THREE.Group();
-  cage.position.set(0, 0.14, -ROBOT_HITCH);
-  cage.visible = false;
-  group.add(cage);
-  add(cage, g.cageBase, STYLE.black, 0, 0.018, 0);
-  for (const sx of [1, -1]) for (const sz of [1, -1]) cyl(cage, STYLE.steel, 'y', 0.013, 1.5, sx * 0.36, 0.78, sz * 0.33);
-  for (const y of [0.4, 0.8, 1.2, 1.52]) {
-    for (const side of [1, -1]) add(cage, g.railSide, STYLE.steel, side * 0.36, y, 0);
-    add(cage, g.railBack, STYLE.steel, 0, y, -0.33); // de kant van de robot blijft open: daar legt de arm de dozen in
-  }
-  const boxes = Array.from({ length: CAGE_BOXES }, (_, i) => {
-    const m = add(cage, g.cageBox, STYLE.carton, (i % 2 ? 1 : -1) * 0.172, 0.19 + Math.floor(i / 4) * 0.306, (Math.floor(i / 2) % 2 ? 1 : -1) * 0.157);
-    m.visible = false;
-    return m;
-  });
+  // Laadplateau achter de robot: daar staat de pallet van de order op
+  add(group, g.link, STYLE.dark, 0, 0.115, -0.5);
+  add(group, g.deck, STYLE.dark, 0, PICK_ROBOT_DECK.top - 0.025, -ROBOT_HITCH);
+  for (const side of [1, -1]) for (const dz of [-0.42, 0.42]) cyl(group, STYLE.rubber, 'x', 0.045, 0.04, side * 0.3, 0.045, -ROBOT_HITCH + dz);
 
   /**
    * @param height hoogte (m) van de zuignap
@@ -148,11 +127,5 @@ export function createPickRobot() {
       ledMat.color.set(color);
     },
     setArm,
-    /** @param fill hoe vol de rolcontainer is (0 t/m 1), of null als de robot geen order heeft */
-    setCage(fill: number | null) {
-      cage.visible = fill !== null;
-      const n = fill === null ? 0 : Math.ceil(fill * CAGE_BOXES);
-      boxes.forEach((b, i) => (b.visible = i < n));
-    },
   };
 }

@@ -20,6 +20,7 @@ import { CHAIR_EYE_Y, CHAIR_HEAD_Y, CHAIR_HIP_Y } from './ui/scene/rooms';
 import { createCharacter, type HandTarget } from './ui/scene/character';
 import { wms } from './integrations/wms';
 import { mountWarehouse } from './ui/warehouse';
+import { CARRY_AHEAD, CARRY_RADIUS } from './ui/warehouseView';
 import { mountMultiplayer } from './ui/multiplayer';
 import { mountRobots } from './ui/robots';
 import { mountDrivers } from './ui/drivers';
@@ -216,6 +217,24 @@ function applyMode(mode: ViewMode) {
   character.setFirstPerson(mode === 'first' && (driving || pushing || !!chair));
 }
 
+/**
+ * Niets gaat door iets anders heen. Dit is alles wat er naast de hal zelf, de heftruck en de pompwagen in de weg kan
+ * staan: het bureau, de pallets op de banen, de telrobot, de robots, de chauffeurs met hun pompwagens en de andere spelers.
+ */
+const otherSolids = [() => warehouse.solids(), () => robots.solids(), () => drivers.solids(), () => multiplayer?.solids() ?? []];
+/** Waar robots en chauffeurs voor blijven staan: spelers, de heftruck, de pompwagen en pallets die los op de vloer staan. */
+function humanObstacles() {
+  const along = (o: THREE.Object3D, offsets: number[], rad: number) =>
+    offsets.map((d) => ({ x: o.position.x + Math.sin(o.rotation.y) * d, z: o.position.z + Math.cos(o.rotation.y) * d, rad }));
+  return [
+    { x: player.position.x, z: player.position.z, rad: 0.4 },
+    ...(multiplayer?.obstacles() ?? []),
+    ...along(forklift.group, [-0.6, 0.3, 1.2, 2.0], 0.6),
+    ...along(jack.group, [0, 0.7], 0.45),
+    ...forklift.loose.list().map((l) => ({ x: l.x, z: l.z, rad: 0.7 })),
+  ];
+}
+
 const BOUNDS = { minX: -HALL.w / 2 + 0.6, maxX: HALL.w / 2 - 0.6, minZ: -HALL.d / 2 + 0.6, maxZ: HALL.d / 2 - 0.6 };
 const view = createPlayerView({
   camera,
@@ -225,7 +244,10 @@ const view = createPlayerView({
   hud,
   bounds: BOUNDS,
   walkable: hall.walkable,
-  solids: [hall.solids, () => forklift.solids(), () => jack.solids(), () => robots.solids()],
+  solids: [hall.solids, () => forklift.solids(), () => jack.solids(), ...otherSolids],
+  // Wat je voor je uit hebt botst ook: de pallet die je draagt, of de pompwagen met wat erop staat
+  probes: () => (jack.held ? jack.probes() : warehouse.carrying() ? [{ ahead: CARRY_AHEAD, radius: CARRY_RADIUS }] : []),
+  probeSolids: [hall.solids, () => forklift.solids(), ...otherSolids],
   initialMode: params.get('view') === 'overview' ? 'overview' : params.get('view') === 'third' ? 'third' : 'first',
   onModeChange: applyMode,
 });
@@ -299,8 +321,8 @@ const warehouse = mountWarehouse({
   scene,
   camera,
   player,
-  rackStock: false,
   perPallet: hall.palletCapacity,
+  palletLoad: hall.buildLoad,
   orderLoad: hall.buildOrderLoad,
   desks: hall.desks.map((d) => ({ ...d, radius: 1.3, label: () => (chair ? 'Pc gebruiken: WMS openen' : 'Gaan zitten en de WMS openen') })),
   onPcOpen: (desk) => sitDown(hall.desks.find((d) => d.display === desk.display)!.seat),
@@ -359,11 +381,12 @@ setInterval(refreshHall, 500);
 // --- Heftruck: instappen met R, rijden met W/A/S/D, vorken met pijl omhoog/omlaag ---
 const forklift = createForklift({
   hall,
-  colliders: hall.colliders,
+  colliders: [...hall.colliders, ...warehouse.colliders],
   bounds: BOUNDS,
   take: warehouse.forkliftTake,
   place: warehouse.forkliftPlace,
   onStockChange: refreshHall,
+  obstacles: () => [() => jack.solids(), ...otherSolids].flatMap((source) => source()),
 });
 forklift.group.position.set(START.forklift.x, 0, START.forklift.z);
 forklift.group.rotation.y = START.forklift.r;
@@ -422,19 +445,15 @@ const robots = mountRobots({
   hall,
   ...warehouse.robots,
   obstacles: () => {
-    const along = (o: THREE.Object3D, offsets: number[], rad: number) =>
-      offsets.map((d) => ({ x: o.position.x + Math.sin(o.rotation.y) * d, z: o.position.z + Math.cos(o.rotation.y) * d, rad }));
-    return [
-      { x: player.position.x, z: player.position.z, rad: 0.4 },
-      ...drivers.obstacles(),
-      ...along(forklift.group, [-0.6, 0.3, 1.2, 2.0], 0.6),
-      ...along(jack.group, [0, 0.7], 0.45),
-    ];
+    const counter = warehouse.counter.robot;
+    return [...humanObstacles(), ...drivers.obstacles(), { x: counter.x, z: counter.z, rad: 0.45 }];
   },
 });
+// De telrobot bij de docks stopt voor dezelfde dingen, en voor de andere robots
+warehouse.counter.setObstacles(() => [...humanObstacles(), ...drivers.obstacles(), ...robots.obstacles()]);
 
 // --- Chauffeurs: lossen en laden hun vrachtwagen zelf, met de elektrische pompwagen die bij elk dock staat ---
-const drivers = mountDrivers({ scene, hall, exterior, ...warehouse.docks });
+const drivers = mountDrivers({ scene, hall, exterior, ...warehouse.docks, obstacles: humanObstacles });
 // --- Geluid van alles wat rijdt: motor, wielen, hydrauliek en piepers (src/ui/sounds.ts) ---
 const sounds = createSounds();
 sounds.add('forklift', objectSource(forklift.group, () => forklift.forkHeight));
@@ -457,6 +476,7 @@ const multiplayer = params.has('solo')
       room: params.get('room') ?? 'main',
       shared: warehouse.shared,
       carryLabel: warehouse.carryLabel,
+      carryMesh: warehouse.carryMesh,
       forklift,
       jack: { getState: jack.getState, applyState: jack.applyState, grip: jack.grip, held: () => jack.held, release: () => holdJack(false) },
       radio,
