@@ -5,6 +5,8 @@ import logoUrl from '../assets/robodu-logo.jpg';
 import { onTop } from './style';
 import * as tex from './textures';
 import { ROOM_HEIGHT, ROOM_WINDOWS } from './rooms';
+import { CAR_PARK } from '../../sim/staff';
+import { CAR, CAR_PAINTS, createCar } from './car';
 import { createParkedTrailer } from './truck';
 import { Batch, EXIT_X, HALL, UNIT_BOX, UNIT_CYL, paint, type Solid } from './warehouse';
 
@@ -55,8 +57,9 @@ export function createExterior(scene: THREE.Scene) {
   const ROAD_HALF = 1500; // net als het grasvlak: de weg loopt door tot voorbij de mist
   const ROAD: Rect = { minX: -ROAD_HALF, maxX: ROAD_HALF, minZ: ROAD_Z - 4, maxZ: ROAD_Z + 4 };
   const YARD_DRIVE: Rect = { minX: X0 - 44, maxX: X0 - 34, minZ: YARD.maxZ, maxZ: ROAD.minZ };
-  const PARKING: Rect = { minX: -14, maxX: 28, minZ: D / 2 + 8, maxZ: D / 2 + 24 };
-  const PARK_DRIVE: Rect = { minX: 4, maxX: 12, minZ: PARKING.maxZ, maxZ: ROAD.minZ };
+  // Het parkeerterrein voor de voorgevel: de maten komen uit de sim (de kantoormedewerkers rijden er in en uit)
+  const PARKING: Rect = CAR_PARK.area;
+  const PARK_DRIVE: Rect = { ...CAR_PARK.drive, minZ: PARKING.maxZ, maxZ: ROAD.minZ };
   const PLAZA: Rect = { minX: X0, maxX: W / 2 + 2, minZ: D / 2, maxZ: D / 2 + 8 };
   const APRON: Rect = { minX: X0 - 6, maxX: X0, minZ: -D / 2 + 1, maxZ: D / 2 - 1 };
   const paved = [YARD, ROAD, YARD_DRIVE, PARKING, PARK_DRIVE, PLAZA];
@@ -81,17 +84,8 @@ export function createExterior(scene: THREE.Scene) {
     line(b.x - 5.2, b.z + 1.6, 12.4, 0.14);
     if (i === WAIT_BAYS.length - 1) line(b.x - 5.2, b.z - 1.6, 12.4, 0.14);
   });
-  // Parkeervakken: twee rijen met een rijbaan ertussen
-  const bays: { x: number; z: number }[] = [];
-  for (let x = PARKING.minX + 1.5; x <= PARKING.maxX - 1; x += 2.6) {
-    line(x, PARKING.minZ + 2.6, 0.12, 5);
-    const drive = x > PARK_DRIVE.minX - 1 && x < PARK_DRIVE.maxX + 1;
-    if (!drive) line(x, PARKING.maxZ - 2.6, 0.12, 5);
-    if (x + 2.6 <= PARKING.maxX - 1) {
-      bays.push({ x: x + 1.3, z: PARKING.minZ + 2.7 });
-      if (x + 2.6 < PARK_DRIVE.minX - 1 || x > PARK_DRIVE.maxX + 1) bays.push({ x: x + 1.3, z: PARKING.maxZ - 2.7 });
-    }
-  }
+  // Parkeervakken: één rij met de neus naar het gebouw, de rijbaan erachter
+  for (const x of CAR_PARK.lines) line(x, PARKING.minZ + 2.6, 0.12, 5);
   root.add(
     lines.build(UNIT_BOX, onTop(new THREE.MeshStandardMaterial({ color: '#e9e9e2', roughness: 0.8 }), 3), false),
   );
@@ -283,23 +277,19 @@ export function createExterior(scene: THREE.Scene) {
 
   // ---------- Geparkeerde auto's ----------
   const rand = tex.rng(303);
-  const CAR_COLORS = ['#c9ced3', '#22262b', '#8d1f1f', '#1f4e8d', '#e8e8e4', '#56616b', '#2d6b4a'];
-  const bodies = new Batch();
-  const cabins = new Batch();
-  const wheels = new Batch();
-  const carTints: THREE.Color[] = [];
-  for (const b of bays) {
-    if (rand() > 0.55) continue;
+  // Zelfde stijl als de vrachtwagens (src/ui/scene/car.ts). Een paar auto's staan er altijd; de vakken bij de
+  // entree zijn van de kantoormedewerkers, die komen en gaan (src/ui/staff.ts).
+  CAR_PARK.parked.forEach((bay, i) => {
+    const b = CAR_PARK.bays[bay];
     const x = b.x + (rand() - 0.5) * 0.2;
     const z = b.z + (rand() - 0.5) * 0.4;
-    bodies.add(x, 0.58, z, 1.8, 0.7, 4.3);
-    cabins.add(x, 1.2, z + 0.2, 1.6, 0.56, 2.3);
-    for (const dx of [-0.86, 0.86]) for (const dz of [-1.35, 1.35]) wheels.add(x + dx, 0.32, z + dz, 0.32, 0.2, 0.32, 0, 0, Math.PI / 2);
-    carTints.push(new THREE.Color(CAR_COLORS[Math.floor(rand() * CAR_COLORS.length)]));
-    solid(x, z, 1.8, 4.3, 0, 0.93);
-    solid(x, z + 0.2, 1.6, 2.3, 0.93, 1.48);
-  }
-  const tyre = paint('#141414', 0.9, 0);
+    const car = createCar(CAR_PAINTS[(i * 2 + 3) % CAR_PAINTS.length]);
+    car.position.set(x, 0, z);
+    car.rotation.y = Math.PI; // neus naar het gebouw
+    root.add(car);
+    solid(x, z, CAR.width, CAR.length, 0, 0.93);
+    solid(x, z + 0.4, 1.6, 2.6, 0.93, 1.47);
+  });
 
   // ---------- Geparkeerde opleggers op het terrein ----------
   // Zelfde stijl als de vrachtwagens aan de docks (src/ui/scene/truck.ts)
@@ -309,14 +299,6 @@ export function createExterior(scene: THREE.Scene) {
     root.add(trailer);
     solid(x, z, 12, 2.5, 0, 3.85);
   }
-
-  const carBodies = bodies.build(UNIT_BOX, paint('#ffffff', 0.35, 0.5));
-  carTints.forEach((c, i) => carBodies.setColorAt(i, c));
-  root.add(
-    carBodies,
-    cabins.build(UNIT_BOX, glass),
-    wheels.build(UNIT_CYL, tyre),
-  );
 
   // ---------- Portiersloge met slagboom bij de inrit van het terrein ----------
   const lodge = new Batch();
@@ -352,7 +334,7 @@ export function createExterior(scene: THREE.Scene) {
   const heads = new Batch();
   const lampSpots: [number, number, number][] = []; // x, z, richting van de arm (rad)
   for (const z of [-27, -9, 9, 27]) lampSpots.push([YARD.minX + 1, z, 0]);
-  for (const x of [-11, 2, 15, 27]) lampSpots.push([x, PARKING.maxZ + 0.8, Math.PI / 2]);
+  for (const x of [PARKING.minX - 0.8, (PARK_DRIVE.maxX + PARKING.maxX) / 2, PARKING.maxX + 0.8]) lampSpots.push([x, PARKING.maxZ + 0.8, Math.PI / 2]);
   for (let x = -200; x <= 200; x += 40) lampSpots.push([x, ROAD.maxZ + 1.2, Math.PI / 2]);
   for (const [x, z, a] of lampSpots) {
     poles.add(x, 4.5, z, 0.09, 9, 0.09);

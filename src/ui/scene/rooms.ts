@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CANTEEN, HALL, ROOMS, ROOM_DOORS as DOOR_SPOTS, type Rect } from '../../sim/layout';
-import { coffeeMachine } from './coffee';
+import { COFFEE_SPOTS, coffeeMachine } from './coffee';
 import { STYLE, onTop } from './style';
 import * as tex from './textures';
 
@@ -103,11 +103,35 @@ function cabinet(): Part[] {
   ];
 }
 
+/** Koelkast zonder deur: een open kast met plateaus en wat erin staat. De deur is een los onderdeel (fridgeDoor). */
 function fridge(): Part[] {
+  const shelves = [0.5, 0.86, 1.2, 1.5];
   return [
-    [STYLE.steel, rb(0.62, 1.8, 0.62, 0.03, 0, 0.9, 0)],
-    [STYLE.dark, rb(0.02, 0.5, 0.03, 0.008, -0.22, 1.2, 0.32)],
-    [STYLE.dark, rb(0.6, 0.012, 0.01, 0.004, 0, 0.62, 0.312)],
+    [STYLE.steel, rb(0.03, 1.8, 0.58, 0.012, -0.295, 0.9, -0.02)],
+    [STYLE.steel, rb(0.03, 1.8, 0.58, 0.012, 0.295, 0.9, -0.02)],
+    [STYLE.steel, rb(0.56, 0.03, 0.58, 0.012, 0, 1.785, -0.02)],
+    [STYLE.steel, rb(0.56, 0.14, 0.58, 0.012, 0, 0.07, -0.02)],
+    [STYLE.white, rb(0.56, 1.62, 0.03, 0.01, 0, 0.95, -0.29)],
+    ...shelves.map((y): Part => [STYLE.white, rb(0.56, 0.015, 0.5, 0.005, 0, y, -0.03)]),
+    // lunchtrommels, pakken en flessen
+    [STYLE.blue, rb(0.18, 0.07, 0.12, 0.015, -0.14, 1.243, 0.02)],
+    [STYLE.paint, rb(0.18, 0.07, 0.12, 0.015, 0.12, 1.243, -0.06)],
+    [STYLE.green, rb(0.18, 0.07, 0.12, 0.015, -0.1, 0.903, -0.04)],
+    [STYLE.blue, rb(0.18, 0.07, 0.12, 0.015, 0.14, 0.543, 0)],
+    [STYLE.white, rb(0.08, 0.2, 0.08, 0.01, 0.16, 0.968, -0.1)],
+    [STYLE.wood, rb(0.08, 0.2, 0.08, 0.01, -0.18, 1.608, -0.08)],
+    [STYLE.green, cyl(0.035, 0.24, 0.02, 1.628, -0.1)],
+    [STYLE.dark, cyl(0.035, 0.24, 0.14, 1.628, -0.02)],
+  ];
+}
+
+/** De deur van de koelkast, rond zijn scharnier (de y-as): dicht ligt hij langs +x voor de kast. */
+function fridgeDoor(): Part[] {
+  return [
+    [STYLE.steel, rb(0.6, 1.76, 0.04, 0.015, 0.3, 0.9, 0.02)],
+    [STYLE.dark, rb(0.02, 0.5, 0.03, 0.008, 0.52, 1.2, 0.053)],
+    [STYLE.white, rb(0.5, 0.06, 0.07, 0.01, 0.3, 0.6, -0.035)], // deurvak
+    [STYLE.white, rb(0.5, 0.06, 0.07, 0.01, 0.3, 1.15, -0.035)],
   ];
 }
 
@@ -236,7 +260,7 @@ export function createRooms({ scene, roof, solid }: Options) {
     solid(hingeX + (Math.cos(OPEN) * w) / 2, hingeZ - (Math.sin(OPEN) * w) / 2, 0.2, w, 0, reach(d.height));
   }
 
-  // ---------- Kantoor: twee bureaus aan het raam met uitzicht op het terrein, kasten langs de tussenwand ----------
+  // ---------- Kantoor: vier bureaus (twee aan het raam, twee tegen de tussenwand), kasten naast de deur ----------
   const QUARTER = Math.PI / 2;
   const officeMidZ = (office.minZ + office.maxZ) / 2;
   // Op elk bureau draait de WMS-app (src/ui/pcScreen.ts legt hem over het beeldvlak); je gaat ervoor op de stoel zitten.
@@ -254,30 +278,56 @@ export function createRooms({ scene, roof, solid }: Options) {
     seats.push(seat);
     return seat;
   };
-  for (const dz of [-1.35, 1.35]) {
-    const deskX = office.minX + OUTER + 0.44;
-    const chairX = deskX + 0.64; // aangeschoven: de zitting raakt net de rand van het blad
-    const z = officeMidZ + dz;
-    place(desk(), deskX, z, QUARTER, [1.6, 0.8, 0.76]);
-    place(chair(), chairX, z, -QUARTER);
-    // Beeldvlak (16:9) vlak voor de monitor, naar de stoel gericht
-    const display = new THREE.Mesh(new THREE.PlaneGeometry(DESK_SCREEN.w, DESK_SCREEN.h), screenMat);
-    display.position.set(deskX - 0.182, 1.06, z);
-    display.rotation.y = QUARTER;
-    // De stoel als zitplek: voorkant (+z) naar het bureau
-    const seat = seatAt(chairX, z, -QUARTER);
-    screens.add(display);
-    desks.push({ display, ...DESK_SCREEN, x: chairX, z, seat });
+  // Vier werkplekken: twee aan het raam (west) en twee ertegenover tegen de tussenwand (oost), met een gangpad ertussen.
+  // side = de kant waar je zit ten opzichte van het bureau: +1 = aan de oostkant ervan, -1 = aan de westkant.
+  for (const [deskX, side] of [[office.minX + OUTER + 0.44, 1], [office.maxX - WALL / 2 - 0.44, -1]]) {
+    for (const dz of [-1.35, 1.35]) {
+      const chairX = deskX + side * 0.64; // aangeschoven: de zitting raakt net de rand van het blad
+      const z = officeMidZ + dz;
+      place(desk(), deskX, z, side * QUARTER, [1.6, 0.8, 0.76]);
+      place(chair(), chairX, z, -side * QUARTER);
+      // Beeldvlak (16:9) vlak voor de monitor, naar de stoel gericht
+      const display = new THREE.Mesh(new THREE.PlaneGeometry(DESK_SCREEN.w, DESK_SCREEN.h), screenMat);
+      display.position.set(deskX - side * 0.182, 1.06, z);
+      display.rotation.y = side * QUARTER;
+      // De stoel als zitplek: voorkant (+z) naar het bureau
+      const seat = seatAt(chairX, z, -side * QUARTER);
+      screens.add(display);
+      desks.push({ display, ...DESK_SCREEN, x: chairX, z, seat });
+    }
   }
-  for (let i = 0; i < 3; i++) place(cabinet(), office.maxX - WALL / 2 - 0.25, office.minZ + 1.5 + i * 0.85, -QUARTER, [0.8, 0.45, 1.3]);
+  const deskSeats = seats.length;
+  // Kasten tegen de wand naar de hal, naast de deur
+  for (let i = 0; i < 3; i++) place(cabinet(), office.minX + OUTER + 0.75 + i * 0.85, frontZ - 0.25, Math.PI, [0.8, 0.45, 1.3]);
   place(plant(), office.maxX - 0.5, office.minZ + 0.6);
 
   // ---------- Kantine: keukenblok met het koffieapparaat en de koelkast langs de oostwand, twee tafels, automaat ----------
   // Waar alles staat komt uit src/sim/layout.ts (CANTEEN): de chauffeurs halen hier koffie en schuiven aan.
   const block = CANTEEN.counter;
-  place(fridge(), block.x, canteen.minZ + 0.6, -QUARTER, [0.62, 0.62, 1.8]);
+  const fridgeZ = canteen.minZ + 0.6;
+  place(fridge(), block.x, fridgeZ, -QUARTER, [0.62, 0.62, 1.8]);
+  // De deur van de koelkast gaat echt open: hij scharniert aan de kant van de buitenwand
+  const fridgeHinge = new THREE.Group();
+  fridgeHinge.position.set(block.x - 0.27, 0, fridgeZ - 0.29);
+  fridgeHinge.rotation.y = -QUARTER;
+  for (const [mat, geo] of fridgeDoor()) {
+    const m = new THREE.Mesh(geo, mat);
+    m.castShadow = m.receiveShadow = true;
+    fridgeHinge.add(m);
+  }
+  scene.add(fridgeHinge);
   place(counter(block.length), block.x, block.z, -QUARTER, [block.length, 0.63, 0.9]);
   place(coffeeMachine(), CANTEEN.machine.x, CANTEEN.machine.z, -QUARTER);
+  /** Waar je staat voor het aanrecht of de koelkast (x), met je gezicht ernaartoe. */
+  const standX = block.x - 0.31 - 0.5;
+  const stations = {
+    /** Koffieapparaat: waar je staat, en waar de beker onder de uitloop staat (de onderkant van de beker). */
+    coffee: { ...CANTEEN.coffeeStand, hand: new THREE.Vector3(CANTEEN.machine.x - COFFEE_SPOTS.cup.z, COFFEE_SPOTS.cup.y, CANTEEN.machine.z) },
+    /** Koelkast: het plateau met de lunchtrommels. */
+    fridge: { x: standX + 0.1, z: fridgeZ + 0.04, r: QUARTER, hand: new THREE.Vector3(block.x - 0.2, 1.3, fridgeZ + 0.06) },
+    /** Spoelbak. */
+    sink: { x: standX, z: block.z - block.length / 2 + 0.6, r: QUARTER, hand: new THREE.Vector3(block.x - 0.05, 0.98, block.z - block.length / 2 + 0.6) },
+  };
   for (const t of CANTEEN.tables) place(table(1.8, 0.8), t.x, t.z, 0, [1.8, 0.8, 0.76]);
   for (const s of CANTEEN.seats) {
     place(chair(), s.x, s.z, s.r);
@@ -329,5 +379,17 @@ export function createRooms({ scene, roof, solid }: Options) {
     { minX: all.minX, maxX: all.maxX, minZ: back, maxZ: frontZ },
     ...ROOM_DOORS.map((d): Rect => ({ minX: d.from, maxX: d.to, minZ: frontZ - 0.5, maxZ: HALL_WALL + 0.7 })),
   ];
-  return { walkable, desks, seats };
+  /** Voor de kantoormedewerkers (src/sim/staff.ts): waar de deuren, de bureaustoelen, de kantinestoelen en het aanrecht zijn. */
+  const pose = (s: THREE.Object3D) => ({ x: s.position.x, z: s.position.z, r: s.rotation.y });
+  const staff = {
+    office: { door: ROOM_DOORS[0].x, inZ: frontZ - 0.9, aisle: (office.minX + OUTER + office.maxX - WALL / 2) / 2, desks: seats.slice(0, deskSeats).map(pose) },
+    canteen: { door: ROOM_DOORS[1].x, inZ: frontZ - 0.9, ...stations, seats: seats.slice(deskSeats).map(pose) },
+    /** Het aantal bureaustoelen: de eerste stoelen in `seats`; daarna komen de kantinestoelen. */
+    deskSeats,
+    /** @param open 0 = koelkast dicht, 1 = open */
+    setFridge(open: number) {
+      fridgeHinge.rotation.y = -QUARTER - open * 1.6;
+    },
+  };
+  return { walkable, desks, seats, staff };
 }

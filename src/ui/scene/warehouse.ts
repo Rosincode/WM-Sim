@@ -1072,6 +1072,8 @@ export function createWarehouse(scene: THREE.Scene) {
     setDockDoor,
     setDriverDoor,
     setExitDoor,
+    /** Voor de kantoormedewerkers: de plekken in kantoor en kantine, en de koelkastdeur. */
+    staff: rooms.staff,
     /** De bureaus in het kantoor: monitor met de WMS-app en de stoel waarop je ervoor gaat zitten. */
     desks: rooms.desks,
     /** Alle stoelen (kantoor en kantine) als zitplek: plek op de vloer, voorkant = +z. */

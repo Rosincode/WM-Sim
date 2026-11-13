@@ -24,6 +24,7 @@ import { CARRY_AHEAD, CARRY_RADIUS } from './ui/warehouseView';
 import { mountMultiplayer } from './ui/multiplayer';
 import { mountRobots } from './ui/robots';
 import { mountDrivers } from './ui/drivers';
+import { mountStaff } from './ui/staff';
 import { SceneRenderPass } from './ui/sceneRenderPass';
 import { menu } from './ui/menu';
 import { createPrompts, esc, type Prompt } from './ui/prompts';
@@ -228,11 +229,13 @@ function applyMode(mode: ViewMode) {
  * Niets gaat door iets anders heen. Dit is alles wat er naast de hal zelf, de heftruck en de pompwagen in de weg kan
  * staan: het bureau, de pallets op de banen, de telrobot, de robots, de chauffeurs met hun pompwagens en de andere spelers.
  */
-const otherSolids = [() => warehouse.solids(), () => robots.solids(), () => drivers.solids(), () => multiplayer?.solids() ?? []];
+const otherSolids = [() => warehouse.solids(), () => robots.solids(), () => drivers.solids(), () => staff.solids(), () => multiplayer?.solids() ?? []];
 /** Waar alleen de speler te voet tegenaan loopt, buiten op het terrein: vrachtwagens, auto's, opleggers, palen en bomen. */
 const outdoorSolids = [() => warehouse.truckSolids(), () => exterior.solids];
 /** Iedereen die te voet is (jij en de andere spelers): voor hen gaan de deuren naar buiten open. */
 const walkers = () => [player.position, ...(multiplayer?.obstacles() ?? [])];
+/** Voor de entree ook de kantoormedewerkers: zij komen daar van het parkeerterrein de hal in. */
+const entrants = () => [...walkers(), ...staff.walkers()];
 /** Waar robots en chauffeurs voor blijven staan: spelers, de heftruck, de pompwagen en pallets die los op de vloer staan. */
 function humanObstacles() {
   const along = (o: THREE.Object3D, offsets: number[], rad: number) =>
@@ -350,13 +353,14 @@ function nearSeat() {
   let best: THREE.Object3D | null = null;
   let bestD = 1.1;
   for (const s of hall.seats) {
+    if (staff.seatTaken(s)) continue; // de stoel van een collega
     const d = Math.hypot(player.position.x - s.position.x, player.position.z - s.position.z);
     if (d < bestD) [best, bestD] = [s, d];
   }
   return best;
 }
 function sitDown(seat: THREE.Object3D) {
-  if (chair || driving || jack.held) return;
+  if (chair || driving || jack.held || staff.seatTaken(seat)) return;
   chair = seat;
   const atDesk = hall.desks.some((d) => d.seat === seat);
   view.setVehicle({
@@ -459,14 +463,17 @@ const robots = mountRobots({
   ...warehouse.robots,
   obstacles: () => {
     const counter = warehouse.counter.robot;
-    return [...humanObstacles(), ...drivers.obstacles(), { x: counter.x, z: counter.z, rad: 0.45 }];
+    return [...humanObstacles(), ...drivers.obstacles(), ...staff.obstacles(), { x: counter.x, z: counter.z, rad: 0.45 }];
   },
 });
 // De telrobot bij de docks stopt voor dezelfde dingen, en voor de andere robots
-warehouse.counter.setObstacles(() => [...humanObstacles(), ...drivers.obstacles(), ...robots.obstacles()]);
+warehouse.counter.setObstacles(() => [...humanObstacles(), ...drivers.obstacles(), ...staff.obstacles(), ...robots.obstacles()]);
 
 // --- Chauffeurs: lossen en laden hun vrachtwagen zelf, met de elektrische pompwagen die bij elk dock staat ---
 const drivers = mountDrivers({ scene, hall, exterior, ...warehouse.docks, obstacles: humanObstacles, visitors: walkers });
+// --- Kantoormedewerkers: komen met de auto, werken op het kantoor, halen koffie en eten in de kantine ---
+// Handig bij testen: ?staff=120 laat ze vooraf al 120 seconden hun gang gaan
+const staff = mountStaff({ scene, hall, obstacles: humanObstacles, playerSeat: () => chair, seatUsed: (i) => warehouse.docks.drivers.drivers.some((d) => d.seat === i), skip: Number(params.get('staff')) || 0 });
 /** Hoe ver de nooduitgang (entree in de voorgevel) openstaat: 0 = dicht, 1 = open. */
 let exitOpen = 0;
 // --- Geluid van alles wat rijdt: motor, wielen, hydrauliek en piepers (src/ui/sounds.ts) ---
@@ -616,8 +623,9 @@ renderer.setAnimationLoop((now) => {
   exterior.setGate(warehouse.gateOpen());
   robots.update(dt);
   drivers.update(dt);
+  staff.update(dt);
   // De nooduitgang gaat open voor wie ervoor staat, binnen of buiten
-  const atExit = walkers().some((w) => Math.hypot(w.x - EXIT_X, w.z - HALL.d / 2) < 2.2);
+  const atExit = entrants().some((w) => Math.hypot(w.x - EXIT_X, w.z - HALL.d / 2) < 2.2);
   const nextExit = THREE.MathUtils.clamp(exitOpen + (atExit ? dt : -dt) / 0.6, 0, 1);
   if (nextExit !== exitOpen) hall.setExitDoor((exitOpen = nextExit));
   // Buiten zie je de lucht en het terrein tot in de verte, binnen de nevel van de hal

@@ -25,7 +25,7 @@ const material = (key: Key, accent: THREE.Material): THREE.Material =>
   key === 'accent' ? accent : key === 'lamp' || key === 'tail' || key === 'marker' ? LIGHTS[key] : STYLE[key];
 
 /** Verzamelt onderdelen per materiaal en voegt ze samen: een hele wagen is dan een handvol tekenopdrachten. */
-class Parts {
+export class Parts {
   private map = new Map<Key, THREE.BufferGeometry[]>();
   private m = new THREE.Matrix4();
   private q = new THREE.Quaternion();
@@ -73,8 +73,9 @@ class Parts {
   }
 }
 
-type Built = ReturnType<Parts['build']>;
-function meshes(built: Built, accent: THREE.Material, parent: THREE.Object3D) {
+export type Built = ReturnType<Parts['build']>;
+/** Maakt van de samengevoegde onderdelen meshes; `accent` is de lak van dit voertuig. */
+export function meshes(built: Built, accent: THREE.Material, parent: THREE.Object3D) {
   for (const { key, geometry } of built) {
     const mesh = new THREE.Mesh(geometry, material(key, accent));
     const light = key === 'lamp' || key === 'tail' || key === 'marker';
