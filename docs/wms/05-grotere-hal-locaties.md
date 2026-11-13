@@ -1,25 +1,22 @@
-# 05 — Grotere hal: 10 docks en 11 stellingen
+# 05 — De hal: 10 docks en 16 stellingen
 
-De game heeft een groter magazijn gekregen. Het datamodel en de acties veranderen niet; alleen de
-**seed-data van de locaties** wordt vervangen. Dit document vervangt paragraaf 4.1 van
-`01-basis-datamodel.md` (62 locaties) door de 261 locaties hieronder.
+De hal is 56 × 72 meter en heeft 10 dockdeuren in de westwand en 16 stellingen. Het datamodel is
+dat van 01; dit document geeft de **locaties** die de WMS moet kennen.
 
-De `location_id`'s moeten exact overeenkomen: de game stuurt ze mee in `register_goods_received`,
-`confirm_putaway` en de procesacties uit `04-procesacties.md`.
+De `location_id`'s moeten exact overeenkomen: de game stuurt ze mee bij elke scan en boeking. Een
+locatie die de WMS niet kent, weigert hij.
 
-## 1. Wat er verandert
+## 1. Overzicht
 
-| | Oud | Nieuw |
+| Soort | Aantal | Codes |
 |---|---|---|
-| Docks | `DOCK-01` (inslag), `DOCK-02` (uitslag) | 10 dockdeuren, elk met de deur zelf plus een eigen inslag- en uitslaglocatie (30 locaties) |
-| Stellingen | 4 rijen × 5 secties × 3 niveaus = 60 | 11 rijen × 7 secties × 3 niveaus = 231 |
-| Totaal | 62 locaties | 261 locaties |
+| Dockdeuren | 10 | `DOCK-01` … `DOCK-10` |
+| Inslaglocaties | 10 | `DOCK-01-IN` … `DOCK-10-IN` |
+| Uitslaglocaties | 10 | `DOCK-01-UIT` … `DOCK-10-UIT` |
+| Stellinglocaties | 336 | `R1A-01-1` … `R8B-07-3` (zie 11) |
+| **Totaal** | **366** | |
 
-- `DOCK-01` en `DOCK-02` blijven bestaan, maar zijn nu alleen nog de deur: er hoort geen voorraad
-  meer op te staan. Staat die er nog, verplaats die dan naar `DOCK-01-IN`.
-- De bestaande stellingcodes (`R1-01-1` t/m `R4-05-3`) blijven geldig, maar hun `pos_x`/`pos_y`
-  wijzigen. Voorraad op die locaties kan blijven staan.
-- `location_id` blijft binnen de maximale lengte van 20 tekens (langste: `DOCK-10-UIT`).
+`location_id` blijft binnen de maximale lengte van 20 tekens (langste: `DOCK-10-UIT`).
 
 ## 2. Docklocaties (30)
 
@@ -28,9 +25,10 @@ Alle docklocaties: type `dock`, `level` = 0.
 Per dockdeur `NN` (01 t/m 10) drie locaties:
 
 - `DOCK-NN` — de deur zelf (`pos_x` = -28): hier meldt een vrachtwagen zich aan en af en wordt
-  geladen. Er staat nooit voorraad op.
-- `DOCK-NN-IN` — inslaglocatie: hier staan geloste pallets tot ze zijn weggezet.
-- `DOCK-NN-UIT` — uitslaglocatie: hier staan gepickte orders klaar voor de vrachtwagen.
+  geladen. De WMS boekt hier ook de ontvangst van een levering die hij zelf aanmaakt (zie 10); die
+  voorraad staat er tot de pallet is gelost.
+- `DOCK-NN-IN` — inslaglocatie: hier staan geloste pallets tot ze zijn weggezet (zes plekken).
+- `DOCK-NN-UIT` — uitslaglocatie: hier staan gepickte orders klaar voor de vrachtwagen (zes plekken).
 
 De deur ligt op `pos_y` = -22.5 + (NN − 1) × 5. De inslag- en uitslaglocatie hebben `pos_x` = -20.3;
 de inslaglocatie ligt 1.3 lager dan de deur, de uitslaglocatie 1.3 hoger:
@@ -48,38 +46,25 @@ de inslaglocatie ligt 1.3 lager dan de deur, de uitslaglocatie 1.3 hoger:
 | 09 | 17.5 | 16.2 | 18.8 |
 | 10 | 22.5 | 21.2 | 23.8 |
 
-## 3. Stellinglocaties (231)
+## 3. Stellinglocaties (336)
 
-- `location_id` = `R{rij}-{sectie:2 cijfers}-{niveau}`, bijvoorbeeld `R11-07-3`. Het rijnummer heeft
-  geen voorloopnul (`R1` … `R11`).
-- `pos_x` hangt af van de sectie:
+Zie 11: acht paden met aan elk pad een stelling A en een stelling B, elk 7 secties × 3 niveaus.
+Niveau 1 is type `pick`, niveau 2 en 3 zijn type `rack`. Een stellinglocatie heeft drie
+palletplekken naast elkaar.
 
-  | Sectie | 01 | 02 | 03 | 04 | 05 | 06 | 07 |
-  |---|---|---|---|---|---|---|---|
-  | pos_x | -8 | -4 | 0 | 4 | 8 | 12 | 16 |
+## 4. Welke locatie bij welke aanroep
 
-- `pos_y` hangt af van de rij: `pos_y` = -25 + (rij − 1) × 5.
+- `goods_receipt`: `dock_id` is de inslaglocatie (`DOCK-NN-IN`) als een speler lost. Bij een levering
+  uit de WMS staat de ontvangst op de deur (`DOCK-NN`), zie 10.
+- `pallet_move` en `putaway`: van een inslaglocatie of stellinglocatie naar een stellinglocatie.
+- `stage_order`: `dock_id` is een uitslaglocatie (`DOCK-NN-UIT`).
+- `truck_visit`: `dock_id` is de dockdeur zelf (`DOCK-NN`).
 
-  | Rij | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |
-  |---|---|---|---|---|---|---|---|---|---|---|---|
-  | pos_y | -25 | -20 | -15 | -10 | -5 | 0 | 5 | 10 | 15 | 20 | 25 |
+## 5. Indeling wijzigen
 
-- `level` is 1, 2 of 3. Niveau 1 is type `pick`, niveau 2 en 3 zijn type `rack` (ongewijzigd).
-
-## 4. Gevolgen voor de acties
-
-Geen nieuwe acties of velden. Wel goed om te weten:
-
-- `register_goods_received`: `dock_id` is nu altijd een inslaglocatie (`DOCK-NN-IN`). De controle
-  "bestaat en is van type `dock`" blijft gelijk.
-- `confirm_putaway`: `from_location_id` is de inslaglocatie waar de pallet stond.
-- `stage_order` (zie 04): `dock_id` is een uitslaglocatie (`DOCK-NN-UIT`).
-- `truck_check_in`, `truck_check_out` en `load_order` (zie 04): `dock_id` is de dockdeur zelf
-  (`DOCK-NN`, zonder `-IN`/`-UIT`). De controle "is van type `dock`" blijft dus kloppen.
-- `confirm_pick`: de bronvolgorde (eerst `pick`, dan `rack`, daarna op `location_id`) sorteert als
-  tekst, dus `R10` en `R11` komen vóór `R2`. De game gebruikt dezelfde tekstsortering; houd dat zo.
-
-## 5. Beginvoorraad
-
-Optioneel: met 231 stellinglocaties oogt de hal leeg bij de 25 voorraadregels uit 01. Ongeveer 70
-regels, willekeurig verdeeld over de stellinglocaties (5 tot 50 stuks per regel), vult de hal beter.
+De indeling van de hal staat in de game in één bestand (`src/sim/warehouse.json`) en is in de game
+te bewerken. De game vergelijkt zijn locaties bij het aanmelden met die van de WMS en meldt in het
+WMS-paneel (toets K) wat er ontbreekt, wat de WMS extra heeft en wat een andere positie heeft; de
+ontbrekende locaties zijn daar als CSV te downloaden (kolommen `location_id`, `location_type`,
+`pos_x`, `pos_y`, `level`, `blocked`). Aanmaken via de API kan niet: locaties worden in de WMS-app
+beheerd.

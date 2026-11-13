@@ -1,30 +1,28 @@
-# WMS-instructie 03 — Robotassortiment
+# 03 — Robotassortiment
 
 ## Context
 
-Het magazijn uit WM-Sim is van een bedrijf dat **robots** verkoopt. Het speelt een stukje in de toekomst. Er zijn drie soorten robots:
+Het magazijn uit WM-Sim is van een bedrijf dat **robots** verkoopt. Het speelt een stukje in de
+toekomst. Er zijn drie soorten robots:
 
 - **huishouden**: robots die klusjes in huis doen, zoals stofzuigen en was vouwen;
 - **huisdier**: robots die je als huisdier hebt, zoals een robothond;
 - **vermaak**: robots voor de lol, zoals een robot die met je danst.
 
-We beginnen klein. Deze instructie bouwt voort op [instructie 01](01-basis-datamodel.md). Er komt één veld bij, er komt één domein bij en de artikelen krijgen andere omschrijvingen. Al het andere blijft zoals het is: locaties, voorraad, orders en alle acties.
-
-Elke robot zit in een eigen doos. Voor het WMS is een robot gewoon een artikel: `qty` = het aantal dozen.
+Elke robot zit in een eigen doos. Voor de WMS is een robot gewoon een artikel: `qty` = het aantal
+dozen. (De robots die in de hal zelf rondrijden zijn iets anders: zie 08.)
 
 ---
 
-## 1. Wijziging op entiteit `item`
+## 1. Entiteit `item`
 
-Voeg één veld toe:
+| Veld | Type | Toelichting |
+|---|---|---|
+| `sku` | tekst, uniek | Zie 01 |
+| `description` | tekst | De naam van de robot |
+| `category` | domein `robot_category` | De soort robot |
 
-| Veld | Type | Verplicht | Toelichting |
-|---|---|---|---|
-| `category` | domein `robot_category` | ja | De soort robot, zie hoofdstuk 2 |
-
-De velden `sku` en `description` blijven zoals ze zijn.
-
-## 2. Nieuw domein `robot_category`
+## 2. Domein `robot_category`
 
 | Waarde | Omschrijving |
 |---|---|
@@ -32,11 +30,10 @@ De velden `sku` en `description` blijven zoals ze zijn.
 | `huisdier` | Robothuisdier |
 | `vermaak` | Vermaakrobot |
 
-Gebruik de waarden letterlijk.
+## 3. Artikelen
 
-## 3. Seed-data artikelen (vervangt 4.2 uit instructie 01)
-
-De `sku`-codes blijven hetzelfde. Alleen de omschrijving verandert en de categorie komt erbij. Bestaande voorraad en orders blijven daardoor geldig.
+De WMS bepaalt welke artikelen er zijn en hoe ze heten: de game leest de lijst en gebruikt de
+omschrijving uit de WMS. In de WMS staan er nu tien:
 
 | sku | description | category |
 |---|---|---|
@@ -45,20 +42,20 @@ De `sku`-codes blijven hetzelfde. Alleen de omschrijving verandert en de categor
 | `SKU-003` | Robothond Bolt | `huisdier` |
 | `SKU-004` | Robotkat Miso | `huisdier` |
 | `SKU-005` | Dansrobot Groove | `vermaak` |
+| `SKU-006` | Ramenwasrobot Clearo | `huishouden` |
+| `SKU-007` | Robotvogel Pip | `huisdier` |
+| `SKU-008` | Muziekrobot Beat | `vermaak` |
+| `SKU-009` | Robotkonijn Hop | `huisdier` |
+| `SKU-010` | Goochelrobot Magix | `vermaak` |
 
-De beginvoorraad uit 4.3 van instructie 01 blijft gelijk.
+De ingebouwde mock-WMS van de game (zonder aanmelden) kent alleen `SKU-001` t/m `SKU-005`.
 
-## 4. Nog niet bouwen
+Een artikel toevoegen in de WMS is genoeg om het in de hal te krijgen: de game geeft het een eigen
+doosmaat en kleur, afgeleid van de `sku`.
 
-Deze punten komen in een latere instructie. Bouw ze nu nog **niet**:
+## 4. Nog niet gebouwd
 
 - serienummers per robot;
 - klanten en verzendadressen op orders;
 - retouren, reparatie en accu's opladen;
 - prijzen.
-
----
-
-## Terug te melden
-
-- Bevestiging dat `item` het veld `category` heeft en dat de vijf artikelen zijn bijgewerkt.

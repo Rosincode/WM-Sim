@@ -1,188 +1,135 @@
-# WMS-instructie 01 — Basisdatamodel en kernacties
+# 01 — Basisdatamodel en kernacties
 
 ## Context
 
-WM-Sim is een 3D-game die een magazijn simuleert. De game is de **fysieke wereld**: vrachtwagens komen aan, heftrucks rijden, medewerkers picken. De WMS-app is het **systeem**: die bepaalt welke locaties er zijn, waar voorraad ligt en welke orders er zijn.
+WM-Sim is een 3D-game die een magazijn simuleert. De game is de **fysieke wereld**: vrachtwagens
+komen aan, heftrucks en robots rijden, medewerkers picken. De WMS-app is het **systeem**: die legt
+vast welke locaties en artikelen er zijn, waar voorraad ligt en welke orders er zijn.
 
-De game praat met de WMS via de automatisch gegenereerde API op entiteiten en acties. Elke gebeurtenis in de game roept een actie in de WMS aan.
+De game roept de WMS aan via de API die het platform op entiteiten en acties genereert. Bij elke
+handeling vraagt de game eerst de WMS; pas na akkoord gebeurt de handeling in de hal (zie 06).
 
-Gebruik de namen in deze instructie letterlijk, of meld de afwijkingen. De game wordt er één-op-één op gemapt.
+Dit document beschrijft de basis: locaties, artikelen, voorraad en orders. Vrachtwagens en het
+scanlog staan in 04, pallets in 07. Alle aanroepen op een rij staan in 09.
 
 ---
 
 ## 1. Entiteiten
 
+Elk record heeft een platform-`id` (uuid). **Verwijzingen tussen entiteiten zijn die uuid**, niet de
+tekstsleutel: `stock.sku` is de `id` van het artikel, `stock.location_id` de `id` van de locatie. De
+game kent alleen de tekstsleutels (`SKU-001`, `DOCK-01`, `ORD-…`) en vertaalt zelf.
+
 ### 1.1 Locatie (`location`)
 
-| Veld | Type | Verplicht | Toelichting |
-|---|---|---|---|
-| `location_id` | tekst (PK), max 20 | ja | Bijvoorbeeld `DOCK-01` of `R1-03-2` |
-| `location_type` | domein | ja | `dock`, `rack` of `pick` |
-| `pos_x` | decimaal | ja | X-positie op de plattegrond, in meters |
-| `pos_y` | decimaal | ja | Y-positie op de plattegrond, in meters |
-| `level` | geheel getal | ja | Hoogte in de stelling: 0 = vloer, 1 t/m 3 = stellingniveau |
-| `blocked` | ja/nee | ja | Standaard nee. Een geblokkeerde locatie mag niet gebruikt worden. |
+| Veld | Type | Toelichting |
+|---|---|---|
+| `location_id` | tekst, uniek, max 20 | Bijvoorbeeld `DOCK-01-IN` of `R3B-07-2` |
+| `location_type` | domein | `dock`, `rack` of `pick` |
+| `pos_x` | decimaal | X-positie op de plattegrond, in meters (x in de game) |
+| `pos_y` | decimaal | Y-positie op de plattegrond, in meters (z in de game) |
+| `level` | geheel getal | 0 = docklocatie, 1 t/m 3 = stellingniveau (1 staat op de vloer) |
+| `blocked` | ja/nee | Een geblokkeerde locatie mag niet gebruikt worden |
+
+Locaties zijn via de API alleen te lezen; ze worden in de WMS-app beheerd.
 
 ### 1.2 Artikel (`item`)
 
-| Veld | Type | Verplicht | Toelichting |
-|---|---|---|---|
-| `sku` | tekst (PK), max 20 | ja | Bijvoorbeeld `SKU-001` |
-| `description` | tekst, max 100 | ja | |
+| Veld | Type | Toelichting |
+|---|---|---|
+| `sku` | tekst, uniek, max 20 | Bijvoorbeeld `SKU-001` |
+| `description` | tekst, max 100 | |
+| `category` | domein `robot_category` | Zie 03 |
+
+Alleen te lezen. De WMS bepaalt welke artikelen er bestaan: de game leest de lijst en laat alleen
+die artikelen in de hal voorkomen.
 
 ### 1.3 Voorraad (`stock`)
 
-Hoeveel er van een artikel op een locatie ligt.
+Hoeveel er van een artikel op een locatie ligt. `qty` = het aantal dozen.
 
-| Veld | Type | Verplicht | Toelichting |
-|---|---|---|---|
-| `stock_id` | geheel getal (PK, identity) | ja | |
-| `sku` | FK → `item` | ja | |
-| `location_id` | FK → `location` | ja | |
-| `qty` | geheel getal | ja | Moet ≥ 0 zijn |
+| Veld | Type | Toelichting |
+|---|---|---|
+| `sku` | verwijzing naar `item` | |
+| `location_id` | verwijzing naar `location` | |
+| `qty` | geheel getal ≥ 0 | |
+| `op_pallet` | geheel getal | Het deel dat op actieve pallets staat (zie 07) |
+| `los` | geheel getal | `qty − op_pallet`: voorraad zonder pallet |
 
-De combinatie `sku` + `location_id` is uniek.
+De combinatie `sku` + `location_id` is uniek. Alleen te lezen; voorraad verandert door de acties.
 
-### 1.4 Order (`order`)
+### 1.4 Order (`customer_order`)
 
-| Veld | Type | Verplicht | Toelichting |
-|---|---|---|---|
-| `order_id` | tekst (PK), max 20 | ja | Bijvoorbeeld `ORD-0001`. Mag een automatisch nummer zijn. |
-| `status` | domein | ja | `open`, `picking` of `done`. Standaard `open`. |
-| `created_at` | datum/tijd | ja | Standaard het moment van aanmaken |
+| Veld | Type | Toelichting |
+|---|---|---|
+| `order_id` | tekst, uniek, max 20 | Bijvoorbeeld `ORD-0001`. Zonder waarde geeft de WMS een nummer uit. |
+| `status` | domein | `open`, `picking`, `done`, `staged`, `loaded`, `shipped` (zie 04) |
+| `te_picken` | ja/nee (afgeleid) | Waar als de status `open` of `picking` is; de game filtert hierop |
 
 ### 1.5 Orderregel (`order_line`)
 
-| Veld | Type | Verplicht | Toelichting |
+| Veld | Type | Toelichting |
+|---|---|---|
+| `order_id` | verwijzing naar `customer_order` | |
+| `line_no` | geheel getal | Uniek binnen de order |
+| `sku` | verwijzing naar `item` | |
+| `qty` | geheel getal > 0 | |
+| `picked_qty` | geheel getal | Opgehoogd door `confirm_pick_line` (zie 04) |
+
+Regels toevoegen kan alleen zolang de order `open` is.
+
+---
+
+## 2. Kernacties
+
+Een actie is een `POST` die een record aanmaakt, of een actie op één record
+(`POST {entiteit}/{id}/_flows/{actie}`). De vorm van de aanroepen staat in 02 en 09. Een geweigerde
+actie wijzigt niets en geeft een korte Nederlandse melding terug; de game toont die aan de speler.
+
+| Stap | Aanroep | Controles | Effect |
 |---|---|---|---|
-| `order_id` | FK → `order` (PK, deel 1) | ja | |
-| `line_no` | geheel getal (PK, deel 2) | ja | |
-| `sku` | FK → `item` | ja | |
-| `qty` | geheel getal | ja | Moet > 0 zijn |
+| Ontvangst boeken | `POST goods_receipt {sku, qty, dock_id, pallet_id?}` | `dock_id` is een docklocatie; `qty` ≥ 1 | Voorraad van `sku` op `dock_id` omhoog met `qty` |
+| Losse voorraad wegzetten | `stock/<id>/_flows/putaway`, invoer `putaway_qty`, `to_location_id` | Genoeg voorraad zonder pallet; de naar-locatie is een stellinglocatie en niet geblokkeerd | Voorraad omlaag op de van-locatie, omhoog op de naar-locatie |
+| Order aanmaken | `POST customer_order {order_id?}`, daarna per regel `POST order_line {order_id, line_no, sku, qty}` | `order_id` is uniek | Order met status `open` |
+| Picken starten | `customer_order/<id>/_flows/start_picking` | Status is `open`; de order heeft regels | Status `picking` |
+| Order afronden | `customer_order/<id>/_flows/confirm_pick` | Status is `picking`; genoeg voorraad voor wat nog open staat | Boekt het restant af (wat nog niet per regel is gepickt) en zet de status op `done` |
+
+Pallets met een sticker verhuizen met `pallet_move` in plaats van `putaway` (zie 07).
+
+`confirm_pick` boekt het restant eerst af van losse voorraad en dan van pallets; de overige stappen
+van het proces (picken per regel, klaarzetten, inladen) staan in 04.
 
 ---
 
-## 2. Acties
+## 3. Uitlezen
 
-Elke actie wordt een API-endpoint. De game roept ze aan met de genoemde parameters. Een fout moet een duidelijke foutmelding teruggeven, zodat de game die kan tonen.
+De game leest:
 
-### 2.1 `register_goods_received`: ontvangst registreren
-
-De game roept deze actie aan als een vrachtwagen aan het dock is gelost.
-
-- **Parameters:** `sku`, `qty`, `dock_id`
-- **Controles:**
-  - `dock_id` bestaat en is van type `dock`.
-  - `sku` bestaat.
-  - `qty` is groter dan 0.
-- **Effect:** de voorraad van `sku` op `dock_id` gaat omhoog met `qty`. Bestaat er nog geen voorraadregel, maak die dan aan.
-
-### 2.2 `confirm_putaway`: wegzetten bevestigen
-
-De game roept deze actie aan als een heftruck goederen van het dock naar een stellinglocatie heeft gebracht.
-
-- **Parameters:** `sku`, `qty`, `from_location_id`, `to_location_id`
-- **Controles:**
-  - Op de van-locatie ligt genoeg voorraad.
-  - De naar-locatie is van type `rack` of `pick` en is niet geblokkeerd.
-- **Effect:** de voorraad gaat omlaag op de van-locatie en omhoog op de naar-locatie. Verwijder een voorraadregel die op 0 uitkomt.
-
-### 2.3 `create_order`: order aanmaken
-
-- **Parameters:** `order_id` (optioneel: zonder waarde genereert de WMS een nummer) en `lines`, een lijst van `{ sku, qty }`
-- **Effect:** de WMS maakt een order met status `open` en de bijbehorende orderregels.
-- **Teruggeven:** het `order_id`.
-- **Specifiek:** deze actie krijgt een lijst van regels mee. Kan het framework geen lijst als parameter ontvangen, dan mag de game de order ook in twee stappen aanmaken:
-  1. een POST op `order`;
-  2. daarna een POST per regel op `order_line`.
-
-  Meld welke van de twee varianten het wordt.
-
-### 2.4 `start_picking`: picken starten
-
-- **Parameters:** `order_id`
-- **Controle:** de status is `open`.
-- **Effect:** de status wordt `picking`.
-
-### 2.5 `confirm_pick`: pick bevestigen
-
-De game roept deze actie aan als een medewerker een complete order heeft gepickt.
-
-- **Parameters:** `order_id`
-- **Controles:**
-  - De status is `picking`.
-  - Voor elke orderregel ligt genoeg voorraad.
-- **Effect:**
-  - Per orderregel boekt de WMS `qty` af van voorraad op een locatie van type `pick`. Ligt daar niet genoeg, dan van type `rack`. Neem de locaties in volgorde van `location_id`.
-  - Daarna wordt de status `done`.
-
----
-
-## 3. Uitlezen (GET) die de game nodig heeft
-
-De standaard-GET-endpoints op de entiteiten volstaan. De game gebruikt:
-
-- `location`: alle locaties, om het magazijn op te bouwen.
-- `stock`: alle voorraad, om pallets in de stellingen te tekenen.
-- `order` met filter `status = open` of `status = picking`, plus de bijbehorende `order_line`.
-
-**Specifiek:** de API moet kunnen **filteren** op `status`.
+- `location` en `item`, alle records: bij het aanmelden en daarna elke 30 seconden.
+- `customer_order?te_picken=true` met alle `order_line`, elke 3 seconden: de orders waar nog aan
+  gewerkt moet worden.
+- `stock`, elke 3 seconden: om in het menu te tonen wat de WMS heeft. De hal neemt die voorraad
+  alleen over bij de allereerste start en bij de knop 'Hal resetten naar de WMS-voorraad' (dan
+  samen met `pallet`, zie 07). Daarna houdt de hal zijn eigen voorraad bij (zie 06).
+- De leveringen (`truck_visit`, `goods_receipt`), elke 3 seconden: zie 10.
 
 ---
 
 ## 4. Seed-data
 
-Deze data moet precies overeenkomen met de layout in de game.
+Deze data moet overeenkomen met de indeling van de hal.
 
-### 4.1 Locaties (62 in totaal)
+- **Locaties (366):** 30 docklocaties (zie 05) en 336 stellinglocaties (zie 11).
+- **Artikelen:** zie 03.
+- **Beginvoorraad:** ongeveer 70 voorraadregels, willekeurig verdeeld over de stellinglocaties, 5 tot
+  50 stuks per regel, elk op een eigen pallet (`PAL-0001` t/m `PAL-0070`, zie 07).
 
-**Docks:** type `dock`, `level` = 0.
-
-| location_id | pos_x | pos_y |
-|---|---|---|
-| `DOCK-01` | -18 | -3 |
-| `DOCK-02` | -18 | 3 |
-
-**Stellinglocaties:**
-
-- Er zijn 4 rijen × 5 secties × 3 niveaus = 60 locaties.
-- `location_id` = `R{rij}-{sectie:2 cijfers}-{niveau}`, bijvoorbeeld `R2-04-3`.
-- `pos_x` hangt af van de sectie:
-
-  | Sectie | 01 | 02 | 03 | 04 | 05 |
-  |---|---|---|---|---|---|
-  | pos_x | -4 | 0 | 4 | 8 | 12 |
-
-- `pos_y` hangt af van de rij:
-
-  | Rij | 1 | 2 | 3 | 4 |
-  |---|---|---|---|---|
-  | pos_y | -9 | -4 | 1 | 6 |
-
-- `level` is 1, 2 of 3.
-- **Type:** niveau 1 is `pick` (de picklocatie), niveau 2 en 3 zijn `rack` (bulk).
-
-### 4.2 Artikelen
-
-| sku | description |
-|---|---|
-| `SKU-001` | Doos schroeven |
-| `SKU-002` | Pallet tegels |
-| `SKU-003` | Rol isolatie |
-| `SKU-004` | Kist gereedschap |
-| `SKU-005` | Zak cement |
-
-### 4.3 Beginvoorraad
-
-Leg op ongeveer 25 willekeurige stellinglocaties een voorraad van tussen de 5 en 50 stuks van een willekeurig artikel.
+De game vergelijkt zijn locaties met die van de WMS en meldt de verschillen in het WMS-paneel
+(toets K): ontbrekende locaties zijn daar als CSV te downloaden.
 
 ---
 
-## 5. Toegang en techniek
+## 5. Toegang
 
-- **API-gebruiker:** maak één gebruiker voor de game, met lees- en schrijfrechten op alle bovenstaande entiteiten en acties.
-- **CORS en inloggen:** zie [instructie 02](02-toegang-basic-auth-cors.md). De game roept de WMS rechtstreeks vanuit de browser aan.
-- **Terug te melden:**
-  1. de basis-URL van de API;
-  2. hoe je inlogt (Basic auth, token of OAuth);
-  3. een voorbeeld-URL van één GET en één actie-aanroep.
+Zie 02: de game meldt zich aan met de API-sleutel van een API-client en roept de WMS rechtstreeks
+vanuit de browser aan.

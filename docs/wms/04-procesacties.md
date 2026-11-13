@@ -1,173 +1,108 @@
-# WMS-instructie 04 — Procesacties: aanmelden, scannen, picken per regel, klaarzetten, inladen en uitmelden
+# 04 — Procesacties: aanmelden, scannen, picken per regel, klaarzetten, inladen en uitmelden
 
 ## Context
 
-De game speelt nu het hele magazijnproces:
+De game speelt het hele magazijnproces:
 
-1. **Inbound:** een vrachtwagen komt aan op `DOCK-01`. De speler **meldt hem aan**, **lost** de pallets (elke pallet wordt gescand), **zet ze weg** in de stelling (locatie scannen) en **meldt de vrachtwagen uit**.
-2. **Outbound:** de speler **start een order** bij de orderterminal, **pickt** per regel op een locatie (locatie scannen), **zet de order klaar** in de uitgaande baan bij `DOCK-02`, **laadt** hem in een vrachtwagen en **meldt die vrachtwagen uit**.
+1. **Inbound:** een vrachtwagen komt aan op een van de tien docks. Hij wordt **aangemeld**, de
+   pallets worden **gelost** op de inslaglocatie van dat dock (`DOCK-NN-IN`), krijgen een sticker,
+   worden **weggezet** in de stelling en de vrachtwagen wordt **uitgemeld**.
+2. **Outbound:** de speler pakt een rolcontainer voor een order (**picken starten**), **pickt** per
+   regel op een locatie, **zet de order klaar** op een uitslaglocatie (`DOCK-NN-UIT`), **laadt** hem
+   in een vrachtwagen en **meldt die vrachtwagen uit**.
 
-Elke stap roept een WMS-actie aan. Instructie 01 dekt de ontvangst, het wegzetten, het aanmaken van orders en het bevestigen van een pick. Deze instructie voegt de rest toe.
-
-Alles uit 01 t/m 03 blijft gelden, behalve wat hieronder expliciet wordt gewijzigd.
+Elke stap wordt gedaan door een speler met een scanner of door een robot (zie 08); de aanroepen
+naar de WMS zijn dezelfde. Dit document beschrijft de entiteiten en acties voor vrachtwagens, het
+scanlog en het uitgaande proces. De basis staat in 01, pallets in 07, alle aanroepen in 09.
 
 ---
 
-## 1. Nieuwe entiteiten
+## 1. Entiteiten
 
 ### 1.1 Vrachtwagenbezoek (`truck_visit`)
 
-Eén regel per vrachtwagen die aan een dock staat.
+Eén record per bezoek van een vrachtwagen aan een dock. Aanmelden = een record aanmaken.
 
-| Veld | Type | Verplicht | Toelichting |
-|---|---|---|---|
-| `truck_id` | tekst (PK), max 20 | ja | De game stuurt het nummer mee, bijvoorbeeld `IN-001` of `UIT-003` |
-| `direction` | domein `truck_direction` | ja | `in` of `out` |
-| `dock_id` | FK → `location` | ja | Moet van type `dock` zijn |
-| `status` | domein `truck_status` | ja | `checked_in` of `checked_out` |
-| `checked_in_at` | datum/tijd | ja | Moment van aanmelden |
-| `checked_out_at` | datum/tijd | nee | Moment van uitmelden |
+| Veld | Type | Toelichting |
+|---|---|---|
+| `truck_id` | tekst, max 20 | Het nummer van de wagen, bijvoorbeeld `IN-001` of `UIT-003` |
+| `direction` | domein `truck_direction` | `in` of `out` |
+| `dock_id` | verwijzing naar `location` | De dockdeur zelf (`DOCK-NN`), type `dock` |
+| `status` | domein `truck_status` | `checked_in` of `checked_out` |
 
-**Specifiek:** de nummers beginnen elke spelsessie opnieuw bij `001`. Bestaat het `truck_id` al met status `checked_out`, dan **overschrijft** `truck_check_in` die regel (nieuw bezoek). Een historie per bezoek is nu nog niet nodig.
+- De game nummert zijn vrachtwagens elke spelsessie opnieuw vanaf `IN-001` / `UIT-001`. Meldt de WMS
+  `Vrachtwagen … is al aangemeld.`, dan gaat de game verder met het bezoek dat er al staat.
+- De WMS kan ook zelf inkomende vrachtwagens aanmelden (leveringen, zie 10).
 
 ### 1.2 Scanlog (`scan_log`)
 
-Elke scan in de game, ook een foute. Dit is alleen een logboek. Er gebeurt niets met de voorraad.
+Elke scan in de game, ook een foute. Dit is alleen een logboek: er gebeurt niets met de voorraad, de
+speler wacht er niet op en een fout houdt niets tegen.
 
-| Veld | Type | Verplicht | Toelichting |
-|---|---|---|---|
-| `scan_id` | geheel getal (PK, identity) | ja | |
-| `scanned_at` | datum/tijd | ja | Standaard het moment van aanmaken |
-| `kind` | domein `scan_kind` | ja | `truck`, `pallet`, `location` of `order` |
-| `barcode` | tekst, max 40 | ja | Wat er gescand is: een truck-, pallet-, locatie- of ordernummer |
-| `ok` | ja/nee | ja | Nee = verkeerde locatie gescand, of de scan werd geweigerd |
-| `location_id` | tekst, max 20 | nee | Waar de scan gebeurde. Gebruik **geen** FK. |
+| Veld | Type | Toelichting |
+|---|---|---|
+| `kind` | domein `scan_kind` | `truck`, `pallet`, `location` of `order` |
+| `barcode` | tekst, max 40 | Wat er gescand is: een truck-, pallet-, locatie- of ordernummer |
+| `ok` | ja/nee | Nee = verkeerde locatie gescand, of de handeling werd geweigerd |
+| `location_id` | tekst, max 20 | Waar de scan gebeurde, als tekst (geen verwijzing) |
 
-### 1.3 Nieuwe domeinen
-
-| Domein | Waarden |
-|---|---|
-| `truck_direction` | `in`, `out` |
-| `truck_status` | `checked_in`, `checked_out` |
-| `scan_kind` | `truck`, `pallet`, `location`, `order` |
-
----
-
-## 2. Wijzigingen op bestaande entiteiten
-
-### 2.1 `order`
-
-**Domein `status`:** vul het aan tot de volgende waarden, in deze volgorde:
+### 1.3 Order (`customer_order`): statussen
 
 | Waarde | Betekenis | Gezet door |
 |---|---|---|
-| `open` | Aangemaakt, nog niet gestart | `create_order` |
-| `picking` | Medewerker is aan het picken | `start_picking` |
+| `open` | Aangemaakt, nog niet gestart | `POST customer_order` |
+| `picking` | Er wordt gepickt | `start_picking` |
 | `done` | Compleet gepickt | `confirm_pick` |
-| `staged` | Klaargezet in de uitgaande baan | `stage_order` (nieuw) |
-| `loaded` | In een vrachtwagen geladen | `load_order` (nieuw) |
-| `shipped` | Vrachtwagen is vertrokken | `truck_check_out` (nieuw) |
+| `staged` | Klaargezet op een uitslaglocatie | `stage_order` |
+| `loaded` | In een vrachtwagen geladen | `load_order` |
+| `shipped` | Vrachtwagen is vertrokken | `truck_check_out` |
 
-**Nieuwe velden:**
-
-| Veld | Type | Verplicht | Toelichting |
-|---|---|---|---|
-| `staged_dock_id` | FK → `location` | nee | Gezet door `stage_order` |
-| `truck_id` | FK → `truck_visit` | nee | Gezet door `load_order` |
-
-### 2.2 `order_line`
-
-| Veld | Type | Verplicht | Toelichting |
-|---|---|---|---|
-| `picked_qty` | geheel getal | ja | Standaard 0. Wordt opgehoogd door `confirm_pick_line`. |
+Velden daarbij: `staged_dock_id` (gezet door `stage_order`) en `truck_id` (gezet door `load_order`).
+Op `order_line` houdt `picked_qty` bij wat er per regel is gepickt.
 
 ---
 
-## 3. Nieuwe acties
+## 2. Acties
 
-Alle acties geven bij een fout een duidelijke foutmelding terug. De game toont die aan de speler.
+Acties op een record: `POST {entiteit}/<id>/_flows/{actie}` (zie 02). De meldingen komen uit de
+WMS; de game toont ze letterlijk.
 
-### 3.1 `truck_check_in`: vrachtwagen aanmelden
+| Stap in de hal | Aanroep | Geweigerd als |
+|---|---|---|
+| Vrachtwagen aanmelden | `POST truck_visit {truck_id, direction, dock_id}` | De wagen al is aangemeld; het dock bezet is; `dock_id` geen dock is |
+| Eén greep uit een locatie | `order_line/<id>/_flows/confirm_pick_line`, invoer `pick_qty`, `location_id` | De order niet op `picking` staat; de regel niet genoeg open heeft; er op de locatie te weinig ligt |
+| Order klaarzetten | `customer_order/<id>/_flows/stage_order`, invoer `dock_id` (`DOCK-NN-UIT`) | De order niet compleet gepickt is; `dock_id` geen docklocatie is |
+| Order inladen | `customer_order/<id>/_flows/load_order`, invoer `truck_visit_id` | De order niet `done` of `staged` is; het bezoek geen aangemelde uitgaande vrachtwagen is |
+| Vrachtwagen uitmelden | `truck_visit/<id>/_flows/truck_check_out` | De wagen niet is aangemeld; een uitgaande wagen geen geladen orders heeft |
+| Scan vastleggen | `POST scan_log {kind, barcode, ok, location_id?}` | Nooit (geen controles) |
 
-- **Parameters:** `truck_id`, `direction` (`in`/`out`), `dock_id`
-- **Controles:**
-  - `dock_id` is van type `dock`.
-  - Er staat geen andere vrachtwagen met status `checked_in` op dat dock.
-- **Effect:** de actie maakt een `truck_visit` met status `checked_in` (of overschrijft die, zie 1.1).
+Toelichting:
 
-### 3.2 `truck_check_out`: vrachtwagen uitmelden
-
-- **Parameters:** `truck_id`, `order_ids` (lijst, mag leeg zijn: dit is ter controle, de WMS gebruikt zijn eigen koppeling via `order.truck_id`)
-- **Controles:**
-  - De status is `checked_in`.
-  - Bij `direction` = `out`: er hangt minstens één order aan met status `loaded`.
-- **Effect:**
-  - De status wordt `checked_out` en `checked_out_at` wordt gezet.
-  - Bij `out`: alle orders met deze `truck_id` en status `loaded` krijgen status `shipped`.
-
-### 3.3 `register_scan`: scan vastleggen
-
-- **Parameters:** `kind`, `barcode`, `ok`, `location_id` (optioneel)
-- **Effect:** de actie maakt een regel in `scan_log`. Er zijn geen controles.
-
-### 3.4 `confirm_pick_line`: één pick bevestigen
-
-De game roept deze actie aan zodra de speler op een locatie heeft gepickt. Eén orderregel kan over meer locaties verdeeld zijn. Dan komt de actie meer keren voor dezelfde `sku`.
-
-- **Parameters:** `order_id`, `sku`, `qty`, `location_id`
-- **Controles:**
-  - De orderstatus is `picking`.
-  - De order heeft een regel met deze `sku` waarvoor `qty − picked_qty` ≥ de opgegeven `qty`.
-  - Op `location_id` ligt minstens `qty` van deze `sku`.
-- **Effect:**
-  - De voorraad op `location_id` gaat omlaag met `qty`. Een voorraadregel die op 0 uitkomt, wordt verwijderd.
-  - `picked_qty` van de orderregel gaat omhoog met `qty`.
-
-### 3.5 `stage_order`: order klaarzetten
-
-- **Parameters:** `order_id`, `dock_id`
-- **Controles:**
-  - De status is `done`.
-  - `dock_id` is van type `dock`.
-- **Effect:** de status wordt `staged` en `staged_dock_id` wordt gezet.
-
-### 3.6 `load_order`: order inladen
-
-- **Parameters:** `order_id`, `truck_id`, `dock_id`
-- **Controles:**
-  - De orderstatus is `done` of `staged`. De speler mag een order ook direct inladen zonder hem eerst klaar te zetten.
-  - De `truck_visit` heeft status `checked_in` en `direction` = `out`.
-- **Effect:** de status wordt `loaded` en `truck_id` wordt gezet.
+- **Picken per regel.** `confirm_pick_line` boekt `pick_qty` af van de gescande locatie en hoogt
+  `picked_qty` op. Eén orderregel kan over meer locaties verdeeld zijn; staat een artikel op meer
+  regels van de order, dan verdeelt de game de greep over die regels.
+- **Order afronden.** Als alle regels fysiek gepickt zijn roept de game `confirm_pick` aan (01). Die
+  boekt alleen nog af wat niet per regel is gepickt.
+- **Inladen zonder klaarzetten** mag: `load_order` werkt ook vanuit `done`.
+- **Uitmelden** van een uitgaande wagen zet alle orders met status `loaded` van dat bezoek op
+  `shipped`.
 
 ---
 
-## 4. Wijziging op bestaande actie `confirm_pick` (uit 01, 2.5)
+## 3. Uitlezen
 
-Omdat de voorraad nu al per regel wordt afgeboekt via `confirm_pick_line`, boekt `confirm_pick` alleen nog het **restant** af:
-
-- Per orderregel boekt de actie `qty − picked_qty` af, met de regel uit 01 (eerst `pick`, dan `rack`, op volgorde van `location_id`). Is het restant 0, dan wordt er niets afgeboekt.
-- Daarna wordt `picked_qty` = `qty` en wordt de status `done`.
-
-Zo blijft de actie werken voor clients die `confirm_pick_line` niet gebruiken.
-
----
-
-## 5. Uitlezen (GET)
-
-- **Wijziging:** de game haalt open orders voortaan op met `status eq 'open' or status eq 'picking'`. Het oude filter `status ne 'done'` zou nu ook orders met de status `staged`, `loaded` en `shipped` teruggeven.
-- `truck_visit` en `scan_log` krijgen de standaard-GET. De game leest ze nu nog niet. Ze zijn bedoeld om in de WMS-app te bekijken.
+- Orders waar nog aan gewerkt moet worden: `GET customer_order?te_picken=true` (status `open` of
+  `picking` in één aanroep; filters met `or` kent de API niet).
+- `truck_visit?truck_id=…` om na een herstart van de game het lopende bezoek terug te vinden, en
+  `truck_visit?status=checked_in` voor de leveringen (10).
+- `scan_log` leest de game niet; het is bedoeld om in de WMS-app te bekijken.
 
 ---
 
-## 6. Nog niet bouwen
+## 4. Open punten
 
-- **Een entiteit voor pallets.** De game stuurt bij `register_goods_received` en `confirm_putaway` later een `pallet_id` mee, bijvoorbeeld `PAL-K3F9-0001`. Accepteer die parameter als optioneel en negeer hem voor nu.
-- Een historie van vrachtwagenbezoeken (zie 1.1).
-
----
-
-## Terug te melden
-
-- Bevestiging van de nieuwe entiteiten, domeinen en acties uit hoofdstuk 1 t/m 3.
-- Bevestiging dat `confirm_pick` het restant afboekt (hoofdstuk 4).
-- Of het filter met `or` werkt (hoofdstuk 5). Werkt het niet, meld dan de syntax die wel werkt.
+- **Inkomende vrachtwagen uitmelden.** `truck_check_out` moet een inkomend bezoek ook zonder geladen
+  orders kunnen afmelden (zie 10).
+- **Uitgaande vrachtwagen zonder orders.** `truck_check_out` weigert die
+  (`… heeft geen geladen orders.`); in de hal kan de speler hem dan niet uitmelden.
+- Een historie per vrachtwagen over meer bezoeken heen gebruikt de game niet.

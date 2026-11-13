@@ -1,117 +1,100 @@
-# 08 — Geek+-robots: robotopdrachten uit de WMS en de terugmelding
+# 08 — Robots in de hal en robotopdrachten uit de WMS
 
-In de hal rijden nu drie Geek+-robots (`GKP-01`, `GKP-02`, `GKP-03`). Het zijn lage robots die onder
-een pallet rijden, hem optillen en naar een andere locatie brengen. De WMS stuurt ze aan met
-**robotopdrachten**; de game voert die uit en meldt elke stap terug.
+In de hal rijden robots die pallets lossen, tellen, wegzetten en aanvullen, en die orders picken. De
+bedoeling is dat de WMS ze aanstuurt met **robotopdrachten** en dat de game elke stap terugmeldt.
 
-De rolverdeling:
+**Stand:** de entiteiten `robot` en `robot_task` en de drie acties uit hoofdstuk 3 t/m 5 bestaan nog
+niet in de WMS. Tot dat zo is bedenkt de game de opdrachten zelf (hoofdstuk 2). De hoofdstukken 3
+t/m 6 zijn het voorstel voor wat de WMS kan bouwen; de game is er al op voorbereid.
+
+De rolverdeling in dat voorstel:
 
 - **De WMS** beslist welke pallet waarheen moet en maakt daar een robotopdracht van.
-- **De game** speelt de vlootsturing (de rol van het Geek+ RMS) en de robots zelf: hij kiest een vrije
-  robot, laat die rijden en meldt terug dat de opdracht is gestart, afgerond of mislukt.
-
-Alles uit 01 t/m 07 blijft gelden.
+- **De game** speelt de vlootsturing en de robots zelf: hij kiest een vrije robot, laat die rijden en
+  meldt terug dat de opdracht is gestart, afgerond of mislukt.
 
 ---
 
-## 1. Wat de game nu doet
+## 1. De robots
 
-De WMS geeft nog geen robotopdrachten uit. Tot dat zo is speelt de game die rol zelf na, zodat de
-robots al werken:
-
-| Wat er gebeurt | Aanroep naar de WMS | Nu al aangeroepen |
+| Soort | Nummers | Wat hij doet |
 |---|---|---|
-| Een pallet met sticker staat op een inslaglocatie (`DOCK-xx-IN`): de game bedenkt zelf een opdracht naar een vrije vloerlocatie | geen | n.v.t. |
-| Een robot begint aan de opdracht | `start_robot_task` | nog niet |
-| De robot staat met de pallet op de doellocatie | `confirm_putaway` (`sku`, `qty`, van de inslaglocatie naar de stellinglocatie) | ja |
-| De opdracht mislukt | `fail_robot_task` | nog niet |
+| Tilrobot | `GKP-01`, `GKP-03`, `GKP-05`, `GKP-07` | Rijdt onder een pallet en tilt hem op. Komt alleen bij de vloer: de vrachtwagen aan het dock, de inslaglocaties en niveau 1 van de stellingen. |
+| Robot-heftruck | `GKF-02`, `GKF-04`, `GKF-06`, `GKF-08` | Onbemande stapelaar met een mast. Pakt een pallet vanuit het pad en komt bij alle niveaus. |
+| Pickrobot | `PCK-01`, `PCK-02` | Pickt een order zonder mens: pakt dozen van een pallet op elk niveau en zet de order klaar op een uitslaglocatie. |
+| Voorraadteller | `INV-01` | Rijdt door de paden en scant de palletstickers op alle niveaus. |
+| Telrobot | `TEL-01` | Telt elke pallet die op een inslaglocatie is neergezet en plakt er zo nodig een sticker op. |
 
-Zodra de WMS de entiteiten en acties hieronder heeft, vervalt het naspelen: de game haalt de
-opdrachten dan uit de WMS en roept `complete_robot_task` aan in plaats van `confirm_putaway`.
+- Elk pad tussen de stellingen heeft zijn eigen til- of heftruckrobot; het nummer is dat van het pad
+  (zie 11). Er rijdt één robot tegelijk in een pad.
+- Een stelling is alleen vanaf zijn eigen pad te bereiken.
+- Robots pakken alleen pallets **met sticker** op (behalve bij het lossen uit de vrachtwagen).
+- De speler kan de robots uitzetten in het menu van de game (onderdeel Robots); dan doet hij het
+  werk met de hand.
 
-**Wat een robot kan:**
+## 2. Wat de game nu doet (zonder robotopdrachten uit de WMS)
 
-- Ophalen van een **inslaglocatie** (`DOCK-xx-IN`) of van een stellinglocatie op **niveau 1** (de vloer).
-- Wegzetten op een stellinglocatie op **niveau 1**. Hoger komt een robot niet: dat blijft werk voor de
-  heftruck.
-- Alleen pallets **met sticker**. Een pallet uit een vrachtwagen moet dus eerst door een medewerker
-  gelost en gestickerd zijn (`register_pallet`, zie 07).
-- Eén artikel per locatie, hooguit drie pallets per locatie (zie 07).
+De game bedenkt de opdrachten zelf en roept voor het boeken de bestaande acties aan:
+
+| Wat er gebeurt | Aanroep naar de WMS |
+|---|---|
+| Een pallet staat in een aangemelde vrachtwagen: een tilrobot lost hem naar de inslaglocatie van dat dock, zolang daar plek is | `POST scan_log` (zie 10); bij een vrachtwagen van de game zelf `POST goods_receipt` |
+| De telrobot telt de pallet op de inslaglocatie; zonder sticker plakt hij die | `POST scan_log`; `register_pallet` als er nog geen sticker op zat |
+| Een getelde pallet gaat naar een vrije stellinglocatie: zo dicht mogelijk bij het dock, eerst de vloer, bij voorkeur bij hetzelfde artikel | `POST pallet_move` op het moment dat de robot met de pallet op de doellocatie staat |
+| Een lege vloerlocatie (niveau 1) met voorraad erboven: een robot-heftruck haalt die pallet naar beneden | `POST pallet_move` |
+| Een pickrobot neemt een open order | `start_picking`, per greep `confirm_pick_line`, dan `confirm_pick` en `stage_order` |
+| De voorraadteller scant een pallet die is verzet en nog niet geboekt | `POST pallet_move` (boekt hem op de plek waar hij staat) |
+
+- **Eerst de WMS, dan fysiek.** De robot zet een pallet pas neer als de WMS de verplaatsing heeft
+  geaccepteerd. Weigert de WMS, dan rijdt de robot met de pallet naar zijn laadstation en probeert de
+  game een andere locatie.
+- De game kiest alleen locaties die niet geblokkeerd zijn, waar geen ander artikel staat en waar nog
+  een palletplek vrij is.
 
 ---
 
-## 2. Entiteit `robot`
+## 3. Voorstel: entiteit `robot`
 
-De vloot. De game leest deze lijst nu nog niet; hij is er om in de WMS-app te zien wat de robots doen.
+De vloot, om in de WMS-app te zien wat de robots doen. De game hoeft deze lijst niet te lezen.
 
-| Veld | Type | Verplicht | Toelichting |
-|---|---|---|---|
-| `robot_id` | tekst (PK), max 20 | ja | `GKP-01`, `GKP-02`, `GKP-03` |
-| `description` | tekst | nee | Bijvoorbeeld `Geek+ palletrobot` |
-| `status` | domein `robot_status` | ja | `idle` of `busy`. Standaard `idle`. |
-| `task_id` | FK → `robot_task` | nee | De opdracht waar de robot mee bezig is |
-
-**Seed-data:** de drie robots hierboven, status `idle`.
-
-## 3. Entiteit `robot_task`
-
-Eén regel per opdracht: breng deze pallet van de ene locatie naar de andere.
-
-| Veld | Type | Verplicht | Toelichting |
-|---|---|---|---|
-| `task_id` | tekst (PK), max 20 | ja | Door de WMS uitgegeven, bijvoorbeeld `RT-000123` |
-| `pallet_id` | tekst, max 40 | ja | Het nummer op de palletsticker (FK → `pallet` zodra die entiteit uit 07 er is) |
-| `sku` | FK → `item` | ja | Wat er op de pallet staat |
-| `qty` | geheel getal > 0 | ja | Aantal stuks op de pallet |
-| `from_location_id` | FK → `location` | ja | Waar de pallet staat |
-| `to_location_id` | FK → `location` | ja | Waar hij heen moet |
-| `status` | domein `robot_task_status` | ja | Zie hieronder. Standaard `open`. |
-| `robot_id` | FK → `robot` | nee | Gezet door `start_robot_task` |
-| `fail_reason` | tekst | nee | Gezet door `fail_robot_task` |
-| `created_at`, `started_at`, `finished_at` | datum/tijd | nee | |
-
-**Domein `robot_task_status`:**
-
-| Waarde | Betekenis | Gezet door |
+| Veld | Type | Toelichting |
 |---|---|---|
-| `open` | Wacht op een robot | de WMS, bij het aanmaken |
-| `in_progress` | Een robot is ermee bezig | `start_robot_task` |
-| `done` | Pallet staat op de doellocatie | `complete_robot_task` |
-| `failed` | Niet gelukt | `fail_robot_task` |
+| `robot_id` | tekst, uniek, max 20 | De nummers uit hoofdstuk 1 |
+| `description` | tekst | Bijvoorbeeld `Tilrobot pad 1` |
+| `status` | domein `robot_status` | `idle` of `busy` |
+| `task_id` | verwijzing naar `robot_task` | De opdracht waar de robot mee bezig is |
 
-**Domein `robot_status`:** `idle`, `busy`.
+## 4. Voorstel: entiteit `robot_task`
 
----
+Eén record per opdracht: breng deze pallet van de ene locatie naar de andere.
 
-## 4. Opdrachten aanmaken (in de WMS)
-
-Hoe de WMS opdrachten aanmaakt is aan de WMS. Twee manieren die bij de game passen:
-
-1. **Automatisch na het stickeren.** Zodra `register_pallet` een pallet op een inslaglocatie vastlegt,
-   maakt de WMS een `robot_task` naar een locatie die hij zelf kiest.
-2. **Met de hand.** Een taak of scherm in de WMS-app waarmee een gebruiker een opdracht aanmaakt.
+| Veld | Type | Toelichting |
+|---|---|---|
+| `task_id` | tekst, uniek, max 20 | Door de WMS uitgegeven, bijvoorbeeld `RT-000123` |
+| `pallet_id` | tekst | Het nummer op de palletsticker |
+| `from_location_id` | verwijzing naar `location` | Waar de pallet staat |
+| `to_location_id` | verwijzing naar `location` | Waar hij heen moet |
+| `status` | domein `robot_task_status` | `open` → `in_progress` → `done` of `failed` |
+| `robot_id` | verwijzing naar `robot` | Gezet door `start_robot_task` |
+| `fail_reason` | tekst | Gezet door `fail_robot_task` |
 
 Controles bij het aanmaken:
 
-- `from_location_id` is van type `dock` (een inslaglocatie) of een stellinglocatie met `level` = 1.
-- `to_location_id` is een stellinglocatie met `level` = 1 en is niet geblokkeerd.
-- Op `to_location_id` ligt geen ander artikel, en er staan (samen met de opdrachten die er al naartoe
-  onderweg zijn) minder dan drie pallets.
+- `from_location_id` is een docklocatie of een stellinglocatie waar de pallet staat.
+- `to_location_id` is een stellinglocatie die niet geblokkeerd is, waar geen ander artikel ligt en
+  waar (samen met de opdrachten die er al naartoe onderweg zijn) minder dan drie pallets staan.
 - Er is geen andere opdracht met status `open` of `in_progress` voor dezelfde `pallet_id`.
 
----
+Een opdracht van of naar niveau 2 of 3 gaat naar een robot-heftruck; werk op de vloer gaat bij
+voorkeur naar een tilrobot.
 
-## 5. Acties voor de terugmelding
-
-Alle acties geven bij een fout een duidelijke foutmelding terug. De game toont die in het API-log en
-aan de speler.
+## 5. Voorstel: acties voor de terugmelding
 
 ### 5.1 `start_robot_task`: een robot begint
 
-- **Parameters:** `task_id`, `robot_id`
+- **Invoer:** `task_id`, `robot_id`
 - **Controles:** de opdracht heeft status `open`; de robot heeft status `idle`.
-- **Effect:** de opdracht wordt `in_progress` met `robot_id` en `started_at`; de robot wordt `busy` met
-  `task_id`.
+- **Effect:** de opdracht wordt `in_progress` met `robot_id`; de robot wordt `busy`.
 - Weigert de WMS, dan rijdt de robot niet en laat de game de opdracht liggen.
 
 ### 5.2 `complete_robot_task`: de pallet staat op de doellocatie
@@ -119,63 +102,53 @@ aan de speler.
 De game roept deze actie aan als de robot met de pallet **op** de doellocatie staat. Pas als de WMS
 akkoord is, zet de robot de pallet neer.
 
-- **Parameters:** `task_id`, `robot_id`
-- **Controles:** de opdracht heeft status `in_progress` en hoort bij deze robot. Verder dezelfde
-  controles als `confirm_putaway` (voorraad aanwezig op de van-locatie, doellocatie niet geblokkeerd).
-- **Effect:**
-  - De voorraad (`sku`, `qty` van de opdracht) gaat van `from_location_id` naar `to_location_id`,
-    net als bij `confirm_putaway`. Bestaat de entiteit `pallet`, dan krijgt de pallet de nieuwe
-    `location_id`.
-  - De opdracht wordt `done` met `finished_at`; de robot wordt `idle` en `task_id` leeg.
+- **Invoer:** `task_id`, `robot_id`
+- **Controles:** de opdracht heeft status `in_progress` en hoort bij deze robot; verder dezelfde
+  controles als `pallet_move`.
+- **Effect:** de pallet verhuist naar `to_location_id`, net als bij `pallet_move`. De opdracht wordt
+  `done`; de robot wordt `idle`.
 - Weigert de WMS, dan zet de robot de pallet **niet** neer en volgt `fail_robot_task` met
   `pallet_on_robot` = ja.
 
 ### 5.3 `fail_robot_task`: de opdracht is mislukt
 
-- **Parameters:** `task_id`, `robot_id` (optioneel: leeg als er nog geen robot aan begonnen was),
-  `reason` (tekst), `pallet_on_robot` (ja/nee)
+- **Invoer:** `task_id`, `robot_id` (leeg als er nog geen robot aan begonnen was), `reason` (tekst),
+  `pallet_on_robot` (ja/nee)
 - **Controles:** de opdracht heeft status `open` of `in_progress`.
-- **Effect:** de opdracht wordt `failed` met `fail_reason` en `finished_at`; de robot (als die is
-  meegegeven) wordt `idle`. De voorraad verandert **niet**: de pallet staat in de WMS nog op
-  `from_location_id`.
+- **Effect:** de opdracht wordt `failed` met `fail_reason`; de robot wordt `idle`. De voorraad
+  verandert **niet**: de pallet staat in de WMS nog op `from_location_id`.
 - **`pallet_on_robot` = ja** betekent: de robot had de pallet al opgetild en wacht er nu mee bij zijn
-  laadstation. De WMS moet dan een **nieuwe opdracht** maken voor dezelfde `pallet_id`, met dezelfde
-  `from_location_id` en een andere `to_location_id`. De game geeft die opdracht aan de robot die de
-  pallet al draagt; die rijdt dan meteen naar de nieuwe doellocatie.
+  laadstation. De WMS maakt dan een **nieuwe opdracht** voor dezelfde `pallet_id`, met een andere
+  `to_location_id`. De game geeft die aan de robot die de pallet al draagt. Draagt een tilrobot de
+  pallet, dan moet de nieuwe locatie op niveau 1 liggen.
 
 Redenen die de game meldt, bijvoorbeeld:
 
 | Reden | Wanneer |
 |---|---|
 | `PAL-… staat niet (meer) op DOCK-01-IN` | Een medewerker heeft de pallet intussen zelf weggezet |
-| `R3-02-1 is vol` / `op R3-02-1 staat al een ander artikel` | De doellocatie is fysiek bezet |
-| `R3-02-2 ligt niet op de vloer: daar kan een robot niet bij` | Opdracht naar een hoger niveau |
+| `R3B-02-1 is vol` / `op R3B-02-1 staat al een ander artikel` | De doellocatie is fysiek bezet |
+| `R3B-02-2 ligt niet op de vloer: daar kan alleen een robot-heftruck bij` | Een tilrobot draagt de pallet en de opdracht gaat naar een hoger niveau |
+| `op de pallet op DOCK-01-IN zit nog geen sticker` | De pallet is nog niet geteld |
+| `PAL-… is verplaatst en nog niet geboekt` | De pallet staat fysiek ergens anders dan in de WMS |
 | `de WMS weigert: …` | `complete_robot_task` werd geweigerd |
 
----
+## 6. Voorstel: uitlezen
 
-## 6. Uitlezen (GET)
+De game haalt elke 2 seconden de opdrachten met status `open` op en heeft per opdracht nodig:
+`task_id`, `pallet_id`, `from_location_id`, `to_location_id`. Een opdracht die de WMS niet meer
+aanbiedt en nog geen robot heeft, vervalt.
 
-- De game haalt elke 2 seconden de opdrachten op met `status eq 'open'` en heeft per opdracht nodig:
-  `task_id`, `pallet_id`, `from_location_id`, `to_location_id`.
-- `robot` en de overige opdrachten krijgen de standaard-GET; de game leest ze nu nog niet.
+## 7. Nog niet gebouwd in de game
 
----
+- Positie en accustand van de robots doorgeven aan de WMS. De game houdt die bij en toont ze in zijn
+  eigen menu.
+- Opdrachten voor de pickrobots, de voorraadteller en de telrobot uit de WMS: die kiezen hun werk
+  zelf (open orders, de paden, de inslaglocaties).
+- Een opdracht annuleren terwijl een robot al rijdt.
 
-## 7. Nog niet bouwen
+## Terug te melden als dit wordt gebouwd
 
-- Positie en accustand van de robots in de WMS. De game houdt die bij en toont ze in zijn eigen menu
-  (onderdeel Robots).
-- Opdrachten voor rolcontainers of voor de hogere niveaus van de stellingen.
-- Opdrachten annuleren vanuit de WMS terwijl een robot al rijdt. Een opdracht met status `open` kan
-  wel worden verwijderd: de game biedt hem dan niet meer aan een robot aan.
-
----
-
-## Terug te melden
-
-- De namen van de entiteiten, velden en acties zoals ze in de WMS zijn gebouwd (als ze afwijken van
-  hierboven), en de URL's van de drie acties en van de lijst met open opdrachten.
-- Hoe de WMS opdrachten aanmaakt (hoofdstuk 4: automatisch, met de hand, of allebei).
-- Of `complete_robot_task` de voorraad zelf omboekt, of dat de game daarnaast `confirm_putaway` moet
-  blijven aanroepen.
+- De namen van de entiteiten, velden en acties zoals ze in de WMS zijn gebouwd, en hoe de game ze
+  aanroept (record aanmaken of actie op een record).
+- Hoe de WMS opdrachten aanmaakt: automatisch na het tellen of stickeren, met de hand, of allebei.
