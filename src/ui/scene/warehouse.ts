@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { AISLE_Z, DOCKS, DOCK_PITCH, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROW_FACE, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, WALKWAY_X, location, rackLocationId, rowBehind, rowName, type Bay } from '../../sim/layout';
+import { AISLE_Z, DOCKS, DOCK_PITCH, EMPTY_PALLETS, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROW_FACE, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, WALKWAY_X, emptyStackSizes, location, rackLocationId, rowBehind, rowName, type Bay } from '../../sim/layout';
 import { DOCK_RAMP, DRIVER_DOORS, TRUCK, dockScreen, jackBay } from '../../sim/drivers';
 import { createRooms, ROOM_DOORS } from './rooms';
 import { STYLE, onTop } from './style';
@@ -597,14 +597,42 @@ export function createWarehouse(scene: THREE.Scene) {
 
   // ---------- Vaste aankleding ----------
   const palletGeo = palletGeometry();
-  const stacks = new Batch();
+  // De stapels lege pallets langs de wand: zoveel als de sim er telt (setEmptyPallets), om de beurt op een stapel.
+  // Elke plek in een stapel heeft zijn eigen vaste scheefstand; de heftruck rijdt nooit over een stapelplek.
   const r0 = tex.rng(7);
-  for (const { x, z, count: n } of FURNITURE.palletStacks) {
-    solid(x, z, 1.2, 1.0, 0, n * PALLET_H);
-    for (let i = 0; i < n; i++) stacks.add(x + (r0() - 0.5) * 0.04, i * PALLET_H, z + (r0() - 0.5) * 0.04, 1, 1, 1, 0, (r0() - 0.5) * 0.06, 0);
+  const stackSpots = EMPTY_PALLETS.stacks.map(({ x, z }) => {
     colliders.push({ minX: x - 0.7, maxX: x + 0.7, minZ: z - 0.6, maxZ: z + 0.6 });
+    solid(x, z, 1.2, 1.0, 0, 0);
+    return {
+      solid: fixedSolids[fixedSolids.length - 1],
+      layers: Array.from({ length: EMPTY_PALLETS.perStack }, (_, i) =>
+        new THREE.Matrix4().compose(
+          new THREE.Vector3(x + (r0() - 0.5) * 0.04, i * PALLET_H, z + (r0() - 0.5) * 0.04),
+          new THREE.Quaternion().setFromEuler(new THREE.Euler(0, (r0() - 0.5) * 0.06, 0)),
+          new THREE.Vector3(1, 1, 1),
+        ),
+      ),
+    };
+  });
+  const emptyPallets = new THREE.InstancedMesh(palletGeo, woodMat, EMPTY_PALLETS.max);
+  emptyPallets.castShadow = emptyPallets.receiveShadow = true;
+  scene.add(emptyPallets);
+  let emptyCount = -1;
+  /** Tekent de stapels lege pallets: `count` pallets in totaal. */
+  function setEmptyPallets(count: number) {
+    count = Math.max(0, Math.min(EMPTY_PALLETS.max, Math.round(count)));
+    if (count === emptyCount) return;
+    emptyCount = count;
+    let k = 0;
+    emptyStackSizes(count).forEach((n, i) => {
+      for (let layer = 0; layer < n; layer++) emptyPallets.setMatrixAt(k++, stackSpots[i].layers[layer]);
+      stackSpots[i].solid.maxY = n * PALLET_H; // een lege plek is alleen nog vloer
+    });
+    emptyPallets.count = k;
+    emptyPallets.instanceMatrix.needsUpdate = true;
+    emptyPallets.computeBoundingSphere();
   }
-  scene.add(stacks.build(palletGeo, woodMat));
+  setEmptyPallets(EMPTY_PALLETS.start);
 
   // Paktafel met dozen
   const { x: TX, z: TZ } = FURNITURE.packingTable; // midden van de paktafel
@@ -1042,6 +1070,7 @@ export function createWarehouse(scene: THREE.Scene) {
     loadHeight,
     scanTargets,
     setPallets,
+    setEmptyPallets,
     setLoose,
     /** De pallets die nu in de stellingen staan. */
     rackPallets: () => rackPallets,

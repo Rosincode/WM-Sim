@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { START } from '../sim/layout';
 import { createRoom, type Peer } from '../sim/multiplayer/room';
 import type { SharedState } from '../sim/warehouse';
 import { CHAT_MAX, createChat } from './chat';
@@ -117,6 +118,21 @@ function validFork(f: unknown): f is ForkliftState {
 function validJack(k: unknown): k is JackState {
   return isObj(k) && [k.x, k.z, k.r].every((v) => typeof v === 'number' && Number.isFinite(v)) && (k.load === null || isObj(k.load));
 }
+/**
+ * Waar de heftruck en de pompwagen begonnen voordat de parkeerplaats er was (bij de pc). Een bewaarde hal van
+ * toen heeft ze daar nog staan zonder dat iemand ze er heeft neergezet.
+ */
+const OLD_STARTS = { forklift: { x: -12.6, z: 2.5 }, palletJack: { x: -13.4, z: 5.4 } };
+/**
+ * De stand van een voertuig uit een gedeelde of bewaarde hal. Staat het leeg en onaangeroerd op zijn oude
+ * startplek, dan hoort het in zijn eigen vak op de parkeerplaats; elke andere plek is een plek waar iemand het
+ * heeft neergezet, en daar blijft het.
+ */
+function parked<S extends { x: number; z: number; r: number; load: unknown }>(s: S, old: { x: number; z: number }, home: { x: number; z: number; r: number }): S {
+  const untouched = !s.load && Math.hypot(s.x - old.x, s.z - old.z) < 0.05 && Math.abs(Math.sin(s.r) - 1) < 0.01;
+  return untouched ? { ...s, x: home.x, z: home.z, r: home.r } : s;
+}
+
 function validState(m: unknown): m is StateMsg {
   if (!isObj(m) || typeof m.rev !== 'number' || typeof m.w !== 'string' || !validFork(m.fork) || !isObj(m.sim)) return false;
   const s = m.sim;
@@ -385,9 +401,9 @@ export function mountMultiplayer(o: Options) {
   function applyState(data: StateMsg, saved = false) {
     adopted = true;
     o.shared.apply(data.sim, saved);
-    if (!o.isDriving() && !remoteDriver()) o.forklift.applyState(data.fork);
+    if (!o.isDriving() && !remoteDriver()) o.forklift.applyState(parked(data.fork, OLD_STARTS.forklift, START.forklift));
     else o.forklift.applyLoose(data.fork.loose);
-    if (!o.jack.held() && !remoteHolder() && validJack(data.jack)) o.jack.applyState(data.jack);
+    if (!o.jack.held() && !remoteHolder() && validJack(data.jack)) o.jack.applyState(parked(data.jack, OLD_STARTS.palletJack, START.palletJack));
     rev = data.rev;
     writer = data.w;
     lastSimKey = simKey();

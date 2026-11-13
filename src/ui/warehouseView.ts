@@ -129,10 +129,6 @@ function truckView(direction: Truck['direction']) {
 }
 type TruckView = ReturnType<typeof truckView>;
 
-/** Aantal lege pallets op de stapel waar je een pallet voor een order pakt. */
-const STACK = 6;
-const STACK_STEP = 0.146;
-
 export function createWarehouseView(
   scene: THREE.Scene,
   player: THREE.Object3D,
@@ -168,24 +164,17 @@ export function createWarehouseView(
   pc.group.position.set(POINTS.terminal.x, 0, POINTS.terminal.z);
   root.add(pc.group);
 
-  // De stapel lege pallets: hier pak je er een voor de volgende order
+  // De stapels lege pallets tekent de hal zelf (setEmptyPallets in src/ui/scene/warehouse.ts); hier alleen het
+  // label boven de stapel waar je er een pakt voor de volgende order
   const stackAt = POINTS.orderPallets;
-  for (let i = 0; i < STACK; i++) {
-    const p = opts.orderLoad([], 'leeg');
-    p.position.set(stackAt.x, i * STACK_STEP, stackAt.z);
-    root.add(p);
-  }
 
-  // Waar je tegenaan loopt (en de heftruck tegenaan rijdt): het bureau en de stapel lege pallets
+  // Waar je tegenaan loopt (en de heftruck tegenaan rijdt): het bureau
   const box = (x: number, z: number, w: number, d: number, maxY: number): Solid => ({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2, minY: 0, maxY });
-  const fixedSolids: Solid[] = [
-    box(POINTS.terminal.x, POINTS.terminal.z, 1.5, 0.75, 1.0),
-    box(stackAt.x, stackAt.z, 1.2, 1.0, STACK * STACK_STEP),
-  ];
+  const fixedSolids: Solid[] = [box(POINTS.terminal.x, POINTS.terminal.z, 1.5, 0.75, 1.0)];
   const colliders: Collider[] = fixedSolids.map(({ minX, maxX, minZ, maxZ }) => ({ minX, maxX, minZ, maxZ }));
 
   const labels = { stack: label(3.4), truckIn: label(4.5), truckOut: label(4.5) };
-  labels.stack.sprite.position.set(stackAt.x, 2.2, stackAt.z);
+  labels.stack.sprite.position.set(stackAt.x, 2.7, stackAt.z);
   Object.values(labels).forEach((l) => root.add(l.sprite));
   // Baanlabels verschijnen alleen als er iets staat (of als je er een order moet klaarzetten).
   const laneLabels = DOCKS.map((d) => {
@@ -322,7 +311,7 @@ export function createWarehouseView(
     }
   }
 
-  /** Waar de speler tegenaan loopt: het bureau, de stapel lege pallets en elke pallet die op een baan staat. */
+  /** Waar de speler tegenaan loopt: het bureau en elke pallet die op een baan staat. */
   function solids(): Solid[] {
     const out = [...fixedSolids];
     DOCKS.forEach((d, i) => {

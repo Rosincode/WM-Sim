@@ -28,7 +28,7 @@
     "printer": { "dx": 0.56, "dz": 0.12 }
   },
 
-  "orderPallets": { "x": -11.3, "z": 5 },
+  "orderPallets": { "x": 22.6, "z": 34.8 },
 
   "rooms": { "depth": 7.5, "officeWidth": 6, "canteenWidth": 9 },
 
@@ -44,9 +44,9 @@
   "furniture": {
     "packingTable": { "x": 24.5, "z": -34.5 },
     "palletStacks": [
-      { "x": 23.5, "z": 34.8, "count": 9 },
-      { "x": 25.1, "z": 34.8, "count": 12 },
-      { "x": 26.7, "z": 34.8, "count": 6 }
+      { "x": 24.1, "z": 34.8, "count": 9 },
+      { "x": 25.6, "z": 34.8, "count": 12 },
+      { "x": 27.1, "z": 34.8, "count": 6 }
     ],
     "exitDoor": { "x": 20.5 },
     "fireExtinguishers": [

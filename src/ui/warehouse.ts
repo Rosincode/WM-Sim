@@ -330,6 +330,8 @@ export function mountWarehouse({
     carriedOrder: () => (sim.carry?.kind === 'order' ? sim.carry.orderId : null),
     /** De pallets in de stellingen, voor de hal. */
     pallets: () => sim.pallets(),
+    /** Hoeveel lege pallets er op de stapels langs de wand liggen, voor de hal. */
+    emptyPallets: () => sim.emptyPallets,
     /** Draagt de speler iets (een pallet of de pallet van een order)? Voor de houding van de figuur. */
     carrying: () => !!sim.carry,
     /** Wat de toets E op deze plek doet (enabled: false = kan nu niet), of null als hier niets te doen is. */
@@ -337,9 +339,9 @@ export function mountWarehouse({
     /** Wat de speler draagt, als tekst voor andere spelers ('' = niets); carryMesh bouwt er dezelfde pallet met dozen van. */
     carryLabel: view.carryLabel,
     carryMesh: view.carryMesh,
-    /** Waar de speler tegenaan loopt: het bureau, de stapel lege pallets, de pallets op de banen en de telrobot. */
+    /** Waar de speler tegenaan loopt: het bureau, de pallets op de banen en de telrobot. */
     solids: () => [...view.solids(), ...dockCounter.solids()],
-    /** Vaste obstakels voor de heftruck (die rijdt nergens onderdoor): het bureau en de stapel lege pallets. */
+    /** Vaste obstakels voor de heftruck (die rijdt nergens onderdoor): het bureau. */
     colliders: view.colliders,
     /** De telrobot bij de inslagbanen: waar hij staat en waar hij voor stopt. */
     counter: sim.counter,

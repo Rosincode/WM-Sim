@@ -2,7 +2,7 @@ import type { Item, Order } from '../shared/contract';
 import { publish, type Direction, type ProcessEvent, type ScanKind } from './events';
 import { articles, isBlocked, skus } from './catalog';
 import {
-  DOCKS, LANE_SLOTS, LOCATIONS, PER_PALLET, POINTS, SLOT_DX, currentLocationId,
+  DOCKS, EMPTY_PALLETS, LANE_SLOTS, LOCATIONS, PER_PALLET, POINTS, SLOT_DX, currentLocationId,
   dist, lanePoint, laneSlot, location, shelfLocations, type Dock, type Point,
 } from './layout';
 import { createCounter } from './counter';
@@ -133,6 +133,10 @@ export function createWarehouse({
   /** Pallets die iemand van een inslaglocatie heeft opgepakt: fysiek van het dock af, in de WMS staan ze er nog. */
   const transit = new Map<string, { fromId: string; sku: string; qty: number }>();
   const messages: Message[] = [];
+  /** Lege pallets op de stapels langs de wand: een order neemt er een af, een leeggeraakte pallet komt erbij. */
+  let empties = EMPTY_PALLETS.start;
+  /** true: palletize() loopt voor een overgenomen of opnieuw geladen wereld; dan raakt er niets echt leeg. */
+  let restoring = false;
   let carry: Carry = null;
   let clock = 0;
   let inTimer = 3;
@@ -220,6 +224,25 @@ export function createWarehouse({
     return !!l && l.type !== 'dock';
   };
 
+  // --- Lege pallets ---
+  /** Een order begint: er gaat een lege pallet van de stapel. Is de stapel op, dan is er net een nieuwe partij gebracht. */
+  function takeEmpty() {
+    if (empties <= 0) {
+      empties = EMPTY_PALLETS.start;
+      say('De lege pallets waren op: er is een nieuwe partij bij de wand gezet.');
+    }
+    empties--;
+  }
+  /** Er komt een lege pallet op de stapel; wat er niet meer bij past wordt afgevoerd. */
+  const returnEmpty = () => (empties = Math.min(EMPTY_PALLETS.max, empties + 1));
+  /** Een pallet in een stelling is leeg geraakt (een pick, een correctie): hij gaat naar de stapel lege pallets. */
+  function emptied(p: StoredPallet) {
+    racked.delete(p.id);
+    if (restoring) return;
+    returnEmpty();
+    say(`De pallet op ${p.locationId} is leeg: hij ligt nu bij de lege pallets.`);
+  }
+
   // --- Pallets in de stellingen ---
   const palletsAt = (loc: string) => [...racked.values()].filter((p) => p.locationId === loc);
   const freeSlot = (loc: string) => {
@@ -230,7 +253,8 @@ export function createWarehouse({
   /**
    * Houdt de pallets gelijk met de voorraad per locatie. De WMS kent (nog) geen pallets, alleen aantallen:
    * komt er voorraad bij, dan vult die een aangebroken pallet aan of komt er een pallet met een nieuw nummer;
-   * gaat er voorraad af (een pick, een correctie in de WMS), dan wordt de buitenste pallet kleiner of verdwijnt.
+   * gaat er voorraad af (een pick, een correctie in de WMS), dan wordt de buitenste pallet kleiner; raakt hij leeg,
+   * dan gaat hij naar de stapel lege pallets.
    * Een pallet die in zijn geheel wordt verplaatst houdt zijn nummer.
    */
   function palletize() {
@@ -248,7 +272,7 @@ export function createWarehouse({
     for (const loc of new Set([...want.keys(), ...have.keys()])) {
       const lines = want.get(loc) ?? new Map<string, number>();
       let here = (have.get(loc) ?? []).sort((a, b) => a.slot - b.slot);
-      for (const p of here) if (!lines.has(p.sku)) racked.delete(p.id);
+      for (const p of here) if (!lines.has(p.sku)) emptied(p);
       here = here.filter((p) => lines.has(p.sku));
       for (const [sku, qty] of lines) {
         const mine = here.filter((p) => p.sku === sku);
@@ -262,7 +286,7 @@ export function createWarehouse({
             p.qty -= take;
             diff += take;
             if (p.qty > 0) continue;
-            racked.delete(p.id);
+            emptied(p);
             here = here.filter((x) => x !== p);
           }
         } else if (diff > 0) {
@@ -442,6 +466,7 @@ export function createWarehouse({
     if (!now || now.status !== 'open' || carry) return refused(`${o.id} is al door iemand anders gepakt.`);
     now.status = 'picking';
     now.wmsStatus = 'picking';
+    takeEmpty();
     carry = { kind: 'order', orderId: now.id };
     touch();
     return done(`Lege pallet voor ${now.id}: ${linesText(now.lines)}. Zoek de locaties op in de WMS-app.`);
@@ -456,6 +481,7 @@ export function createWarehouse({
     o.picks = [];
     for (const l of o.lines) l.picked = 0;
     o.status = 'open';
+    returnEmpty();
     carry = null;
     touch();
     return done(`Pallet van ${o.id} teruggezet.`);
@@ -778,6 +804,7 @@ export function createWarehouse({
         if (!now || now.status !== 'open') return `${id} is al door iemand anders gepakt`;
         now.status = 'picking';
         now.wmsStatus = 'picking';
+        takeEmpty();
         touch();
         return null;
       },
@@ -1420,6 +1447,7 @@ export function createWarehouse({
       forks: [...moved],
       pallets: [...racked.values()],
       transit: [...transit],
+      empties,
       robots: robots.shared(),
       counter: counter.shared(),
       drivers: drivers.shared(),
@@ -1465,9 +1493,11 @@ export function createWarehouse({
     for (const [id, f] of s.forks ?? []) moved.set(id, { ...f, locationId: currentLocationId(f.locationId), at: f.at && currentLocationId(f.at) });
     racked.clear();
     for (const p of s.pallets ?? []) racked.set(p.id, { ...p, locationId: currentLocationId(p.locationId) });
+    empties = s.empties ?? EMPTY_PALLETS.start; // een speler met een oudere versie telt de lege pallets niet
     seeding = !s.pallets; // een speler met een oudere versie stuurt geen pallets: palletize() maakt ze, met sticker
+    restoring = true;
     palletize();
-    seeding = false;
+    restoring = seeding = false;
     transit.clear();
     for (const [id, t] of s.transit ?? []) transit.set(id, t);
     robots.applyShared(s.robots); // een speler met een oudere versie stuurt geen robots
@@ -1563,7 +1593,10 @@ export function createWarehouse({
     }
     transit.clear();
     for (const o of orders) {
-      if (o.status === 'picking') o.status = 'open'; // zijn pallet staat weer bij de stapel, met wat er al op lag
+      if (o.status === 'picking') {
+        o.status = 'open'; // zijn pallet staat weer bij de stapel, met wat er al op lag
+        returnEmpty();
+      }
       else if (o.status === 'picked') {
         // Staat hij op de pompwagen van een chauffeur, dan laadt die hem gewoon verder in
         if (drivers.drivers.some((d) => d.order === o.id)) continue;
@@ -1596,6 +1629,8 @@ export function createWarehouse({
     deliveries.length = 0;
     departed.clear();
     carry = null;
+    empties = EMPTY_PALLETS.start;
+    restoring = true; // de voorraad wordt opnieuw opgebouwd: daarbij raakt geen pallet echt leeg
     foreign = false; // deze wereld komt uit de eigen WMS
     if (trucks.out) trucks.out.loaded = [];
     orders.length = 0;
@@ -1613,7 +1648,7 @@ export function createWarehouse({
       for (const p of wmsPallets) if (p.locationId === it.locationId && p.sku === it.sku) put({ id: p.id, sku: p.sku, qty: p.qty });
       put(newPallet(it.sku, rest)); // wat er los ligt
     }
-    seeding = false;
+    seeding = restoring = false;
     const open = wmsOrders.filter(isOpen);
     orders.push(...open.map(fromWms));
     touch();
@@ -1642,6 +1677,8 @@ export function createWarehouse({
     /** Index van het dock waar de volgende uitgaande wagen komt. */
     get outDock() { return outDock; },
     get carry() { return carry; },
+    /** Hoeveel lege pallets er op de stapels langs de wand liggen. */
+    get emptyPallets() { return empties; },
     get orders() { return orders; },
     get messages() { return messages; },
     get clock() { return clock; },

@@ -374,6 +374,7 @@ function behindChair(seat: THREE.Object3D) {
 warehouse.onWmsData((data) => handheld.setData(data)); // wat de scanner over een locatie laat zien komt uit de WMS
 const refreshHall = () => {
   hall.setPallets(warehouse.pallets());
+  hall.setEmptyPallets(warehouse.emptyPallets());
   hall.setLoose(forklift.loose.list().map((l) => ({ ...l.load, x: l.x, z: l.z, r: l.r }))); // ook hun stickers zijn te scannen
 };
 setInterval(refreshHall, 500);

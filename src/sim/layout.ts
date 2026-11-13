@@ -11,14 +11,16 @@
 //                   (gezien vanaf de dockkant), R2A en R2B die van pad 2, enzovoort
 //   docks           dockdeuren in de westwand (x = -width/2), elk met een inslag- en een uitslagbaan
 //   desk            bureau met de pc; radio en printer staan erop (dx/dz ten opzichte van het bureau)
-//   orderPallets    stapel lege pallets: hier pak je er een om aan een order te beginnen
+//   orderPallets    de eerste stapel lege pallets, tegen de zuidwand naast de andere stapels: hier pak je er een om
+//                   aan een order te beginnen
 //   rooms           kantoor en kantine: aanbouw buiten tegen de noordwand, bij de dockwand (het kantoor op de hoek);
 //                   depth is de diepte van de aanbouw, vanuit de hal door een deur in de noordwand te bereiken
 //   parking         parkeerplaats in de andere hoek van de dockwand (zuid): een vak voor de heftruck en een voor
 //                   de pompwagen (de robots staan bij hun laadstation aan het eind van hun pad)
 //   equipment       startplek van de heftruck en de pompwagen (standaard in hun vak op de parkeerplaats)
 //   playerStart     waar de speler begint
-//   furniture       paktafel, palletstapels, nooduitgang (zuidwand), brandblussers
+//   furniture       paktafel, palletstapels (de overige stapels lege pallets; count = hoeveel er bij het begin liggen),
+//                   nooduitgang (zuidwand), brandblussers
 //
 // De locaties moeten gelijk lopen met de WMS (pos_x = x, pos_y = z in de 3D-scène); het WMS-paneel
 // laat zien welke locaties van de hal de WMS nog niet kent.
@@ -220,7 +222,7 @@ export const PER_PALLET = 20;
 export const POINTS = {
   /** De pc met de WMS-app. */
   terminal: { x: desk.x, z: desk.z },
-  /** De stapel lege pallets: hier pak je er een om aan een order te beginnen. */
+  /** De eerste stapel lege pallets (zie EMPTY_PALLETS): hier pak je er een om aan een order te beginnen. */
   orderPallets: { ...model.orderPallets },
 } satisfies Record<string, Point>;
 
@@ -270,6 +272,21 @@ export const PARKING = (() => {
     palletJack: bay(WALL_X + 4.7, 1.4, 2.4),
   };
 })();
+
+/**
+ * De lege pallets: stapels naast elkaar tegen de wand. Van de eerste pak je een pallet voor een order; raakt een
+ * pallet in een stelling leeg, dan komt hij hier op een stapel. Hoeveel er liggen houdt de sim bij.
+ */
+export const EMPTY_PALLETS = (() => {
+  const stacks: Point[] = [{ ...model.orderPallets }, ...model.furniture.palletStacks.map(({ x, z }) => ({ x, z }))];
+  /** Hoger dan dit wordt een stapel niet. */
+  const perStack = 15;
+  const max = stacks.length * perStack;
+  return { stacks, perStack, max, start: Math.min(max, model.furniture.palletStacks.reduce((n, s) => n + s.count, 0)) };
+})();
+/** Hoeveel pallets er op elke stapel liggen bij `count` lege pallets: om de beurt een erbij, de eerste stapel het eerst. */
+export const emptyStackSizes = (count: number) =>
+  EMPTY_PALLETS.stacks.map((_, i, all) => Math.floor(count / all.length) + (i < count % all.length ? 1 : 0));
 
 /** Vaste aankleding van de hal. */
 export const FURNITURE = model.furniture;
