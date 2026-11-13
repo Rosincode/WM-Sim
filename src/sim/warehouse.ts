@@ -1051,10 +1051,28 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     picks: [],
   });
 
-  /** Zet de stellingvoorraad gelijk aan de WMS (alleen bij een reset: zie loadSnapshot). */
-  function setShelfStock(items: Item[]) {
+  /**
+   * Zet de stellingvoorraad gelijk aan de WMS (alleen bij een reset: zie loadSnapshot). Pallets die de WMS
+   * kent houden het nummer van hun sticker; wat er daarnaast los ligt komt op een pallet van de hal.
+   */
+  function setShelfStock(items: Item[], wmsPallets: (Pallet & { locationId: string })[]) {
     stock.clear();
     for (const it of items) if (isShelf(it.locationId) && it.qty > 0) add(it.locationId, it.sku, it.qty);
+    for (const p of wmsPallets) {
+      const slot = freeSlot(p.locationId);
+      const room = qtyAt(p.locationId, p.sku) - palletsAt(p.locationId).reduce((n, x) => n + (x.sku === p.sku ? x.qty : 0), 0);
+      if (!isShelf(p.locationId) || slot === undefined || p.qty <= 0 || room < p.qty) continue;
+      racked.set(p.id, { id: p.id, sku: p.sku, qty: p.qty, locationId: p.locationId, slot });
+    }
+    for (const [k, qty] of stock) {
+      const [loc, sku] = k.split('|');
+      let rest = qty - palletsAt(loc).reduce((n, x) => n + (x.sku === sku ? x.qty : 0), 0);
+      for (let slot = freeSlot(loc); rest > 0 && slot !== undefined; slot = freeSlot(loc)) {
+        const p = { ...newPallet(sku, Math.min(rest, perPallet(sku))), locationId: loc, slot };
+        racked.set(p.id, p);
+        rest -= p.qty;
+      }
+    }
     palletize();
   }
 
@@ -1118,8 +1136,10 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
   /**
    * Allereerste start of een bewuste reset: de hele hal gelijkzetten met de WMS, ook wat er bij de docks staat.
    * Alles wat fysiek afweek (verplaatste pallets, lopende picks, wat spelers dragen) vervalt.
+   * @param wmsPallets De pallets met sticker zoals de WMS ze kent. Houdt de WMS pallets bij, dan heeft de rest
+   *   van de voorraad geen sticker (de speler plakt die); zonder pallets uit de WMS stickert de hal alles zelf.
    */
-  function loadSnapshot(items: Item[], wmsOrders: Order[], source: string) {
+  function loadSnapshot(items: Item[], wmsOrders: Order[], source: string, wmsPallets: (Pallet & { locationId: string })[] = []) {
     laneIn.forEach((lane) => lane.fill(null));
     laneOut.forEach((lane) => lane.fill(null));
     moved.clear();
@@ -1130,15 +1150,21 @@ export function createWarehouse({ gateway = offlineGateway, demoOrders = () => f
     foreign = false; // deze wereld komt uit de eigen WMS
     if (trucks.out) trucks.out.loaded = [];
     orders.length = 0;
-    seeding = true; // de voorraad waarmee de hal begint heeft al palletstickers
-    setShelfStock(items);
-    seeding = false;
+    seeding = wmsPallets.length === 0; // kent de WMS geen pallets, dan heeft de beginvoorraad al stickers van de hal
+    setShelfStock(items, wmsPallets);
     for (const it of items) {
       const lane = laneIn[DOCKS.findIndex((d) => d.inId === it.locationId)];
-      if (it.qty > 0 && lane?.includes(null)) {
-        lane[lane.lastIndexOf(null)] = { id: newPalletId(), sku: it.sku, qty: it.qty }; // beginstand: met sticker
-      }
+      if (!lane) continue;
+      let rest = it.qty;
+      const put = (p: Pallet) => {
+        if (p.qty <= 0 || p.qty > rest || !lane.includes(null)) return;
+        lane[lane.lastIndexOf(null)] = p;
+        rest -= p.qty;
+      };
+      for (const p of wmsPallets) if (p.locationId === it.locationId && p.sku === it.sku) put({ id: p.id, sku: p.sku, qty: p.qty });
+      put(newPallet(it.sku, rest)); // wat er los ligt
     }
+    seeding = false;
     const open = wmsOrders.filter(isOpen);
     orders.push(...open.map(fromWms));
     touch();

@@ -1,15 +1,20 @@
 import type { Item, Location, Order } from '../../shared/contract';
-import { WmsError, type WmsClient, type WmsCredentials, type WmsItem, type WmsLocation } from './types';
+import { WmsError, type WmsClient, type WmsCredentials, type WmsItem, type WmsLocation, type WmsPallet } from './types';
 
 // URL-opbouw van de WMS-API (basis: https://<host>/t/wm_sim/api):
 //   GET  {base}/{entiteit}                      -> lijst als { data: [...] }
 //   GET  {base}/{entiteit}?veld=waarde          -> gefilterde lijst; één waarde per veld, geen OData
 //   GET  {base}/{entiteit}?limit=200&offset=200 -> volgende pagina; antwoord { data, limit, offset }
-//   POST {base}/{entiteit}                      -> record aanmaken of actie boeken, JSON-body
-//   POST {base}/{entiteit}/{id}/_flows/{flow}   -> statusovergang op één record
-// Verwijzingen (sku, dock_id, from/to_location_id, order_id op een regel) zijn de platform-id (uuid,
+//   POST {base}/{entiteit}                      -> record aanmaken (goods_receipt, pallet_move, customer_order,
+//                                                  order_line, truck_visit, scan_log), JSON-body; gelukt = 201
+//   POST {base}/{entiteit}/{id}/_flows/{flow}   -> actie op één record. Met invoer: { choice: 'bevestigen', input: {...} },
+//                                                  zonder invoer: {}. Gelukt = 200, geweigerd = 409 met { error }.
+// Acties: customer_order (start_picking, confirm_pick, stage_order, load_order), order_line (confirm_pick_line),
+// stock (putaway, register_pallet), truck_visit (truck_check_out). De volledige beschrijving staat in
+// GET {base}/_openapi. Locaties, artikelen en voorraad zijn via de API alleen te lezen.
+// Verwijzingen (sku, dock_id, *_location_id, order_id op een regel, truck_visit_id) zijn de platform-id (uuid,
 // veld `id`), niet de tekstsleutel. Deze file vertaalt tussen beide; de rest van de game kent alleen
-// de tekstsleutels (SKU-001, DOCK-01, ORD-…).
+// de tekstsleutels (SKU-001, DOCK-01, ORD-…). Tekst blijven: pallet_id, truck_id en location_id bij scan_log.
 // Wijkt de WMS af, pas dan alleen deze file aan.
 
 type Row = { id: string };
@@ -19,9 +24,10 @@ type LocationRow = Row & {
   level?: number | null; blocked?: boolean | number | string | null;
 };
 type StockRow = Row & { sku: string; location_id: string; qty: number };
+type PalletRow = Row & { pallet_id: string; sku: string; qty: number; location_id: string; status: 'active' | 'empty' };
 type OrderRow = Row & { order_id: string; status: Order['status'] };
-type OrderLineRow = Row & { order_id: string; sku: string; qty: number };
-type FlowResult = { run?: { message?: string } } | undefined;
+type OrderLineRow = Row & { order_id: string; sku: string; qty: number; picked_qty?: number | null };
+type TruckVisitRow = Row & { truck_id: string; status?: string | null };
 
 /** Twee kanten van een verwijzing: platform-id -> tekstsleutel en terug. */
 type Refs = { keyById: Map<string, string>; idByKey: Map<string, string> };
@@ -60,17 +66,23 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
       await new Promise((r) => setTimeout(r, wait * 1000));
       return request<T>(path, init, attempt + 1);
     }
-    if (res.status === 401 || res.status === 403) {
-      throw new WmsError(
-        res.status === 401
-          ? 'Inloggen geweigerd: de API-sleutel is fout, verlopen of ingetrokken.'
-          : 'Geen rechten: de API-sleutel mag dit niet (controleer de scopes van de API-client).',
-        res.status,
-      );
-    }
-    if (!res.ok) throw new WmsError(`WMS-fout ${res.status}: ${(await res.text()).slice(0, 300)}`, res.status);
     const text = await res.text();
-    return (text ? JSON.parse(text) : undefined) as T;
+    if (res.ok) return (text ? JSON.parse(text) : undefined) as T;
+    // Fouten komen als JSON { error }: bij een weigering (409) is dat de melding voor de speler.
+    let reason = '';
+    try {
+      const body = JSON.parse(text) as { error?: unknown };
+      if (typeof body?.error === 'string') reason = body.error;
+    } catch {
+      // geen JSON: de ruwe tekst hieronder
+    }
+    if (res.status === 401) throw new WmsError('Inloggen geweigerd: de API-sleutel is fout, verlopen of ingetrokken.', 401);
+    if (res.status === 403) {
+      // Scopes en acties worden per API-client aangevinkt in de WMS (Instellingen → Koppelingen → API).
+      throw new WmsError(`Geen rechten${reason ? `: ${reason}` : ''}. Vink de scope of actie aan bij de API-client in de WMS.`, 403);
+    }
+    if (reason && (res.status === 409 || res.status === 400)) throw new WmsError(reason, res.status);
+    throw new WmsError(`WMS-fout ${res.status}: ${(reason || text).slice(0, 300)}`, res.status);
   }
 
   /** Lijst, eventueel gefilterd met één waarde per veld. */
@@ -92,6 +104,10 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
   const post = <T = unknown>(path: string, body: object = {}) =>
     request<T>(path, { method: 'POST', body: JSON.stringify(body) });
 
+  /** Actie op één record; `input` alleen als de actie invoer heeft. */
+  const flow = (entity: string, id: string, name: string, input?: object) =>
+    post(`${entity}/${id}/_flows/${name}`, input ? { choice: 'bevestigen', input } : {});
+
   // --- Verwijzingen: tekstsleutel <-> platform-id -------------------------------------------------
 
   const toRefs = (pairs: [id: string, key: string][]): Refs => ({
@@ -103,6 +119,8 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
   let locations: Promise<Refs> | null = null;
   /** order_id (tekst) -> platform-id van de order. */
   const orderIds = new Map<string, string>();
+  /** truck_id (tekst) -> platform-id van het bezoek dat nu is aangemeld. */
+  const visitIds = new Map<string, string>();
 
   const loadItems = () =>
     (items ??= list<ItemRow>('item')
@@ -167,6 +185,33 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
     return id;
   }
 
+  /** Het bezoek van een aangemelde vrachtwagen; na een herstart van de game zoeken we het op. */
+  async function visitUuid(truckId: string): Promise<string> {
+    let id = visitIds.get(truckId);
+    if (!id) {
+      const rows = (await list<TruckVisitRow>('truck_visit', { truck_id: truckId })).filter((r) => r.truck_id === truckId);
+      id = (rows.find((r) => r.status === 'checked_in') ?? rows[rows.length - 1])?.id;
+      if (!id) throw new WmsError(`Vrachtwagen ${truckId} is niet aangemeld in de WMS.`);
+      visitIds.set(truckId, id);
+    }
+    return id;
+  }
+
+  /** De voorraadregel van een artikel op een locatie: daarop draaien de acties putaway en register_pallet. */
+  async function stockRow(sku: string, locationKey: string): Promise<StockRow> {
+    const [skuRef, locRef] = await Promise.all([itemId(sku), locationId(locationKey)]);
+    const rows = await list<StockRow>('stock', { sku: skuRef, location_id: locRef });
+    const row = rows.find((r) => r.sku === skuRef && r.location_id === locRef);
+    if (!row) throw new WmsError(`Op ${locationKey} ligt in de WMS geen ${sku}.`, 409);
+    return row;
+  }
+
+  /** Kent de WMS deze pallet als actieve pallet? Een onbekende of lege pallet telt als losse voorraad. */
+  async function isPallet(palletId: string): Promise<boolean> {
+    const rows = await list<PalletRow>('pallet', { pallet_id: palletId });
+    return rows.some((r) => r.pallet_id === palletId && r.status === 'active');
+  }
+
   return {
     mode: 'live',
 
@@ -190,17 +235,9 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
     },
 
     async createLocation(l) {
-      // Eerst kijken of hij er al staat: de sleutel is uniek, een tweede keer aanmaken weigert de WMS (409).
       if (await findLocation(l.id)) return false;
-      try {
-        // `blocked` blijft op de standaardwaarde van de WMS (nee)
-        const row = await post<LocationRow | undefined>('location', { location_id: l.id, location_type: l.type, pos_x: l.x, pos_y: l.y, level: l.level });
-        if (row?.id) learn(await loadLocations(), row.id, l.id);
-        return true;
-      } catch (err) {
-        if (err instanceof WmsError && err.status === 409) return false; // stond er toch al
-        throw err;
-      }
+      // POST op location geeft 403: locaties zijn via de API alleen te lezen.
+      throw new WmsError('De WMS staat het aanmaken van locaties via de API niet toe. Download de CSV en voeg ze toe in de WMS-app.', 403);
     },
 
     async getStock(): Promise<Item[]> {
@@ -212,24 +249,37 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
       }));
     },
 
+    async getPallets() {
+      const [rows, item, loc] = await Promise.all([list<PalletRow>('pallet', { status: 'active' }), loadItems(), loadLocations()]);
+      return rows
+        .filter((r) => r.status === 'active' && Number(r.qty) > 0)
+        .map((r): WmsPallet => ({
+          id: r.pallet_id,
+          sku: item.keyById.get(r.sku) ?? r.sku,
+          qty: Number(r.qty),
+          locationId: loc.keyById.get(r.location_id) ?? r.location_id,
+        }));
+    },
+
     async getOpenOrders() {
-      // Geen 'status ne done' in de API: één call per status die nog open is.
-      const [open, picking, lines, item] = await Promise.all([
-        list<OrderRow>('customer_order', { status: 'open' }),
-        list<OrderRow>('customer_order', { status: 'picking' }),
+      // te_picken = status open of picking, in één call (filters met 'or' kent de API niet).
+      const [open, lines, item] = await Promise.all([
+        list<OrderRow>('customer_order', { te_picken: 'true' }),
         list<OrderLineRow>('order_line'),
         loadItems(),
       ]);
-      return [...open, ...picking].map((o) => {
-        orderIds.set(o.order_id, o.id);
-        return {
-          id: o.order_id,
-          status: o.status,
-          lines: lines
-            .filter((l) => l.order_id === o.id || l.order_id === o.order_id)
-            .map((l) => ({ sku: item.keyById.get(l.sku) ?? l.sku, qty: Number(l.qty) })),
-        };
-      });
+      return open
+        .filter((o) => o.status === 'open' || o.status === 'picking')
+        .map((o) => {
+          orderIds.set(o.order_id, o.id);
+          return {
+            id: o.order_id,
+            status: o.status,
+            lines: lines
+              .filter((l) => l.order_id === o.id || l.order_id === o.order_id)
+              .map((l) => ({ sku: item.keyById.get(l.sku) ?? l.sku, qty: Number(l.qty) })),
+          };
+        });
     },
 
     async registerGoodsReceived({ sku, qty, dockId }) {
@@ -237,9 +287,21 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
       await post('goods_receipt', { sku: skuRef, qty, dock_id: dockRef });
     },
 
-    async confirmPutaway({ sku, qty, fromLocationId, toLocationId }) {
-      const [skuRef, fromRef, toRef] = await Promise.all([itemId(sku), locationId(fromLocationId), locationId(toLocationId)]);
-      await post('putaway', { sku: skuRef, qty, from_location_id: fromRef, to_location_id: toRef });
+    async registerPallet({ palletId, sku, qty, locationId: at }) {
+      const row = await stockRow(sku, at);
+      await flow('stock', row.id, 'register_pallet', { pallet_id: palletId, pallet_qty: qty });
+    },
+
+    async confirmPutaway({ sku, qty, fromLocationId, toLocationId, palletId }) {
+      const toRef = await locationId(toLocationId);
+      // Een pallet met sticker verhuist in zijn geheel: de WMS weet zelf waar hij stond en wat erop staat.
+      if (palletId && (await isPallet(palletId))) {
+        await post('pallet_move', { pallet_id: palletId, to_location_id: toRef });
+        return;
+      }
+      // Zonder (bekende) sticker: losse voorraad van de voorraadregel op de van-locatie.
+      const row = await stockRow(sku, fromLocationId);
+      await flow('stock', row.id, 'putaway', { putaway_qty: qty, to_location_id: toRef });
     },
 
     async createOrder(lines, orderId) {
@@ -254,14 +316,60 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
     },
 
     async startPicking(orderId) {
-      await post(`customer_order/${await orderUuid(orderId)}/_flows/start_picking`);
+      await flow('customer_order', await orderUuid(orderId), 'start_picking');
+    },
+
+    async confirmPickLine({ orderId, sku, qty, locationId: at }) {
+      const [orderRef, skuRef, locRef] = await Promise.all([orderUuid(orderId), itemId(sku), locationId(at)]);
+      const lines = (await list<OrderLineRow>('order_line', { order_id: orderRef }))
+        .filter((l) => l.order_id === orderRef && l.sku === skuRef)
+        .map((l) => ({ id: l.id, open: Number(l.qty) - Number(l.picked_qty ?? 0) }))
+        .filter((l) => l.open > 0);
+      if (lines.reduce((n, l) => n + l.open, 0) < qty) throw new WmsError(`Order ${orderId} heeft geen ${qty}× ${sku} meer open.`, 409);
+      // Staat het artikel op meer regels, dan gaat de pick over die regels heen.
+      let rest = qty;
+      for (const l of lines) {
+        if (rest <= 0) break;
+        const take = Math.min(rest, l.open);
+        await flow('order_line', l.id, 'confirm_pick_line', { pick_qty: take, location_id: locRef });
+        rest -= take;
+      }
     },
 
     async confirmPick(orderId) {
-      const res = await post<FlowResult>(`customer_order/${await orderUuid(orderId)}/_flows/confirm_pick`);
-      // Te weinig voorraad geeft 200 zonder dat er iets verandert; de reden staat in run.message.
-      const message = res?.run?.message;
-      if (message && /te weinig voorraad/i.test(message)) throw new WmsError(message, 409);
+      await flow('customer_order', await orderUuid(orderId), 'confirm_pick');
+    },
+
+    async stageOrder({ orderId, dockId }) {
+      const [orderRef, dockRef] = await Promise.all([orderUuid(orderId), locationId(dockId)]);
+      await flow('customer_order', orderRef, 'stage_order', { dock_id: dockRef });
+    },
+
+    async loadOrder({ orderId, truckId }) {
+      const [orderRef, visitRef] = await Promise.all([orderUuid(orderId), visitUuid(truckId)]);
+      await flow('customer_order', orderRef, 'load_order', { truck_visit_id: visitRef });
+    },
+
+    async truckCheckIn({ truckId, direction, dockId }) {
+      const dockRef = await locationId(dockId);
+      visitIds.delete(truckId); // een nieuw bezoek krijgt een nieuwe id
+      try {
+        const row = await post<TruckVisitRow | undefined>('truck_visit', { truck_id: truckId, direction, dock_id: dockRef });
+        if (row?.id) visitIds.set(truckId, row.id);
+      } catch (err) {
+        // Stond hij al aangemeld (de game is herstart terwijl de wagen aan het dock stond), dan gaat het bezoek door.
+        if (!(err instanceof WmsError && err.status === 409 && /is al aangemeld/i.test(err.message))) throw err;
+        await visitUuid(truckId);
+      }
+    },
+
+    async truckCheckOut({ truckId }) {
+      await flow('truck_visit', await visitUuid(truckId), 'truck_check_out');
+      visitIds.delete(truckId);
+    },
+
+    async logScan({ kind, barcode, ok, locationId: at }) {
+      await post('scan_log', { kind, barcode, ok, ...(at ? { location_id: at } : {}) });
     },
   };
 }

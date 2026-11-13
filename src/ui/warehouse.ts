@@ -99,10 +99,22 @@ export function mountWarehouse({
   /** Zet de hal gelijk met de voorraad en open orders in de WMS; geeft het aantal voorraadregels terug. */
   async function resetToWms() {
     const client = wms.client;
-    const [stock, orders] = await Promise.all([client.getStock(), client.getOpenOrders()]);
+    const [stock, orders, pallets] = await Promise.all([client.getStock(), client.getOpenOrders(), readPallets(client)]);
     resetListeners.forEach((l) => l()); // eerst: wat op vorken of los op de vloer staat verdwijnt
-    sim.loadSnapshot(stock, orders, client.mode === 'live' ? 'de WMS' : 'de mock-WMS');
+    sim.loadSnapshot(stock, orders, client.mode === 'live' ? 'de WMS' : 'de mock-WMS', pallets);
     return stock.length;
+  }
+  /**
+   * De pallets met sticker uit de WMS: de hal neemt hun nummers over, zodat een scan in de WMS op dezelfde pallet
+   * uitkomt. Lukt het lezen niet (de API-client mag het niet), dan geeft de hal zijn pallets zelf een nummer.
+   */
+  async function readPallets(client: WmsClient) {
+    try {
+      return await client.getPallets();
+    } catch (err) {
+      hud.addError(`Pallets ophalen uit de WMS mislukt: ${err instanceof Error ? err.message : err} De hal geeft de pallets nu zelf een nummer.`);
+      return [];
+    }
   }
   wms.onError(() => menu.notify('wms'));
   /** Wat E hier doet, voor de toetsprompt in beeld; null als er niets te doen is. */
@@ -232,7 +244,8 @@ export function mountWarehouse({
         // voorraad uit de WMS. Komt de bewaarde wereld daarna alsnog binnen, dan vervangt die deze stand.
         // Later in- of uitloggen laat de hal met rust: die is van de game, niet van de WMS.
         started = true;
-        if (!sim.foreign) sim.loadSnapshot(stock, orders, client.mode === 'live' ? 'de WMS' : 'de mock-WMS');
+        const pallets = await readPallets(client);
+        if (!sim.foreign) sim.loadSnapshot(stock, orders, client.mode === 'live' ? 'de WMS' : 'de mock-WMS', pallets);
       } else if (sim.authority && !mockOutOfStep() && sim.pending === 0 && sim.revision === revision) {
         // Alleen de host haalt de open orders binnen (de rest krijgt ze via de gedeelde wereld), en alleen als
         // er sinds het ophalen niets is gebeurd: anders zou een oude stand een verse handeling terugdraaien.

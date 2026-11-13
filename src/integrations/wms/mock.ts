@@ -44,6 +44,16 @@ export function createMockClient(): WmsClient {
     else stock.set(key, { sku, locationId, qty: q });
   };
   const order = (id: string) => orders.find((o) => o.id === id) ?? fail(`Order ${id} bestaat niet.`);
+  /** Per order wat er al per regel is gepickt: sku -> aantal. */
+  const picked = new Map<string, Map<string, number>>();
+  /** Wat een order per artikel nog nodig heeft. */
+  const restOf = (o: Order) => {
+    const rest = new Map<string, number>();
+    for (const l of o.lines) rest.set(l.sku, (rest.get(l.sku) ?? 0) + l.qty);
+    for (const [sku, n] of picked.get(o.id) ?? []) rest.set(sku, (rest.get(sku) ?? 0) - n);
+    for (const [sku, n] of rest) if (n <= 0) rest.delete(sku);
+    return rest;
+  };
 
   const shelves = locations.filter((l) => l.type !== 'dock');
   for (let i = 0; i < 70; i++) {
@@ -76,6 +86,16 @@ export function createMockClient(): WmsClient {
 
     async getStock() {
       return structuredClone([...stock.values()]);
+    },
+
+    // De mock houdt geen pallets bij: alle voorraad is los, de hal geeft zijn pallets zelf een nummer.
+    async getPallets() {
+      return [];
+    },
+
+    async registerPallet({ sku, locationId }) {
+      loc(locationId);
+      checkSku(sku);
     },
 
     async getOpenOrders() {
@@ -111,6 +131,16 @@ export function createMockClient(): WmsClient {
       o.status = 'picking';
     },
 
+    async confirmPickLine({ orderId, sku, qty, locationId }) {
+      const o = order(orderId);
+      if (o.status !== 'picking') fail(`Order ${orderId} staat niet op picking.`);
+      if ((restOf(o).get(sku) ?? 0) < qty) fail(`Order ${orderId} heeft geen ${qty}× ${sku} meer open.`);
+      if (qtyAt(sku, locationId) < qty) fail(`Te weinig voorraad van ${sku} op ${locationId}.`);
+      add(sku, locationId, -qty);
+      const done = picked.get(orderId) ?? new Map<string, number>();
+      picked.set(orderId, done.set(sku, (done.get(sku) ?? 0) + qty));
+    },
+
     async confirmPick(orderId) {
       const o = order(orderId);
       if (o.status !== 'picking') fail(`Order ${orderId} heeft status ${o.status}, verwacht picking.`);
@@ -119,20 +149,32 @@ export function createMockClient(): WmsClient {
         [...stock.values()]
           .filter((s) => s.sku === sku && loc(s.locationId).type !== 'dock')
           .sort((a, b) => typeRank(a.locationId) - typeRank(b.locationId) || a.locationId.localeCompare(b.locationId));
-      for (const line of o.lines) {
-        const total = sources(line.sku).reduce((n, s) => n + s.qty, 0);
-        if (total < line.qty) fail(`Onvoldoende voorraad ${line.sku}: nodig ${line.qty}, aanwezig ${total}.`);
+      // Alleen het restant: wat per regel is gepickt (confirmPickLine) is al afgeboekt.
+      const rests = restOf(o);
+      for (const [sku, need] of rests) {
+        const total = sources(sku).reduce((n, s) => n + s.qty, 0);
+        if (total < need) fail(`Onvoldoende voorraad ${sku}: nodig ${need}, aanwezig ${total}.`);
       }
-      for (const line of o.lines) {
-        let rest = line.qty;
-        for (const s of sources(line.sku)) {
+      for (const [sku, need] of rests) {
+        let rest = need;
+        for (const s of sources(sku)) {
+          if (rest <= 0) break;
           const take = Math.min(rest, s.qty);
-          add(line.sku, s.locationId, -take);
+          add(sku, s.locationId, -take);
           rest -= take;
-          if (rest === 0) break;
         }
       }
+      picked.delete(orderId);
       o.status = 'done';
     },
+
+    // Klaarzetten, inladen, vrachtwagens en scans: de mock controleert ze niet en houdt er niets van bij.
+    async stageOrder() {},
+    async loadOrder() {},
+    async truckCheckIn({ dockId }) {
+      if (loc(dockId).type !== 'dock') fail(`${dockId} is geen docklocatie.`);
+    },
+    async truckCheckOut() {},
+    async logScan() {},
   };
 }
