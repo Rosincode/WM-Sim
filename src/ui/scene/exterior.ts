@@ -6,7 +6,7 @@ import { onTop } from './style';
 import * as tex from './textures';
 import { ROOM_HEIGHT, ROOM_WINDOWS } from './rooms';
 import { createParkedTrailer } from './truck';
-import { Batch, EXIT_X, HALL, UNIT_BOX, UNIT_CYL, paint } from './warehouse';
+import { Batch, EXIT_X, HALL, UNIT_BOX, UNIT_CYL, paint, type Solid } from './warehouse';
 
 // Buitenkant van het magazijn: gevels met het RoBoDu-logo, het vrachtwagenterrein voor de docks,
 // wegen, parkeerplaats, groen en verlichting. Alleen aankleding: geen sim-logica.
@@ -26,6 +26,10 @@ export function createExterior(scene: THREE.Scene) {
   const ANNEX: Rect = { minX: ROOMS.office.minX, maxX: ROOMS.canteen.maxX, minZ: ROOMS.office.minZ, maxZ: ROOMS.office.maxZ };
   const root = new THREE.Group();
   scene.add(root);
+  /** Waar de speler buiten tegenaan loopt: auto's, opleggers, de portiersloge, palen en bomen. */
+  const solids: Solid[] = [];
+  const solid = (x: number, z: number, w: number, d: number, minY: number, maxY: number) =>
+    solids.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2, minY, maxY });
 
   // ---------- Terrein ----------
   // Lagen (onTop in style.ts): asfalt +1 op het gras, beton +2, belijning en cijfers +3
@@ -139,7 +143,7 @@ export function createExterior(scene: THREE.Scene) {
   ].sort((a, b) => a[0] - b[0]);
   facade(X0 - 0.03, 0, -Math.PI / 2, D, 0, openings);
   facade(W / 2 + 0.03, 0, Math.PI / 2, D);
-  facade(0, D / 2 + 0.03, 0, W);
+  facade(0, D / 2 + 0.03, 0, W, 0, [[EXIT_X - 0.5, EXIT_X + 0.5, 2.1]]); // open gat voor de entreedeur
   // Noordgevel: waar de aanbouw (kantoor en kantine) ertegenaan staat begint de gevel pas boven het dak daarvan
   facade((ANNEX.minX + ANNEX.maxX) / 2, -D / 2 - 0.03, Math.PI, ANNEX.maxX - ANNEX.minX, ROOM_HEIGHT);
   facade((ANNEX.maxX + W / 2) / 2, -D / 2 - 0.03, Math.PI, W / 2 - ANNEX.maxX);
@@ -166,6 +170,10 @@ export function createExterior(scene: THREE.Scene) {
         if (a - from > 0.01) plinth.add(x, 0.25, (from + a) / 2, thin(sx, 0.7), 0.5, a - from);
         from = b;
       }
+    } else if (z > 0 && sx > 1) {
+      // de plint van de voorgevel loopt niet door voor de entree langs
+      const half = thin(sx, 0.7) / 2;
+      for (const [a, b] of [[-half, EXIT_X - 0.95], [EXIT_X + 0.95, half]]) plinth.add((a + b) / 2, 0.25, z, b - a, 0.5, thin(sz, 0.7));
     } else plinth.add(x, 0.25, z, thin(sx, 0.7), 0.5, thin(sz, 0.7));
   }
   root.add(
@@ -235,10 +243,15 @@ export function createExterior(scene: THREE.Scene) {
     windows.add(x, 5.6, ZF, 2.2, 1.5, 0.06);
     if (Math.abs(x - EXIT_X) > 2.6) windows.add(x, 2.0, ZF, 2.2, 1.5, 0.06);
   }
-  windows.add(EXIT_X, 1.2, ZF, 1.9, 2.4, 0.06); // glazen entreedeur
+  // Entree: de deur zelf zit in de hal (hij gaat open, zie warehouse.ts); hier het glas ernaast en erboven
+  for (const dx of [-0.74, 0.74]) windows.add(EXIT_X + dx, 1.2, ZF, 0.42, 2.4, 0.06);
+  windows.add(EXIT_X, 2.27, ZF, 1.06, 0.26, 0.06);
   const canopy = new Batch();
   canopy.add(EXIT_X, 2.85, D / 2 + 1.1, 4.2, 0.16, 2.2);
-  for (const dx of [-1.9, 1.9]) canopy.add(EXIT_X + dx, 1.4, D / 2 + 2.05, 0.12, 2.8, 0.12);
+  for (const dx of [-1.9, 1.9]) {
+    canopy.add(EXIT_X + dx, 1.4, D / 2 + 2.05, 0.12, 2.8, 0.12);
+    solid(EXIT_X + dx, D / 2 + 2.05, 0.12, 0.12, 0, 2.8);
+  }
   root.add(windows.build(UNIT_BOX, glass, false), canopy.build(UNIT_BOX, paint(NAVY, 0.5, 0.3)));
   // Ramen van het kantoor en de kantine (de aanbouw): van buiten donker glas. Een vlak dat alleen naar buiten
   // kijkt, zodat je er van binnenuit doorheen naar het terrein kijkt.
@@ -266,6 +279,8 @@ export function createExterior(scene: THREE.Scene) {
     cabins.add(x, 1.2, z + 0.2, 1.6, 0.56, 2.3);
     for (const dx of [-0.86, 0.86]) for (const dz of [-1.35, 1.35]) wheels.add(x + dx, 0.32, z + dz, 0.32, 0.2, 0.32, 0, 0, Math.PI / 2);
     carTints.push(new THREE.Color(CAR_COLORS[Math.floor(rand() * CAR_COLORS.length)]));
+    solid(x, z, 1.8, 4.3, 0, 0.93);
+    solid(x, z + 0.2, 1.6, 2.3, 0.93, 1.48);
   }
   const tyre = paint('#141414', 0.9, 0);
 
@@ -275,6 +290,7 @@ export function createExterior(scene: THREE.Scene) {
     const trailer = createParkedTrailer();
     trailer.position.set(x, 0, z);
     root.add(trailer);
+    solid(x, z, 12, 2.5, 0, 3.85);
   }
 
   const carBodies = bodies.build(UNIT_BOX, paint('#ffffff', 0.35, 0.5));
@@ -295,6 +311,9 @@ export function createExterior(scene: THREE.Scene) {
   const barrier = new Batch();
   barrier.add(gateX, 1.05, gateZ, YARD_DRIVE.maxX - YARD_DRIVE.minX - 0.6, 0.12, 0.12);
   barrier.add(YARD_DRIVE.maxX - 0.2, 0.6, gateZ, 0.3, 1.2, 0.3);
+  solid(YARD_DRIVE.maxX + 2.2, gateZ, 3, 3.4, 0, 3);
+  solid(gateX, gateZ, YARD_DRIVE.maxX - YARD_DRIVE.minX - 0.6, 0.3, 0.9, 1.11); // de slagboom: daar loop je niet onderdoor
+  solid(YARD_DRIVE.maxX - 0.2, gateZ, 0.3, 0.3, 0, 1.2);
   root.add(
     lodge.build(UNIT_BOX, paint('#e2e5e8', 0.7, 0.1)),
     lodgeRoof.build(UNIT_BOX, paint(NAVY, 0.5, 0.3)),
@@ -310,6 +329,7 @@ export function createExterior(scene: THREE.Scene) {
   for (let x = -200; x <= 200; x += 40) lampSpots.push([x, ROAD.maxZ + 1.2, Math.PI / 2]);
   for (const [x, z, a] of lampSpots) {
     poles.add(x, 4.5, z, 0.09, 9, 0.09);
+    solid(x, z, 0.18, 0.18, 0, 9);
     const dx = Math.cos(a) * 0.9;
     const dz = -Math.sin(a) * 0.9;
     heads.add(x + dx, 8.95, z + dz, 1.9, 0.12, 0.34, 0, a, 0);
@@ -326,6 +346,7 @@ export function createExterior(scene: THREE.Scene) {
   function tree(x: number, z: number) {
     const s = 0.8 + rand() * 0.7;
     trunks.add(x, 1.5 * s, z, 0.22 * s, 3 * s, 0.22 * s);
+    solid(x, z, 0.44 * s, 0.44 * s, 0, 3 * s);
     crowns.add(x, (3 + 1.9) * s, z, 2.3 * s, 2.7 * s, 2.3 * s, 0, rand() * 6, 0);
     crownTints.push(new THREE.Color().setHSL(0.27 + rand() * 0.06, 0.42 + rand() * 0.15, 0.24 + rand() * 0.1));
   }
@@ -339,8 +360,28 @@ export function createExterior(scene: THREE.Scene) {
   crownTints.forEach((c, i) => crownMesh.setColorAt(i, c));
   root.add(trunks.build(UNIT_CYL, paint('#5b4532', 0.95, 0)), crownMesh);
 
+  // ---------- Waar de speler buiten mag lopen ----------
+  // Het hele terrein rond het gebouw en de aanbouw (de gevels zijn massief), plus de deuren waardoor je naar
+  // buiten komt: de chauffeursdeuren in de dockgevel en de entree (nooduitgang) in de voorgevel.
+  const EDGE = 220; // zo ver van het midden houdt het terrein voor de speler op
+  const M = 0.5; // zo ver blijf je met je middelpunt van een gevel
+  const walkable: Rect[] = [
+    { minX: -EDGE, maxX: X0 - M, minZ: -EDGE, maxZ: EDGE },
+    { minX: W / 2 + M, maxX: EDGE, minZ: -EDGE, maxZ: EDGE },
+    { minX: -EDGE, maxX: EDGE, minZ: D / 2 + M, maxZ: EDGE },
+    { minX: -EDGE, maxX: EDGE, minZ: -EDGE, maxZ: ANNEX.minZ - M },
+    { minX: ANNEX.maxX + M, maxX: EDGE, minZ: -EDGE, maxZ: -D / 2 - M },
+    ...DRIVER_DOORS.map((z): Rect => ({ minX: X0 - M - 0.1, maxX: X0 + 0.7, minZ: z - 0.3, maxZ: z + 0.3 })),
+    { minX: EXIT_X - 0.3, maxX: EXIT_X + 0.3, minZ: D / 2 - 0.7, maxZ: D / 2 + M + 0.1 },
+  ];
+  const within = (r: Rect, x: number, z: number) => x > r.minX && x < r.maxX && z > r.minZ && z < r.maxZ;
+
   return {
     root,
+    walkable,
+    solids,
+    /** Staat dit punt in de open lucht (niet in de hal of de aanbouw)? */
+    isOutside: (x: number, z: number) => !within(building, x, z) && !within(ANNEX, x, z),
     /** @param open 0 = dockdeur dicht, 1 = open */
     setDockDoor(i: number, open: number) {
       if (dockDoors[i]) dockDoors[i].scale.y = 1 - 0.97 * open;

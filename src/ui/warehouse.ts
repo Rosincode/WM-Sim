@@ -341,6 +341,8 @@ export function mountWarehouse({
     carryMesh: view.carryMesh,
     /** Waar de speler tegenaan loopt: het bureau, de pallets op de banen en de telrobot. */
     solids: () => [...view.solids(), ...dockCounter.solids()],
+    /** Waar de speler buiten tegenaan loopt: de vrachtwagens op het terrein. */
+    truckSolids: view.truckSolids,
     /** Vaste obstakels voor de heftruck (die rijdt nergens onderdoor): het bureau. */
     colliders: view.colliders,
     /** De telrobot bij de inslagbanen: waar hij staat en waar hij voor stopt. */

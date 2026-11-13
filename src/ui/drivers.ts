@@ -27,7 +27,10 @@ export function mountDrivers({
   palletLoads,
   orderLoads,
   obstacles,
+  visitors,
 }: {
+  /** Spelers: ook voor hen gaan de chauffeursdeuren open, zodat ze erdoor naar buiten en naar binnen kunnen. */
+  visitors?: () => { x: number; z: number }[];
   scene: THREE.Scene;
   hall: { setDockDoor(i: number, open: number): void; setDriverDoor(i: number, open: number): void };
   exterior: { setDockDoor(i: number, open: number): void };
@@ -146,6 +149,7 @@ export function mountDrivers({
         g.rotation.y = d.r;
         DRIVER_DOORS.forEach((dz, i) => (near[i] ||= Math.hypot(x - X0, z - dz) < 2));
       }
+      for (const v of visitors?.() ?? []) DRIVER_DOORS.forEach((dz, i) => (near[i] ||= Math.hypot(v.x - X0, v.z - dz) < 2));
       for (const [id, p] of people) {
         if (seen.has(id)) continue;
         p.character.group.removeFromParent();

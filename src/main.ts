@@ -9,7 +9,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { createPlayerView, type ViewMode } from './ui/playerView';
 import { createHandheld } from './ui/handheld';
 import { createTabletApp } from './ui/tabletApp';
-import { createWarehouse, HALL } from './ui/scene/warehouse';
+import { createWarehouse, EXIT_X, HALL } from './ui/scene/warehouse';
 import { createForklift } from './ui/scene/forklift';
 import { createPalletJack } from './ui/scene/palletJack';
 import { createRadio } from './ui/radio';
@@ -202,13 +202,20 @@ let editor: ReturnType<typeof createEditor> | undefined;
 
 /** Loopt de speler met de pompwagen? */
 let pushing = false;
+/** Kijk je naar de open lucht: in het overzicht, of dichtbij als de speler buiten staat. */
+const sky = { overview: false, outdoors: false };
+function applySky() {
+  const open = sky.overview || sky.outdoors;
+  scene.fog = open ? DISTANCE_HAZE : HAZE;
+  scene.background = open ? OUTSIDE : INSIDE;
+}
 
 function applyMode(mode: ViewMode) {
   const overview = mode === 'overview';
   if (!overview) editor?.close();
   hall.roof.visible = !overview; // dak weg zodat je van boven naar binnen kijkt
-  scene.fog = overview ? DISTANCE_HAZE : HAZE;
-  scene.background = overview ? OUTSIDE : INSIDE;
+  sky.overview = overview;
+  applySky();
   // In de heftruck: linkerhand op het stuur, scanner/tablet in de rechterhand, eigen lichaam (zonder hoofd) in beeld
   // Met de pompwagen: beide handen op de handgreep, dus geen scanner of tablet in beeld
   // Aan het bureau: handen bij het toetsenbord, dus ook geen scanner of tablet
@@ -222,6 +229,10 @@ function applyMode(mode: ViewMode) {
  * staan: het bureau, de pallets op de banen, de telrobot, de robots, de chauffeurs met hun pompwagens en de andere spelers.
  */
 const otherSolids = [() => warehouse.solids(), () => robots.solids(), () => drivers.solids(), () => multiplayer?.solids() ?? []];
+/** Waar alleen de speler te voet tegenaan loopt, buiten op het terrein: vrachtwagens, auto's, opleggers, palen en bomen. */
+const outdoorSolids = [() => warehouse.truckSolids(), () => exterior.solids];
+/** Iedereen die te voet is (jij en de andere spelers): voor hen gaan de deuren naar buiten open. */
+const walkers = () => [player.position, ...(multiplayer?.obstacles() ?? [])];
 /** Waar robots en chauffeurs voor blijven staan: spelers, de heftruck, de pompwagen en pallets die los op de vloer staan. */
 function humanObstacles() {
   const along = (o: THREE.Object3D, offsets: number[], rad: number) =>
@@ -243,11 +254,12 @@ const view = createPlayerView({
   player,
   hud,
   bounds: BOUNDS,
-  walkable: hall.walkable,
-  solids: [hall.solids, () => forklift.solids(), () => jack.solids(), ...otherSolids],
+  // Ook buiten: het terrein rond het gebouw, via de chauffeursdeuren en de nooduitgang
+  walkable: [...hall.walkable, ...exterior.walkable],
+  solids: [hall.solids, () => forklift.solids(), () => jack.solids(), ...otherSolids, ...outdoorSolids],
   // Wat je voor je uit hebt botst ook: de pallet die je draagt, of de pompwagen met wat erop staat
   probes: () => (jack.held ? jack.probes() : warehouse.carrying() ? [{ ahead: CARRY_AHEAD, radius: CARRY_RADIUS }] : []),
-  probeSolids: [hall.solids, () => forklift.solids(), ...otherSolids],
+  probeSolids: [hall.solids, () => forklift.solids(), ...otherSolids, ...outdoorSolids],
   initialMode: params.get('view') === 'overview' ? 'overview' : params.get('view') === 'third' ? 'third' : 'first',
   onModeChange: applyMode,
 });
@@ -454,7 +466,9 @@ const robots = mountRobots({
 warehouse.counter.setObstacles(() => [...humanObstacles(), ...drivers.obstacles(), ...robots.obstacles()]);
 
 // --- Chauffeurs: lossen en laden hun vrachtwagen zelf, met de elektrische pompwagen die bij elk dock staat ---
-const drivers = mountDrivers({ scene, hall, exterior, ...warehouse.docks, obstacles: humanObstacles });
+const drivers = mountDrivers({ scene, hall, exterior, ...warehouse.docks, obstacles: humanObstacles, visitors: walkers });
+/** Hoe ver de nooduitgang (entree in de voorgevel) openstaat: 0 = dicht, 1 = open. */
+let exitOpen = 0;
 // --- Geluid van alles wat rijdt: motor, wielen, hydrauliek en piepers (src/ui/sounds.ts) ---
 const sounds = createSounds();
 sounds.add('forklift', objectSource(forklift.group, () => forklift.forkHeight));
@@ -601,6 +615,16 @@ renderer.setAnimationLoop((now) => {
   warehouse.update(dt);
   robots.update(dt);
   drivers.update(dt);
+  // De nooduitgang gaat open voor wie ervoor staat, binnen of buiten
+  const atExit = walkers().some((w) => Math.hypot(w.x - EXIT_X, w.z - HALL.d / 2) < 2.2);
+  const nextExit = THREE.MathUtils.clamp(exitOpen + (atExit ? dt : -dt) / 0.6, 0, 1);
+  if (nextExit !== exitOpen) hall.setExitDoor((exitOpen = nextExit));
+  // Buiten zie je de lucht en het terrein tot in de verte, binnen de nevel van de hal
+  const outdoors = exterior.isOutside(player.position.x, player.position.z);
+  if (outdoors !== sky.outdoors) {
+    sky.outdoors = outdoors;
+    applySky();
+  }
   // In het overzicht luister je op de plek waar je naar kijkt, anders vanuit de camera
   if (view.mode === 'overview') ear.copy(controls.target);
   else camera.getWorldPosition(ear);

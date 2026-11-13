@@ -291,7 +291,8 @@ export function createWarehouse(scene: THREE.Scene) {
   }
   // Deuren naar het kantoor en de kantine: open gaten in de noordwand
   wall(0, -D / 2, 0, W, ROOM_DOORS.map((d): [number, number, number, number] => [d.from, d.to, 0, d.height]));
-  wall(0, D / 2, Math.PI, W);
+  // Zuidwand: open gat voor de nooduitgang (langs deze wand loopt de eigen richting van het vlak naar -x)
+  wall(0, D / 2, Math.PI, W, [[-EXIT_X - 0.5, -EXIT_X + 0.5, 0, 2.1]]);
   // Dockwand: open gaten voor de dockdeuren (de deur zelf gaat open en dicht) en de chauffeursdeuren.
   // Langs deze wand loopt de eigen richting van het vlak naar -z.
   wall(-W / 2, 0, Math.PI / 2, D, [
@@ -665,9 +666,18 @@ export function createWarehouse(scene: THREE.Scene) {
     solid(x, z, EXTINGUISHER_SIZE.w, EXTINGUISHER_SIZE.d, 0, EXTINGUISHER_SIZE.h);
   }
   for (const part of extinguisherParts()) scene.add(extinguishers.build(part.geometry, part.material, part.shadows));
-  const exitDoor = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.1, 0.06), paint('#5d6b63', 0.5, 0.3));
-  exitDoor.position.set(EXIT_X, 1.05, D / 2 - 0.04);
+  // De nooduitgang is een echte deur: hij scharniert naar buiten open voor wie ervoor staat (setExitDoor)
+  const exitDoor = new THREE.Group();
+  exitDoor.position.set(EXIT_X - 0.5, 0, D / 2 + 0.015);
+  const exitLeaf = new THREE.Mesh(new THREE.BoxGeometry(0.98, 2.08, 0.07), paint('#5d6b63', 0.5, 0.3));
+  exitLeaf.position.set(0.5, 1.04, 0);
+  exitLeaf.castShadow = exitLeaf.receiveShadow = true;
+  exitDoor.add(exitLeaf);
   scene.add(exitDoor);
+  /** @param open 0 = nooduitgang dicht, 1 = open (naar buiten) */
+  function setExitDoor(open: number) {
+    exitDoor.rotation.y = -open * 1.45;
+  }
   const exitSign = new THREE.Mesh(
     new THREE.PlaneGeometry(0.6, 0.3),
     onTop(new THREE.MeshBasicMaterial({ map: tex.sign('EXIT', '#0c8a3e', '#ffffff') })),
@@ -1061,6 +1071,7 @@ export function createWarehouse(scene: THREE.Scene) {
     walkable: rooms.walkable,
     setDockDoor,
     setDriverDoor,
+    setExitDoor,
     /** De bureaus in het kantoor: monitor met de WMS-app en de stoel waarop je ervoor gaat zitten. */
     desks: rooms.desks,
     /** Alle stoelen (kantoor en kantine) als zitplek: plek op de vloer, voorkant = +z. */

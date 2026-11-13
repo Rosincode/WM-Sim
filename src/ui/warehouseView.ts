@@ -113,6 +113,8 @@ function truckView(direction: Truck['direction']) {
   const cargo: ReturnType<typeof loadSlot>[] = [];
   return {
     mesh: truck.group,
+    /** Buitenmaat van de wagen rond zijn nulpunt: daar loopt de speler buiten tegenaan. */
+    size: new THREE.Box3().setFromObject(truck.group),
     setDoors: truck.setDoors,
     /** Zet op plek i in de laadruimte de lading die bij `key` hoort, of haalt hem weg (''). */
     cargoAt(i: number, key: string, build: () => THREE.Object3D) {
@@ -325,7 +327,18 @@ export function createWarehouseView(
     return out;
   }
 
-  return { update, pcDisplay: pc.screen, palletLoads, orderLoads, solids, colliders, carryLabel, carryMesh };
+  /** Waar de speler buiten tegenaan loopt: de vrachtwagens op het terrein. */
+  function truckSolids(): Solid[] {
+    return [trucks.in, trucks.out, ...[...deliveryTrucks.values()].map((v) => v.truck)]
+      .filter((t) => t.mesh.visible)
+      .map(({ mesh, size }) => ({
+        // in het eigen assenstelsel van de wagen: hij botst ook goed als hij gedraaid op het terrein staat
+        pose: { x: mesh.position.x, z: mesh.position.z, r: mesh.rotation.y },
+        minX: size.min.x, maxX: size.max.x, minZ: size.min.z, maxZ: size.max.z, minY: 0, maxY: size.max.y,
+      }));
+  }
+
+  return { update, pcDisplay: pc.screen, palletLoads, orderLoads, solids, truckSolids, colliders, carryLabel, carryMesh };
 }
 
 /** Zo ver (m) voor de speler staat het midden van de pallet die hij draagt, en de halve maat van die pallet. */
