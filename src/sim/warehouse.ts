@@ -1202,17 +1202,18 @@ export function createWarehouse({
    */
   async function scan(code: string, pos: Point): Promise<ScanResult | null> {
     if (racked.has(code) || moved.has(code)) return scanPallet(code, pos);
-    const loc = location(code);
-    if (!loc) return null;
     const o = carriedOrder();
     const far = (reach: number, point: Point) =>
       dist(point, pos) > reach ? { ok: false, text: `Loop naar ${code} om daar iets te doen.` } : null;
 
-    if (loc.type === 'dock') {
-      const d = DOCKS.find((x) => x.outId === code);
-      if (!d || o?.status !== 'picked') return null;
+    // Eén barcode per dock (onder het aanraakscherm): een afgemelde order gaat ermee naar de uitslagbaan
+    const d = DOCKS.find((x) => x.id === code || x.outId === code);
+    if (d) {
+      if (o?.status !== 'picked') return null;
       return far(DOCK_REACH, lanePoint(d.laneOut, pos)) ?? guard(() => stage(d.index));
     }
+    const loc = location(code);
+    if (!loc || loc.type === 'dock') return null;
     if (carry?.kind === 'pallet') return far(REACH, loc) ?? guard(() => putaway(code));
     if (o?.status === 'picking') return far(REACH, loc) ?? guard(() => pickAt(code));
     return null;

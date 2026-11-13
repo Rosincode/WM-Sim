@@ -395,13 +395,15 @@ function barcode(g: CanvasRenderingContext2D, x: number, y: number, w: number, h
 
 const LABEL_BG = '#f7f7f2';
 
+export type LabelArrow = 'up' | 'down' | 'left';
+
 /** Tekent één locatielabel in een vlak van 512 × 192 (schaal en plaats zet de aanroeper). */
-function drawLocationLabel(g: CanvasRenderingContext2D, id: string, arrow: 'up' | 'down') {
+function drawLocationLabel(g: CanvasRenderingContext2D, id: string, arrow: LabelArrow) {
   const w = 512;
   const h = 192;
   g.fillStyle = LABEL_BG;
   g.fillRect(0, 0, w, h);
-  g.fillStyle = arrow === 'up' ? '#f2c200' : '#2e8bd8';
+  g.fillStyle = arrow === 'up' ? '#f2c200' : arrow === 'left' ? '#3a9a5c' : '#2e8bd8';
   g.fillRect(0, 0, 92, h);
   g.fillStyle = '#111';
   g.beginPath();
@@ -413,6 +415,14 @@ function drawLocationLabel(g: CanvasRenderingContext2D, id: string, arrow: 'up' 
     g.lineTo(34, 162);
     g.lineTo(34, 96);
     g.lineTo(12, 96);
+  } else if (arrow === 'left') {
+    g.moveTo(10, 96);
+    g.lineTo(46, 54);
+    g.lineTo(46, 82);
+    g.lineTo(82, 82);
+    g.lineTo(82, 110);
+    g.lineTo(46, 110);
+    g.lineTo(46, 138);
   } else {
     g.moveTo(46, 162);
     g.lineTo(80, 96);
@@ -446,7 +456,7 @@ export function palletSticker() {
 }
 
 /** Locatielabel voor op de stellingligger. */
-export function locationLabel(id: string, arrow: 'up' | 'down', scale = 1) {
+export function locationLabel(id: string, arrow: LabelArrow, scale = 1) {
   return canvasTexture(512 * scale, 192 * scale, (g) => {
     g.scale(scale, scale); // kleinere textuur, zelfde tekening
     drawLocationLabel(g, id, arrow);

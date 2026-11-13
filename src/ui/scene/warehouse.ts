@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { AISLE_Z, DOCKS, DOCK_PITCH, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROW_FACE, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, WALKWAY_X, location, rackLocationId, rowBehind, rowName, type Bay } from '../../sim/layout';
-import { DOCK_RAMP, DRIVER_DOORS, TRUCK } from '../../sim/drivers';
+import { DOCK_RAMP, DRIVER_DOORS, TRUCK, dockScreen } from '../../sim/drivers';
 import { createRooms, ROOM_DOORS } from './rooms';
 import { STYLE, onTop } from './style';
 import * as tex from './textures';
@@ -388,7 +388,7 @@ export function createWarehouse(scene: THREE.Scene) {
   const rampLength = Math.hypot(DOCK_RAMP.low - DOCK_RAMP.high, TRUCK.floor);
   const rampGeo = new THREE.BoxGeometry(rampLength, 0.03, 1.7);
   const bollards = new Batch();
-  DOCKS.forEach(({ z, inId, outId }, i) => {
+  DOCKS.forEach(({ z, id }, i) => {
     const x0 = -W / 2;
     // De deur hangt aan zijn bovenkant: bij het openen rolt hij daar op
     const door = new THREE.Group();
@@ -434,17 +434,15 @@ export function createWarehouse(scene: THREE.Scene) {
     board.position.set(x0 + 0.06, 4.35, z);
     scene.add(board);
 
-    // Scanlabels op de deurstijlen: links de inslaglocatie, rechts de uitslaglocatie
-    for (const [id, dz] of [[inId, -1.6], [outId, 1.6]] as const) {
-      const label = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.4, 0.15),
-        onTop(new THREE.MeshStandardMaterial({ map: tex.locationLabel(id, 'down', 0.5), roughness: 0.6 })),
-      );
-      label.rotation.y = Math.PI / 2;
-      label.position.set(x0 + 0.195, 1.5, z + dz);
-      scene.add(label);
-      scanTargets.push({ code: id, position: label.position.clone() });
-    }
+    // Scanlabel van het dock zelf: op de plint onder het aanraakscherm, met een pijl naar de deur (links)
+    const label = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.4, 0.15),
+      onTop(new THREE.MeshStandardMaterial({ map: tex.locationLabel(id, 'left', 0.5), roughness: 0.6 })),
+    );
+    label.rotation.y = Math.PI / 2;
+    label.position.set(x0 + 0.053, 1.11, dockScreen(DOCKS[i]).z);
+    scene.add(label);
+    scanTargets.push({ code: id, position: label.position.clone() });
 
     const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.06, 16, 12), glow(0.3, 3.2, 0.6));
     lamp.position.set(x0 + 0.2, 2.6, z - 1.6);
