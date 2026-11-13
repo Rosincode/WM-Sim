@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { AISLE_Z, DOCKS, DOCK_PITCH, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROW_FACE, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, WALKWAY_X, location, rackLocationId, rowBehind, rowName, type Bay } from '../../sim/layout';
-import { DOCK_RAMP, DRIVER_DOORS, TRUCK, dockScreen } from '../../sim/drivers';
+import { DOCK_RAMP, DRIVER_DOORS, TRUCK, dockScreen, jackBay } from '../../sim/drivers';
 import { createRooms, ROOM_DOORS } from './rooms';
 import { STYLE, onTop } from './style';
 import * as tex from './textures';
@@ -210,6 +210,11 @@ export function createWarehouse(scene: THREE.Scene) {
       // leesbaar als je vanaf de stellingen naar het dock loopt
       marking(p.x + len / 2 + 0.4, p.z, 1.8, 0.45, color, tex.floorText(code.replace('DOCK-', '')), Math.PI / 2);
     }
+    // Het parkeervak van de elektrische pompwagen van dit dock, bij het scherm: open aan de kant van de hal
+    const b = jackBay(d);
+    for (const side of [-1, 1]) marking(b.x, b.z + (side * b.d) / 2, b.w, 0.08, YELLOW);
+    marking(b.x - b.w / 2, b.z, 0.08, b.d + 0.08, YELLOW);
+    marking(b.x + b.w / 2 + 0.2, b.z, 0.8, 0.2, '#e9e9e2', tex.floorText(`POMPWAGEN ${d.id.replace('DOCK-', '')}`), Math.PI / 2);
   }
   // Parkeerplaats: een vak voor de heftruck en een voor de pompwagen.
   // De tekst lees je als je vanuit de hal naar de wand kijkt.

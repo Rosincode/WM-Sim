@@ -110,8 +110,13 @@ export const DRIVER_DOORS = [...new Set([(DOCKS[0]?.z ?? 0) - 4.7, (DOCKS[DOCKS.
 /** Zo ver (m) voor het midden van de pompwagen staat wat hij draagt, en zo ver erachter loopt de chauffeur. */
 export const JACK_REACH = 0.75;
 export const JACK_HANDLE = 0.85;
-/** Waar de elektrische pompwagen van een dock geparkeerd staat: naast de dockdeur, de vorken de hal in. */
-export const jackPark = (d: Dock) => ({ x: X0 + 1.85, z: d.z + 2.5, r: Math.PI / 2 });
+/**
+ * Waar de elektrische pompwagen van een dock geparkeerd staat: in zijn eigen vak naast de dockdeur, bij het
+ * scherm van dat dock, de vorken de hal in.
+ */
+export const jackPark = (d: Dock) => ({ x: X0 + 1.85, z: d.z - 2.5, r: Math.PI / 2 });
+/** Het parkeervak van die pompwagen op de vloer: midden, lengte (langs x) en breedte (langs z). */
+export const jackBay = (d: Dock) => ({ x: jackPark(d).x + 0.35, z: jackPark(d).z, w: 2.4, d: 0.9 });
 /** Het scherm naast de dockdeur (aan de wand), en waar de chauffeur staat om het te bedienen. */
 export const dockScreen = (d: Dock): Point => ({ x: X0, z: d.z - 1.95 });
 const screenStand = (d: Dock): Point => ({ x: X0 + 0.75, z: d.z - 1.72 });
