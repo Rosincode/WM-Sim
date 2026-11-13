@@ -75,6 +75,12 @@ function createMenu() {
     else open(id);
   }
 
+  // Menu open = muis vrij. Klik je met het menu open in de game, dan wordt de muis weer vastgezet om rond te kijken
+  // en zijn de knoppen niet meer aan te klikken: het menu gaat dan dicht (Tab haalt het terug, met de muis vrij).
+  document.addEventListener('pointerlockchange', () => {
+    if (document.pointerLockElement) close();
+  });
+
   button.addEventListener('click', () => {
     toggle();
     button.blur(); // anders drukt spatie of Enter tijdens het spelen de knop opnieuw in

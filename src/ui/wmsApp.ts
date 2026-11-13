@@ -56,6 +56,17 @@ const css = `
 `;
 let styled = false;
 
+// De app in het iframe zet zelf de focus op een invoerveld (bij het laden, na een verversing). Dat lukt ook als
+// het scherm alleen in de wereld te zien is, en dan gaan alle toetsen naar de app: de speler staat ineens stil en
+// geen toets doet nog iets. Zolang een scherm niet bediend wordt, halen we de focus daarom meteen terug.
+const frames: { el: HTMLElement; usable: boolean }[] = [];
+function reclaimFocus() {
+  const a = document.activeElement;
+  if (!(a instanceof HTMLIFrameElement) || !frames.some((f) => !f.usable && f.el.contains(a))) return;
+  a.blur();
+  window.focus();
+}
+
 /** Adresbalk + iframe. De app laadt pas bij de eerste show(), zodat de game niet onnodig verbinding maakt. */
 export function createAppFrame() {
   if (!styled) {
@@ -63,6 +74,8 @@ export function createAppFrame() {
     const style = document.createElement('style');
     style.textContent = css;
     document.head.appendChild(style);
+    // Gaat de focus naar een iframe, dan krijgt het venster van de game 'blur'; het actieve element staat er net daarna.
+    window.addEventListener('blur', () => setTimeout(reclaimFocus, 0));
   }
 
   const el = document.createElement('div');
@@ -117,9 +130,16 @@ export function createAppFrame() {
   input.addEventListener('input', () => input.setCustomValidity(''));
   listeners.push(load);
   load();
+  const frame = { el, usable: false };
+  frames.push(frame);
 
   return {
     el,
+    /** Wordt het scherm nu bediend (pc geopend, tablet dichtbij)? Alleen dan mag de app de toetsenbordfocus hebben. */
+    setUsable(on: boolean) {
+      frame.usable = on;
+      if (!on) reclaimFocus();
+    },
     /** Aanroepen zodra het scherm zichtbaar wordt. */
     show() {
       shown = true;

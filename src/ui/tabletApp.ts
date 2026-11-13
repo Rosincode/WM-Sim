@@ -66,6 +66,7 @@ export function createTabletApp({ camera, display, onClose }: Options) {
       if (focus !== focused) {
         focused = focus;
         el.classList.toggle('focus', focus);
+        app.setUsable(focus);
         if (focus) document.exitPointerLock?.(); // muis vrij voor de app
         else blur(); // toetsen weer naar de game
       }

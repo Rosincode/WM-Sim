@@ -70,6 +70,7 @@ export function createPcScreen({ camera, display, world }: Options) {
     open = value;
     backdrop.classList.toggle('open', open);
     frame.classList.toggle('open', open);
+    app.setUsable(open);
     if (open) {
       document.exitPointerLock?.(); // muis vrij om te klikken en te typen
     } else if (document.activeElement instanceof HTMLElement && frame.contains(document.activeElement)) {
