@@ -595,6 +595,14 @@ renderer.setAnimationLoop((now) => {
 
   forklift.update(dt, now / 1000);
   view.update(dt);
+  // In het overzicht staat de camera ver weg en is de dieptebuffer met een voorvlak op 5 cm te grof: onderdelen
+  // die een paar cm voor elkaar liggen (grille en ruiten van een vrachtwagen) flikkeren dan door elkaar heen.
+  // Het voorvlak schuift daarom mee met de afstand tot waar je naar kijkt.
+  const near = view.mode === 'overview' ? THREE.MathUtils.clamp(camera.position.distanceTo(controls.target) * 0.02, 0.05, 3) : 0.05;
+  if (Math.abs(near - camera.near) > camera.near * 0.05) {
+    camera.near = near;
+    camera.updateProjectionMatrix();
+  }
   jack.update(dt, player);
   // heupen net boven de zitting; forklift.seat is de plek van het hoofd
   handheld.update(dt, view.moving, driving ? view.look : undefined);

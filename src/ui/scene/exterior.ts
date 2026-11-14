@@ -158,6 +158,12 @@ export function createExterior(scene: THREE.Scene) {
   // Noordgevel: waar de aanbouw (kantoor en kantine) ertegenaan staat begint de gevel pas boven het dak daarvan
   facade((ANNEX.minX + ANNEX.maxX) / 2, -D / 2 - 0.03, Math.PI, ANNEX.maxX - ANNEX.minX, ROOM_HEIGHT);
   facade((ANNEX.maxX + W / 2) / 2, -D / 2 - 0.03, Math.PI, W / 2 - ANNEX.maxX);
+  // Binnenkant van de dakrand: het stuk gevel boven de halwanden. Zonder dak (overzicht) kijk je daar van
+  // binnenuit tegenaan; een gevelvlak kijkt alleen naar buiten, dus zonder dit vlak kijk je er dwars doorheen.
+  facade(X0 - 0.03, 0, Math.PI / 2, D, H);
+  facade(W / 2 + 0.03, 0, -Math.PI / 2, D, H);
+  facade(0, D / 2 + 0.03, Math.PI, W, H);
+  facade(0, -D / 2 - 0.03, 0, W, H);
 
   // Dakrand (donkerblauw), accentstreep (blauw) en plint, rondom
   const trimNavy = new Batch();
