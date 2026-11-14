@@ -21,13 +21,13 @@ export function setArticles(next: Article[]) {
 }
 
 /**
- * Elke stelling heeft zijn eigen artikel: het eerste artikel (op artikelnummer) ligt in de eerste stelling (R1A),
- * het tweede in R1B, enzovoort. Zijn er meer stellingen dan artikelen, dan blijven de laatste stellingen vrij.
- * @param row index van de stelling (0 = R1A, 1 = R1B, 2 = R2A, ...)
+ * Elk stellingpad heeft zijn eigen artikel: het eerste artikel (op artikelnummer) ligt in pad 1 (R1A en R1B),
+ * het tweede in pad 2, enzovoort. Zijn er meer artikelen dan paden, dan hebben de laatste artikelen geen eigen pad.
+ * @param aisle index van het pad (0 = pad 1: R1A en R1B)
  */
-export const articleOfRow = (row: number): Article | undefined => [...list].sort((a, b) => a.sku.localeCompare(b.sku))[row];
-/** De stelling (index) waar een artikel thuishoort, of -1 als het artikel onbekend is. */
-export const rowOfArticle = (sku: string) => [...list].sort((a, b) => a.sku.localeCompare(b.sku)).findIndex((a) => a.sku === sku);
+export const articleOfAisle = (aisle: number): Article | undefined => [...list].sort((a, b) => a.sku.localeCompare(b.sku))[aisle];
+/** Het pad (index) waar een artikel thuishoort, of -1 als het artikel onbekend is. */
+export const aisleOfArticle = (sku: string) => [...list].sort((a, b) => a.sku.localeCompare(b.sku)).findIndex((a) => a.sku === sku);
 
 export const isBlocked = (locationId: string) => blocked.has(locationId);
 

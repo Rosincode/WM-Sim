@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { AISLE_Z, DOCKS, DOCK_PITCH, EMPTY_PALLETS, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROW_FACE, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, WALKWAY_X, emptyStackSizes, location, rackLocationId, rowBehind, rowName, type Bay } from '../../sim/layout';
 import { DOCK_RAMP, DRIVER_DOORS, TRUCK, dockScreen, jackBay } from '../../sim/drivers';
-import { articleName, articleOfRow, articles } from '../../sim/catalog';
+import { articleName, articleOfAisle, articles } from '../../sim/catalog';
 import { createRooms, ROOM_DOORS } from './rooms';
 import { drawRackBoard } from './robotArt';
 import { STYLE, onTop } from './style';
@@ -508,7 +508,7 @@ export function createWarehouse(scene: THREE.Scene) {
   const rackLabels: { id: string; arrow: 'up' | 'down' }[] = [];
   const rackLabelSpots: { index: number; position: THREE.Vector3; back: boolean }[] = [];
 
-  // Bord op de kop van elke stelling (dockkant): elke stelling heeft zijn eigen robot (artikel), met zijn afbeelding.
+  // Bord op de kop van elke stelling (dockkant): elk pad heeft zijn eigen robot (artikel), met zijn afbeelding.
   // Zo zie je vanaf het looppad per stellingpad wat er links (A) en rechts (B) hoort te liggen. Zie refreshBoards.
   const BOARD = { w: 1.2, h: 1.7, y: 1.5, px: 512 };
   const boardGeo = new THREE.PlaneGeometry(BOARD.w, BOARD.h);
@@ -986,7 +986,7 @@ export function createWarehouse(scene: THREE.Scene) {
       if (r !== undefined && p.qty > 0) inRow[r].add(p.sku);
     }
     boards.forEach((b, r) => {
-      const own = articleOfRow(r);
+      const own = articleOfAisle(Math.floor(r / 2)); // R1A en R1B zijn pad 1: hetzelfde artikel
       // "Stofzuigrobot Dusty" -> "Dusty": alleen de naam van de robot
       const others = [...inRow[r]].filter((sku) => sku !== own?.sku).sort().map((sku) => articleName(sku).split(' ').pop() || sku);
       const shown = `${own?.sku}=${own?.name}|${others.join(',')}`;

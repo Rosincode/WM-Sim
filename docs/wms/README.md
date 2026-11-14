@@ -22,7 +22,7 @@ URL-opbouw in de game staat alleen in `src/integrations/wms/live.ts`.
 | [11](11-dubbele-stellingen.md) | 16 stellingen rug-aan-rug, codes `R1A` … `R8B` | gedaan in de WMS, op `pos_y` na (zie 13) |
 | [12](12-robotkoppeling.md) | Robotopdrachten uit de WMS, lossen en tellen | de game gebruikt het; **nog te doen in de WMS**: 8 robots, `pos_y`, limiet |
 | [13](13-wms-gelijk-met-de-hal.md) | Vergelijking hal en WMS van 2026-11-14; de game werkt palletlocaties in de WMS bij | **nog te doen in de WMS**: `pos_y`, 8 robots, ontvangsten zonder pallet, correctie-actie |
-| [14](14-vaste-stelling-per-artikel.md) | Elk artikel zijn eigen stelling; bord met de robot op de kop | **nog te doen in de WMS**: doellocatie van robotopdrachten, voorraad herverdelen |
+| [14](14-vaste-stelling-per-artikel.md) | Elk pad zijn eigen artikel (R1 = `SKU-001`, …); bord met de robot op de kop | **nog te doen in de WMS**: doellocatie van robotopdrachten, voorraad herverdelen |
 
 ## Wat er in de WMS nog moet gebeuren
 

@@ -345,7 +345,7 @@ export function drawRackBoard(g: G, w: number, h: number, title: string, item: B
   if (!item) {
     g.fillStyle = '#8a9097';
     g.font = `bold ${Math.round(w * 0.075)}px Arial`;
-    g.fillText('Vrije stelling', w / 2, head + (h - head - foot) / 2);
+    g.fillText('Vrij pad', w / 2, head + (h - head - foot) / 2);
     return;
   }
   const size = w - 40;

@@ -1,6 +1,6 @@
 import { onProcessEvent, publish, type ProcessEvent } from '../sim/events';
-import { rowOfArticle } from '../sim/catalog';
-import { DOCKS, rowName } from '../sim/layout';
+import { aisleOfArticle } from '../sim/catalog';
+import { DOCKS } from '../sim/layout';
 import type { RobotFleet, RobotTask } from '../sim/robots';
 import { robotApi, type WmsRobotApi } from './wmsGateway';
 
@@ -91,15 +91,14 @@ export function createRobotDispatch({
         if (fleet.laneRoom(door.inId) > (targeted.get(door.inId) ?? 0)) add(w.palletId, door.id, door.inId, 'unload');
         continue;
       }
-      // Elk artikel heeft zijn eigen stelling (src/sim/catalog.ts): alleen als die vol is gaat de pallet ergens anders heen
-      const own = rowOfArticle(w.sku);
-      const prefix = own < 0 ? '' : `${rowName(own)}-`;
-      const home = (locationId: string) => Number(!!prefix && locationId.startsWith(prefix));
+      // Elk artikel heeft zijn eigen pad (src/sim/catalog.ts): alleen als dat vol is gaat de pallet ergens anders heen
+      const own = aisleOfArticle(w.sku);
+      const home = (locationId: string) => Number(own >= 0 && /^R(\d+)[AB]-/.exec(locationId)?.[1] === String(own + 1));
       const spot = fleet
         .space(w.sku)
         // een pallet die op een tilrobot staat kan alleen naar de vloer
         .filter((s) => (!w.floorOnly || s.level === 1) && s.free > (targeted.get(s.locationId) ?? 0) && !avoid.get(w.palletId)?.has(s.locationId))
-        // eerst de eigen stelling van het artikel; daarna zo dicht mogelijk bij het dock, eerst de vloer, en dan
+        // eerst het eigen pad van het artikel; daarna zo dicht mogelijk bij het dock, eerst de vloer, en dan
         // bij voorkeur bij hetzelfde artikel
         .sort((a, b) => home(b.locationId) - home(a.locationId) || Math.abs(a.z - w.z) - Math.abs(b.z - w.z) || a.level - b.level || Number(b.sameSku) - Number(a.sameSku) || a.x - b.x)[0];
       if (spot) add(w.palletId, w.locationId, spot.locationId);
