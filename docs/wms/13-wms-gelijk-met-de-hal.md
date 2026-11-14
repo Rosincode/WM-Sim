@@ -17,6 +17,9 @@ sindsdien zelf doet.
 
 ### 2.1 `pos_y` van de stellingen (315 locaties)
 
+**Vervallen:** de hal heeft sinds 2026-11-14 tien paden; de juiste posities staan in
+[14](14-vaste-stelling-per-artikel.md).
+
 De codes kloppen, de positie niet: de WMS heeft de rijen op hele meters, de hal niet. `pos_x`,
 `level` en `location_type` zijn goed. Alleen `R6B` (12) staat al goed.
 

@@ -2,9 +2,9 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { AISLE_Z, DOCKS, DOCK_PITCH, EMPTY_PALLETS, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROW_FACE, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, WALKWAY_X, emptyStackSizes, location, rackLocationId, rowBehind, rowName, type Bay } from '../../sim/layout';
 import { DOCK_RAMP, DRIVER_DOORS, TRUCK, dockScreen, jackBay } from '../../sim/drivers';
-import { articleName, articleOfAisle, articles } from '../../sim/catalog';
+import { articleOfAisle, articles } from '../../sim/catalog';
 import { createRooms, ROOM_DOORS } from './rooms';
-import { drawRackBoard } from './robotArt';
+import { drawPoster } from './robotArt';
 import { STYLE, onTop } from './style';
 import { EXTINGUISHER_SIZE, extinguisherParts } from './extinguisher';
 import * as tex from './textures';
@@ -508,12 +508,12 @@ export function createWarehouse(scene: THREE.Scene) {
   const rackLabels: { id: string; arrow: 'up' | 'down' }[] = [];
   const rackLabelSpots: { index: number; position: THREE.Vector3; back: boolean }[] = [];
 
-  // Bord op de kop van elke stelling (dockkant): elk pad heeft zijn eigen robot (artikel), met zijn afbeelding.
-  // Zo zie je vanaf het looppad per stellingpad wat er links (A) en rechts (B) hoort te liggen. Zie refreshBoards.
-  const BOARD = { w: 1.2, h: 1.7, y: 1.5, px: 512 };
-  const boardGeo = new THREE.PlaneGeometry(BOARD.w, BOARD.h);
-  const boardBack = new THREE.BoxGeometry(0.012, BOARD.h + 0.04, BOARD.w + 0.04);
-  const boards: { title: string; texture: THREE.CanvasTexture; shown: string }[] = [];
+  // Postertje op de kop van elke stelling (dockkant): elk pad heeft zijn eigen robot (artikel), pad 1 het eerste
+  // artikel, pad 2 het tweede, enzovoort. Zo zie je vanaf het looppad welke robot in welk pad ligt. Zie refreshPosters.
+  const POSTER = { w: 0.6, h: 0.72, y: 1.75, px: 320 };
+  const posterGeo = new THREE.PlaneGeometry(POSTER.w, POSTER.h);
+  const posterBack = new THREE.BoxGeometry(0.012, POSTER.h + 0.03, POSTER.w + 0.03);
+  const posters: { texture: THREE.CanvasTexture; parts: THREE.Object3D[]; shown: string }[] = [];
 
   ROW_Z.forEach((z0, r) => {
     // De rijen staan rug-aan-rug: het pad ligt aan de kant `face`, aan de andere kant staat (meestal) de buurrij.
@@ -572,17 +572,17 @@ export function createWarehouse(scene: THREE.Scene) {
       s.rotation.y = ry;
       scene.add(s);
     }
-    // Het bord hangt aan de twee kopstaanders, onder de rij-aanduiding
-    const back = new THREE.Mesh(boardBack, STYLE.dark);
-    back.position.set(RACK_MIN_X - 0.056, BOARD.y, z0);
+    // Het postertje hangt op een plaat aan de kopstaanders, onder de rij-aanduiding
+    const back = new THREE.Mesh(posterBack, STYLE.dark);
+    back.position.set(RACK_MIN_X - 0.056, POSTER.y, z0);
     back.castShadow = back.receiveShadow = true;
-    const texture = tex.canvasTexture(BOARD.px, Math.round((BOARD.px * BOARD.h) / BOARD.w), () => {});
-    const picture = new THREE.Mesh(boardGeo, onTop(new THREE.MeshStandardMaterial({ map: texture, roughness: 0.6 })));
-    picture.position.set(RACK_MIN_X - 0.0635, BOARD.y, z0);
+    const texture = tex.canvasTexture(POSTER.px, Math.round((POSTER.px * POSTER.h) / POSTER.w), () => {});
+    const picture = new THREE.Mesh(posterGeo, onTop(new THREE.MeshStandardMaterial({ map: texture, roughness: 0.6 })));
+    picture.position.set(RACK_MIN_X - 0.0635, POSTER.y, z0);
     picture.rotation.y = -Math.PI / 2;
     picture.receiveShadow = true;
     scene.add(back, picture);
-    boards.push({ title: `Stelling ${rowName(r)}`, texture, shown: '' });
+    posters.push({ texture, parts: [back, picture], shown: '' });
     colliders.push({ minX: RACK_MIN_X - 0.45, maxX: RACK_MAX_X + 0.45, minZ: z0 - 0.62, maxZ: z0 + 0.62 });
   });
   const labelAtlas = tex.locationLabelAtlas(rackLabels);
@@ -976,36 +976,27 @@ export function createWarehouse(scene: THREE.Scene) {
   /** Bezette palletplekken per locatie. */
   const usedSlots = new Map<string, Set<number>>();
 
-  /** De borden op de koppen van de stellingen: het artikel van de stelling, en wat er nu verder nog ligt. */
-  const rowOfName = new Map(ROW_Z.map((_, r) => [rowName(r), r]));
-  let boardArticles: unknown = null;
-  function refreshBoards(list: PalletView[]) {
-    const inRow = ROW_Z.map(() => new Set<string>());
-    for (const p of list) {
-      const r = rowOfName.get(p.locationId.split('-')[0]);
-      if (r !== undefined && p.qty > 0) inRow[r].add(p.sku);
-    }
-    boards.forEach((b, r) => {
-      const own = articleOfAisle(Math.floor(r / 2)); // R1A en R1B zijn pad 1: hetzelfde artikel
-      // "Stofzuigrobot Dusty" -> "Dusty": alleen de naam van de robot
-      const others = [...inRow[r]].filter((sku) => sku !== own?.sku).sort().map((sku) => articleName(sku).split(' ').pop() || sku);
-      const shown = `${own?.sku}=${own?.name}|${others.join(',')}`;
-      if (shown === b.shown) return;
-      b.shown = shown;
-      const canvas = b.texture.image as HTMLCanvasElement;
-      drawRackBoard(canvas.getContext('2d')!, canvas.width, canvas.height, b.title, own ? { sku: own.sku, name: own.name } : null, others);
-      b.texture.needsUpdate = true;
+  /** De postertjes op de koppen van de stellingen: de robot van het pad (R1A en R1B zijn pad 1: hetzelfde artikel). */
+  let posterArticles: unknown = null;
+  function refreshPosters() {
+    if (posterArticles === articles()) return; // de artikelen komen uit de WMS en kunnen later binnenkomen
+    posterArticles = articles();
+    posters.forEach((p, r) => {
+      const own = articleOfAisle(Math.floor(r / 2));
+      const shown = own ? `${own.sku}=${own.name}` : '';
+      for (const part of p.parts) part.visible = !!own; // een pad zonder eigen artikel heeft geen poster
+      if (!own || shown === p.shown) return;
+      p.shown = shown;
+      const canvas = p.texture.image as HTMLCanvasElement;
+      drawPoster(canvas.getContext('2d')!, canvas.width, canvas.height, own.sku, own.name);
+      p.texture.needsUpdate = true;
     });
   }
 
   /** Tekent de pallets in de stellingen, elk op zijn eigen plek, met zijn sticker als hij die heeft. */
   function setPallets(list: PalletView[]) {
     const signature = list.map((p) => `${p.id}:${p.locationId}:${p.slot}:${p.qty}:${p.sku}:${p.unlabeled ? 0 : p.unbooked ? 2 : 1}`).join('|');
-    // De namen van de artikelen komen uit de WMS en kunnen later binnenkomen dan de pallets
-    if (signature !== stockSignature || boardArticles !== articles()) {
-      boardArticles = articles();
-      refreshBoards(list);
-    }
+    refreshPosters();
     if (signature === stockSignature) return;
     stockSignature = signature;
 

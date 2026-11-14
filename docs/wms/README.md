@@ -22,15 +22,15 @@ URL-opbouw in de game staat alleen in `src/integrations/wms/live.ts`.
 | [11](11-dubbele-stellingen.md) | 16 stellingen rug-aan-rug, codes `R1A` … `R8B` | gedaan in de WMS, op `pos_y` na (zie 13) |
 | [12](12-robotkoppeling.md) | Robotopdrachten uit de WMS, lossen en tellen | de game gebruikt het; **nog te doen in de WMS**: 8 robots, `pos_y`, limiet |
 | [13](13-wms-gelijk-met-de-hal.md) | Vergelijking hal en WMS van 2026-11-14; de game werkt palletlocaties in de WMS bij | **nog te doen in de WMS**: `pos_y`, 8 robots, ontvangsten zonder pallet, correctie-actie |
-| [14](14-vaste-stelling-per-artikel.md) | Elk pad zijn eigen artikel (R1 = `SKU-001`, …); bord met de robot op de kop | **nog te doen in de WMS**: doellocatie van robotopdrachten, voorraad herverdelen |
+| [14](14-vaste-stelling-per-artikel.md) | Tien paden, elk recht voor zijn dock en met zijn eigen artikel (R1 = `SKU-001`, …) | **nog te doen in de WMS**: 84 locaties, `pos_y`, 4 robots, doellocatie van robotopdrachten, voorraad herverdelen |
 
 ## Wat er in de WMS nog moet gebeuren
 
 Gecontroleerd met de API-client van de game op 2026-11-14; de details staan in [13](13-wms-gelijk-met-de-hal.md).
 
-1. **`pos_y` van de stellingen** (13, 2.1). De 366 locaties bestaan met de juiste codes; van 315
-   stellinglocaties wijkt alleen `pos_y` af.
-2. **Acht robots toevoegen** (13, 2.2): `GKP-02`, `-04`, `-06`, `-08` en `GKF-01`, `-03`, `-05`, `-07`.
+1. **Tien paden** (14): 84 locaties toevoegen (`R9A` … `R10B`), `pos_y` van alle locaties bijwerken,
+   vier robots toevoegen, artikelen per pad wegzetten en de voorraad herverdelen.
+2. **Schrijfrechten en correctie-acties voor de game** (13, 2.5 en 2.6).
 3. **Ontvangsten van `simulatie_tick` krijgen geen pallet** (13, 2.3 en 2.4): lossen, tellen en
    wegzetten kunnen daardoor niet in de WMS worden geboekt.
 4. **Correctie-actie voor aantallen** (13, 2.5): nieuw voorstel.

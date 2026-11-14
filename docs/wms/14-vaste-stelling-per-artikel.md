@@ -1,59 +1,76 @@
-# 14 — Elk pad zijn eigen artikel
+# 14 — Tien paden: elk dock zijn eigen pad, elk pad zijn eigen artikel
 
-In de hal heeft elk stellingpad één eigen robot (artikel): pad 1 (`R1A` en `R1B`) is `SKU-001`, pad 2
-is `SKU-002`, enzovoort. Op de kop van elke stelling hangt een bord met de afbeelding van die robot,
-zodat je vanaf het looppad ziet wat er in het pad ligt. De WMS moet dezelfde indeling aanhouden,
-anders klopt het bord niet met wat er ligt.
+De hal is opnieuw ingedeeld (2026-11-14). Er zijn nu **10 stellingpaden**, één recht voor elk dock, en
+elk pad heeft één eigen robot (artikel): pad 1 (`R1A` en `R1B`) ligt voor `DOCK-01` en is van
+`SKU-001`, pad 2 voor `DOCK-02` is van `SKU-002`, enzovoort. Op de kop van elke stelling hangt een
+postertje met de robot van dat pad.
 
-**Stand 2026-11-14:** in de WMS liggen de vijf artikelen met voorraad door elkaar in `R1A` t/m `R6A`.
-De game toont dat op het bord als *Ligt hier ook: …*.
+Dit vervangt de indeling met 8 paden uit 11 en de `pos_y`-tabel in 13 (2.1).
 
-## 1. De indeling
+## 1. Wat er verandert
 
-Het artikel met `volgnr` n ligt in pad n, in stelling A en B (dezelfde volgorde als `vast_dock`):
+| | Was | Nu |
+|---|---|---|
+| Paden | 8 | 10 |
+| Stellingen | 16 (`R1A` … `R8B`) | 20 (`R1A` … `R10B`) |
+| Stellinglocaties | 336 | 420 (84 erbij: `R9A`, `R9B`, `R10A`, `R10B`, elk 7 secties × 3 niveaus) |
+| Totaal locaties | 366 | 450 |
+| Afstand tussen twee docks | 5 m | 6,3 m (gelijk aan de afstand tussen twee paden) |
+| Diepte van de hal | 72 m | 84 m |
+| Padrobots | 16 | 20 (`GKP-09`, `GKP-10`, `GKF-09`, `GKF-10` erbij) |
 
-| Artikel | Robot | Pad | Stellingen | Vast dock |
-|---|---|---|---|---|
-| `SKU-001` | Stofzuigrobot Dusty | 1 | `R1A`, `R1B` | `DOCK-01` |
-| `SKU-002` | Wasvouwrobot Foldy | 2 | `R2A`, `R2B` | `DOCK-02` |
-| `SKU-003` | Robothond Bolt | 3 | `R3A`, `R3B` | `DOCK-03` |
-| `SKU-004` | Robotkat Miso | 4 | `R4A`, `R4B` | `DOCK-04` |
-| `SKU-005` | Dansrobot Groove | 5 | `R5A`, `R5B` | `DOCK-05` |
-| `SKU-006` | Ramenwasrobot Clearo | 6 | `R6A`, `R6B` | `DOCK-06` |
-| `SKU-007` | Robotvogel Pip | 7 | `R7A`, `R7B` | `DOCK-07` |
-| `SKU-008` | Muziekrobot Beat | 8 | `R8A`, `R8B` | `DOCK-08` |
-| `SKU-009` | Robotkonijn Hop | geen | | `DOCK-09` |
-| `SKU-010` | Goochelrobot Magix | geen | | `DOCK-10` |
+De codes van de bestaande locaties blijven gelijk; alleen hun `pos_y` verandert. `pos_x`, `level` en
+`location_type` blijven zoals ze zijn (docklocaties: `pos_x` -28 voor de deur, -20.3 voor `-IN` en
+`-UIT`).
 
-**Open punt:** de hal heeft 8 paden en er zijn 10 artikelen. `SKU-009` en `SKU-010` hebben geen eigen
-pad. Tot de hal twee paden groter is (dan komen er 84 locaties bij: `R9A` t/m `R10B`) kan de WMS ze
-het beste niet laten leveren, of ze wegzetten waar plek is.
+## 2. De indeling, met `pos_y`
 
-De game leidt de indeling af uit de artikellijst: artikelen op `sku` gesorteerd, het n-de artikel in
-pad n. Een veld is daarvoor niet nodig; komt er in de WMS een veld `vast_pad` op `item`, meld dat
-dan, dan neemt de game dat over.
+| Pad | Artikel | Robot | Stelling A | Stelling B | Dock | `-IN` | `-UIT` |
+|---|---|---|---|---|---|---|---|
+| 1 | `SKU-001` | Stofzuigrobot Dusty | `R1A` -30.85 | `R1B` -25.85 | `DOCK-01` -28.35 | -29.65 | -27.05 |
+| 2 | `SKU-002` | Wasvouwrobot Foldy | `R2A` -24.55 | `R2B` -19.55 | `DOCK-02` -22.05 | -23.35 | -20.75 |
+| 3 | `SKU-003` | Robothond Bolt | `R3A` -18.25 | `R3B` -13.25 | `DOCK-03` -15.75 | -17.05 | -14.45 |
+| 4 | `SKU-004` | Robotkat Miso | `R4A` -11.95 | `R4B` -6.95 | `DOCK-04` -9.45 | -10.75 | -8.15 |
+| 5 | `SKU-005` | Dansrobot Groove | `R5A` -5.65 | `R5B` -0.65 | `DOCK-05` -3.15 | -4.45 | -1.85 |
+| 6 | `SKU-006` | Ramenwasrobot Clearo | `R6A` 0.65 | `R6B` 5.65 | `DOCK-06` 3.15 | 1.85 | 4.45 |
+| 7 | `SKU-007` | Robotvogel Pip | `R7A` 6.95 | `R7B` 11.95 | `DOCK-07` 9.45 | 8.15 | 10.75 |
+| 8 | `SKU-008` | Muziekrobot Beat | `R8A` 13.25 | `R8B` 18.25 | `DOCK-08` 15.75 | 14.45 | 17.05 |
+| 9 | `SKU-009` | Robotkonijn Hop | `R9A` 19.55 | `R9B` 24.55 | `DOCK-09` 22.05 | 20.75 | 23.35 |
+| 10 | `SKU-010` | Goochelrobot Magix | `R10A` 25.85 | `R10B` 30.85 | `DOCK-10` 28.35 | 27.05 | 29.65 |
 
-## 2. Te doen in de WMS-app
+Als formule, voor pad en dock `n` (1 t/m 10): het pad en `DOCK-NN` liggen op `pos_y` = -28.35 +
+(n − 1) × 6.3; stelling A 2.5 lager, stelling B 2.5 hoger; `DOCK-NN-IN` 1.3 lager, `DOCK-NN-UIT` 1.3
+hoger. Nieuwe stellinglocaties: sectie 01 t/m 07 op `pos_x` -8, -4, 0, 4, 8, 12, 16; niveau 1 is
+`pick`, niveau 2 en 3 zijn `rack`.
 
-1. **Doellocatie van een robotopdracht.** Bij `wegzetten` kiest de WMS een vrije locatie in het pad
+De game biedt alles als CSV aan in het WMS-paneel (toets K): de 84 ontbrekende locaties (*Lijst
+(CSV)*) en de bestaande locaties met hun nieuwe positie (*download de juiste gegevens (CSV)*).
+
+Het artikel van een pad is het artikel met dat `volgnr`, gelijk aan `vast_dock`. De game leidt het af
+uit de artikellijst (op `sku` gesorteerd); een veld is niet nodig.
+
+## 3. Te doen in de WMS-app
+
+1. **84 locaties toevoegen** (`R9A-01-1` … `R10B-07-3`) en **`pos_y` van alle locaties bijwerken**
+   (hoofdstuk 2). Tot de locaties er zijn weigert de WMS elke boeking in pad 9 en 10.
+2. **Vier robots toevoegen:** `GKP-09`, `GKP-10` (tilrobot) en `GKF-09`, `GKF-10` (heftruck).
+3. **Doellocatie van een robotopdracht.** Bij `wegzetten` kiest de WMS een vrije locatie in het pad
    van het artikel (eerst niveau 1). Alleen als het pad vol is: een ander pad.
-2. **Aanvullen** blijft binnen dezelfde stelling (van niveau 2 of 3 naar niveau 1); dat is al zo.
-3. **De bestaande voorraad herverdelen.** De pallets die nu in een ander pad staan naar het pad van
-   hun artikel verplaatsen: als robotopdrachten (`aanleiding` = `hand` of een nieuwe waarde
-   `herindelen`), dan rijden de robots in de hal ze om, of in één keer in de gegevens gevolgd door
-   *Hal resetten* in de game.
-4. **Capaciteit.** Een pad heeft 42 locaties × 3 pallets = 126 palletplekken. De beginvoorraad per
-   artikel moet daarin passen.
+4. **De bestaande voorraad herverdelen.** Nu liggen vijf artikelen door elkaar in `R1A` t/m `R6A`.
+   Verplaats elke pallet naar het pad van zijn artikel: als robotopdrachten (dan rijden de robots
+   in de hal ze om), of in één keer in de gegevens gevolgd door *Hal resetten* in de game.
+5. **Capaciteit.** Een pad heeft 42 locaties × 3 pallets = 126 palletplekken.
+6. **API-beschrijving bijwerken** (aantal locaties, `pos_y`-formule, robots).
 
-## 3. Wat de game doet
+## 4. Wat de game doet
 
-- Het bord op de kop van elke stelling toont de robot van het pad. Ligt er iets anders, dan staat
-  dat klein onderaan.
 - Zonder WMS-login (mock) zetten de robots een pallet weg in het pad van zijn artikel, en pas
-  elders als dat vol is. Met de WMS bepaalt de WMS de doellocatie (punt 1).
+  elders als dat vol is. Met de WMS bepaalt de WMS de doellocatie (punt 3).
 - Een speler die met de hand wegzet wordt niet tegengehouden: dat beslist de WMS.
+- De ingebouwde mock-WMS kent alleen `SKU-001` t/m `SKU-005`; de postertjes van pad 6 t/m 10 hangen
+  er wel.
 
 ## Terug te melden
 
-- Of de WMS de indeling uit hoofdstuk 1 overneemt, en hoe de bestaande voorraad wordt herverdeeld.
-- Wat er met `SKU-009` en `SKU-010` gebeurt.
+- Dat de locaties, posities en robots zijn bijgewerkt.
+- Hoe de bestaande voorraad wordt herverdeeld.

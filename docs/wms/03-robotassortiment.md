@@ -54,7 +54,7 @@ Een artikel toevoegen in de WMS is genoeg om het in de hal te krijgen: de game g
 doosmaat en kleur, afgeleid van de `sku`.
 
 Elk van de tien artikelen heeft in de game een eigen afbeelding van de robot (op `sku`). Elk pad
-heeft één eigen artikel, met die afbeelding op een bord op de kop: zie [14](14-vaste-stelling-per-artikel.md).
+heeft één eigen artikel, met die afbeelding op een postertje op de kop van de stelling: zie [14](14-vaste-stelling-per-artikel.md).
 Een nieuw artikel krijgt een algemene robot als afbeelding tot er in de game een tekening voor is gemaakt.
 
 ## 4. Nog niet gebouwd

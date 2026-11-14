@@ -316,48 +316,20 @@ export function drawRobot(g: G, sku: string, x: number, y: number, size: number)
   g.restore();
 }
 
-export type BoardItem = { sku: string; name: string };
-
 /**
- * Het bord op de kop van een stelling: de ene robot (artikel) die in deze stelling thuishoort, groot in beeld.
- * @param item het artikel van deze stelling; null = een vrije stelling zonder eigen artikel
- * @param others namen van andere artikelen die er nu ook liggen (horen er niet): klein onderaan
+ * Het postertje op de kop van een stelling: de robot (artikel) van dat pad, met zijn naam eronder.
+ * Het vak is iets hoger dan breed: bovenin de tekening (vierkant), daaronder de naam.
  */
-export function drawRackBoard(g: G, w: number, h: number, title: string, item: BoardItem | null, others: string[] = []) {
+export function drawPoster(g: G, w: number, h: number, sku: string, name: string) {
   g.fillStyle = '#f7f7f2';
   g.fillRect(0, 0, w, h);
-  const head = Math.round(h * 0.1);
-  g.fillStyle = '#17346b';
-  g.fillRect(0, 0, w, head);
-  g.fillStyle = '#ffffff';
+  const pad = Math.round(w * 0.04);
+  const size = w - 2 * pad;
+  drawRobot(g, sku, pad, pad, size);
+  // "Stofzuigrobot Dusty": alleen de naam van de robot
+  g.fillStyle = '#23262b';
   g.textAlign = 'center';
   g.textBaseline = 'middle';
-  g.font = `bold ${Math.round(head * 0.52)}px Arial`;
-  g.fillText(title, w / 2, head / 2 + 2, w - 24);
-  const foot = others.length ? Math.round(h * 0.07) : 0;
-  if (foot) {
-    g.fillStyle = '#fff1d6';
-    g.fillRect(0, h - foot, w, foot);
-    g.fillStyle = '#7a4b00';
-    g.font = `${Math.round(foot * 0.46)}px Arial`;
-    g.fillText(`Ligt hier ook: ${others.join(', ')}`, w / 2, h - foot / 2 + 1, w - 24);
-  }
-  if (!item) {
-    g.fillStyle = '#8a9097';
-    g.font = `bold ${Math.round(w * 0.075)}px Arial`;
-    g.fillText('Vrij pad', w / 2, head + (h - head - foot) / 2);
-    return;
-  }
-  const size = w - 40;
-  const top = head + (h - head - foot - size - h * 0.17) / 2;
-  drawRobot(g, item.sku, 20, top, size);
-  // "Stofzuigrobot Dusty": de naam van de robot groot, de soort en het artikelnummer klein
-  const cut = item.name.lastIndexOf(' ');
-  const kind = cut > 0 ? item.name.slice(0, cut) : '';
-  g.fillStyle = '#23262b';
-  g.font = `bold ${Math.round(h * 0.085)}px Arial`;
-  g.fillText(cut > 0 ? item.name.slice(cut + 1) : item.name || item.sku, w / 2, top + size + h * 0.065, w - 24);
-  g.fillStyle = '#5b6168';
-  g.font = `${Math.round(h * 0.042)}px Arial`;
-  g.fillText(kind ? `${kind} · ${item.sku}` : item.sku, w / 2, top + size + h * 0.135, w - 24);
+  g.font = `bold ${Math.round((h - size - pad) * 0.6)}px Arial`;
+  g.fillText(name.split(' ').pop() || sku, w / 2, pad + size + (h - size - pad) / 2 + 2, w - 2 * pad);
 }

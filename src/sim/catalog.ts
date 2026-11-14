@@ -20,14 +20,27 @@ export function setArticles(next: Article[]) {
   bySku = new Map(list.map((a) => [a.sku, a]));
 }
 
+/** Het assortiment uit docs/wms/03: de indeling van de paden staat daarmee vast, ook als de WMS (of de mock) er minder kent. */
+const ASSORTMENT: Article[] = [
+  ...SKUS.map((sku) => ({ sku, name: SKU_NAMES[sku] ?? '' })),
+  { sku: 'SKU-006', name: 'Ramenwasrobot Clearo' },
+  { sku: 'SKU-007', name: 'Robotvogel Pip' },
+  { sku: 'SKU-008', name: 'Muziekrobot Beat' },
+  { sku: 'SKU-009', name: 'Robotkonijn Hop' },
+  { sku: 'SKU-010', name: 'Goochelrobot Magix' },
+];
+/** Alle artikelen op artikelnummer: die van de WMS, aangevuld met het assortiment. */
+const ordered = () =>
+  [...new Map([...ASSORTMENT, ...list].map((a) => [a.sku, a])).values()].sort((a, b) => a.sku.localeCompare(b.sku));
+
 /**
  * Elk stellingpad heeft zijn eigen artikel: het eerste artikel (op artikelnummer) ligt in pad 1 (R1A en R1B),
- * het tweede in pad 2, enzovoort. Zijn er meer artikelen dan paden, dan hebben de laatste artikelen geen eigen pad.
+ * het tweede in pad 2, enzovoort. Pad n ligt recht voor dock n.
  * @param aisle index van het pad (0 = pad 1: R1A en R1B)
  */
-export const articleOfAisle = (aisle: number): Article | undefined => [...list].sort((a, b) => a.sku.localeCompare(b.sku))[aisle];
+export const articleOfAisle = (aisle: number): Article | undefined => ordered()[aisle];
 /** Het pad (index) waar een artikel thuishoort, of -1 als het artikel onbekend is. */
-export const aisleOfArticle = (sku: string) => [...list].sort((a, b) => a.sku.localeCompare(b.sku)).findIndex((a) => a.sku === sku);
+export const aisleOfArticle = (sku: string) => ordered().findIndex((a) => a.sku === sku);
 
 export const isBlocked = (locationId: string) => blocked.has(locationId);
 
