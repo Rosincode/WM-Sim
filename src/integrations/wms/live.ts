@@ -15,7 +15,10 @@ import {
 // Acties: customer_order (start_picking, confirm_pick, stage_order, load_order), order_line (confirm_pick_line),
 // stock (putaway, register_pallet), truck_visit (truck_check_out), goods_receipt (unload, count),
 // robot_task (start_robot_task, complete_robot_task, fail_robot_task). De volledige beschrijving staat in
-// GET {base}/_openapi. Locaties, artikelen en voorraad zijn via de API alleen te lezen.
+// GET {base}/_openapi. Artikelen en voorraad leest de game alleen.
+//   POST {base}/location/_batch                 -> locaties aanmaken of bijwerken: { operations: [{ op: 'upsert',
+//                                                  match: { location_id }, values: {...} }] }, hooguit 100 per call,
+//                                                  alles of niets. Antwoord { results: [{ outcome }] }.
 // Verwijzingen (sku, dock_id, *_location_id, order_id op een regel, truck_visit_id) zijn de platform-id (uuid,
 // veld `id`), niet de tekstsleutel. Deze file vertaalt tussen beide; de rest van de game kent alleen
 // de tekstsleutels (SKU-001, DOCK-01, ORD-…). Tekst blijven: pallet_id, truck_id en location_id bij scan_log.
@@ -50,6 +53,7 @@ const MAX_RETRIES = 3; // bij 429
 const MAX_WAIT_S = 30;
 const PAGE_SIZE = 200; // het maximum dat de WMS per call teruggeeft
 const MAX_PAGES = 50;
+const BATCH_SIZE = 100; // het maximum aan bewerkingen in één _batch-call
 
 // Aanmelden: de API-sleutel (amk_...) van een API-client in de WMS gaat mee als Bearer-token.
 // De WMS accepteert geen Basic auth.
@@ -85,8 +89,11 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
     // Fouten komen als JSON { error }: bij een weigering (409) is dat de melding voor de speler.
     let reason = '';
     try {
-      const body = JSON.parse(text) as { error?: unknown };
+      const body = JSON.parse(text) as { error?: unknown; details?: unknown };
       if (typeof body?.error === 'string') reason = body.error;
+      // Bij 400 zegt details welk veld niet klopt (bij een batch: operations.<n>.<veld>).
+      const first = Array.isArray(body?.details) ? (body.details[0] as { path?: unknown; message?: unknown } | undefined) : undefined;
+      if (reason && first && (first.path || first.message)) reason += ` (${[first.path, first.message].filter(Boolean).join(': ')})`;
     } catch {
       // geen JSON: de ruwe tekst hieronder
     }
@@ -306,10 +313,29 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
       return rows.map((r): WmsItem => ({ sku: r.sku, description: r.description ?? '', category: r.category ?? undefined }));
     },
 
-    async createLocation(l) {
-      if (await findLocation(l.id)) return false;
-      // POST op location geeft 403: locaties zijn via de API alleen te lezen.
-      throw new WmsError('De WMS staat het aanmaken van locaties via de API niet toe. Download de CSV en voeg ze toe in de WMS-app.', 403);
+    async syncLocations(list, onProgress) {
+      const round = (n: number) => Math.round(n * 1000) / 1000;
+      let created = 0;
+      let updated = 0;
+      try {
+        for (let i = 0; i < list.length; i += BATCH_SIZE) {
+          const res = await post<{ results?: { outcome?: string }[] } | undefined>('location/_batch', {
+            operations: list.slice(i, i + BATCH_SIZE).map((l) => ({
+              op: 'upsert',
+              match: { location_id: l.id },
+              values: { location_type: l.type, pos_x: round(l.x), pos_y: round(l.y), level: l.level },
+            })),
+          });
+          for (const r of res?.results ?? []) {
+            if (r.outcome === 'created') created++;
+            else if (r.outcome === 'updated') updated++;
+          }
+          onProgress?.(Math.min(i + BATCH_SIZE, list.length));
+        }
+      } finally {
+        locations = null; // nieuwe locaties hebben een nieuwe platform-id: de verwijzingen opnieuw ophalen
+      }
+      return { created, updated };
     },
 
     async getStock(): Promise<Item[]> {

@@ -68,10 +68,21 @@ export function createMockClient(): WmsClient {
       return structuredClone(locations);
     },
 
-    async createLocation(l) {
-      if (locations.some((x) => x.id === l.id)) return false;
-      locations.push({ id: l.id, type: l.type, x: l.x, y: l.y, level: l.level, blocked: false });
-      return true;
+    async syncLocations(list, onProgress) {
+      let created = 0;
+      let updated = 0;
+      for (const l of list) {
+        const found = locations.find((x) => x.id === l.id);
+        if (found) {
+          Object.assign(found, { type: l.type, x: l.x, y: l.y, level: l.level });
+          updated++;
+        } else {
+          locations.push({ id: l.id, type: l.type, x: l.x, y: l.y, level: l.level, blocked: false });
+          created++;
+        }
+      }
+      onProgress?.(list.length);
+      return { created, updated };
     },
 
     async getItems() {

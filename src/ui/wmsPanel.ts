@@ -1,5 +1,5 @@
 import { wms } from '../integrations/wms';
-import { addMissingLocations, hallLocations, locationsCsv, missingLocations, type HallLocation } from './wmsLocations';
+import { compareLocations, hallLocations, locationsCsv, syncLocationsToWms, type HallLocation } from './wmsLocations';
 import { forget, loadRemembered, remember } from './wmsRemember';
 import { wmsSync } from './wmsSync';
 
@@ -45,6 +45,8 @@ export function mountWmsPanel(parent?: HTMLElement) {
   let messageClass = '';
   /** Locaties van de hal die de WMS niet kent; null = nog niet gecontroleerd. */
   let missing: HallLocation[] | null = null;
+  /** Locaties die de WMS wel kent, maar met een ander type, niveau of een andere positie dan de hal. */
+  let different: HallLocation[] = [];
   let checkedStamp = -1;
   let adding = '';
 
@@ -52,9 +54,11 @@ export function mountWmsPanel(parent?: HTMLElement) {
     const client = wms.client;
     checkedStamp = wms.locationsStamp;
     try {
-      const found = missingLocations(await client.getLocations());
+      const cmp = compareLocations(await client.getLocations());
       if (client !== wms.client) return;
-      missing = found;
+      const ids = new Set(cmp.different);
+      missing = cmp.missing;
+      different = hallLocations().filter((l) => ids.has(l.id));
     } catch {
       missing = null; // de fout van het ophalen staat al in het API-log
     }
@@ -78,11 +82,14 @@ export function mountWmsPanel(parent?: HTMLElement) {
   function locationsHtml() {
     if (missing === null) return '';
     const total = hallLocations().length;
-    if (missing.length === 0) return `<div class="msg ok">Alle ${total} locaties van de hal staan in de WMS.</div>`;
-    const sample = missing.slice(0, 3).map((l) => l.id).join(', ');
-    return `<div class="msg err">De WMS mist ${missing.length} van de ${total} locaties van de hal (${escapeHtml(sample)}${missing.length > 3 ? ', …' : ''}). Daar weigert hij scans en boekingen.</div>
-      <button data-act="add-locations" ${adding ? 'disabled' : ''}>${adding ? `Toevoegen… ${adding}` : 'Toevoegen aan de WMS'}</button>
-      <button class="secondary" data-act="csv-locations">Lijst (CSV)</button>`;
+    if (missing.length + different.length === 0) return `<div class="msg ok">Alle ${total} locaties van de hal staan in de WMS, op de juiste plek.</div>`;
+    const sample = (list: HallLocation[]) => `${escapeHtml(list.slice(0, 3).map((l) => l.id).join(', '))}${list.length > 3 ? ', …' : ''}`;
+    const lines: string[] = [];
+    if (missing.length) lines.push(`De WMS mist ${missing.length} van de ${total} locaties van de hal (${sample(missing)}). Daar weigert hij scans en boekingen.`);
+    if (different.length) lines.push(`${different.length} locaties hebben in de WMS een ander type, niveau of een andere positie (${sample(different)}).`);
+    return `${lines.map((l) => `<div class="msg err">${l}</div>`).join('')}
+      <button data-act="add-locations" ${adding ? 'disabled' : ''}>${adding ? `Bijwerken… ${adding}` : 'Locaties bijwerken in de WMS'}</button>
+      ${missing.length ? '<button class="secondary" data-act="csv-locations">Lijst (CSV)</button>' : ''}`;
   }
 
   /** Wat de game uit de WMS heeft overgenomen, en waar de hal en de WMS niet op elkaar passen. */
@@ -97,7 +104,7 @@ export function mountWmsPanel(parent?: HTMLElement) {
     if (r.locations.different.length) {
       warn.push(
         `${r.locations.different.length} locaties hebben in de WMS een ander type, niveau of positie (${sample(r.locations.different)}). ` +
-          'De hal ligt vast: <a href="#" data-act="csv-different" style="color:inherit">download de juiste gegevens (CSV)</a> en zet ze in de WMS-app.',
+          'De hal ligt vast: werk ze bij met de knop hierboven, of <a href="#" data-act="csv-different" style="color:inherit">download de juiste gegevens (CSV)</a>.',
       );
     }
     if (r.stock.hidden) warn.push(`${r.stock.hidden} voorraadregels liggen op een plek die de hal niet toont.`);
@@ -149,21 +156,19 @@ export function mountWmsPanel(parent?: HTMLElement) {
     `;
 
     panel.querySelector('[data-act="add-locations"]')?.addEventListener('click', async () => {
-      if (!missing?.length || adding) return;
-      const list = missing;
+      if (!missing || adding) return;
+      const list = [...missing, ...different];
+      if (!list.length) return;
       adding = `0 / ${list.length}`;
       render();
-      const { added, existing, error } = await addMissingLocations(list, (done, total) => {
-        adding = `${done} / ${total}`;
+      const { created, updated, done, error } = await syncLocationsToWms(list, (n, total) => {
+        adding = `${n} / ${total}`;
         render();
       });
       adding = '';
       await checkLocations();
-      const already = existing
-        ? ` ${existing} stonden er al en zijn overgeslagen: de WMS gaf ze niet terug in de lijst met locaties (waarschijnlijk geeft de API maar een deel van de lijst).`
-        : '';
-      if (error) setMessage(`${added} locaties toegevoegd.${already} Daarna weigerde de WMS: ${error}`, 'err');
-      else setMessage(`${added} locaties toegevoegd aan de WMS.${already}`, 'ok');
+      if (error) setMessage(`${done} van de ${list.length} locaties verwerkt. Daarna weigerde de WMS: ${error}`, 'err');
+      else setMessage(`WMS bijgewerkt: ${created} locaties toegevoegd, ${updated} aangepast.`, 'ok');
     });
     panel.querySelector('[data-act="csv-locations"]')?.addEventListener('click', () => {
       if (!missing?.length) return;
@@ -246,6 +251,7 @@ export function mountWmsPanel(parent?: HTMLElement) {
 
   wms.onChange(() => {
     missing = null;
+    different = [];
     checkedStamp = -1; // andere WMS of nieuwe locaties: opnieuw controleren
     render();
   });

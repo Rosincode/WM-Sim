@@ -34,10 +34,11 @@ export interface WmsClient {
   /** Alle artikelen: de WMS bepaalt welke artikelen er bestaan en hoe ze heten. */
   getItems(): Promise<WmsItem[]>;
   /**
-   * Voegt een locatie van de hal toe die de WMS nog niet kent. false = de locatie stond er al; er is niets aangemaakt.
-   * De echte WMS staat aanmaken via de API niet meer toe en weigert: locaties worden in de WMS-app beheerd.
+   * Zet locaties van de hal in de WMS: een locatie die de WMS niet kent wordt aangemaakt, een bestaande krijgt
+   * het type, de positie en het niveau van de hal. `blocked` blijft zoals de WMS het heeft.
+   * `onProgress` krijgt het aantal locaties dat is verwerkt. Bij een fout blijft staan wat al verwerkt was.
    */
-  createLocation(l: Location & { level: number }): Promise<boolean>;
+  syncLocations(list: (Location & { level: number })[], onProgress?: (done: number) => void): Promise<{ created: number; updated: number }>;
   getStock(): Promise<Item[]>;
   /** Actieve pallets (met sticker). Voorraad zonder pallet staat alleen in getStock. */
   getPallets(): Promise<WmsPallet[]>;

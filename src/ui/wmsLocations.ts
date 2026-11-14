@@ -1,5 +1,5 @@
 import type { Location } from '../shared/contract';
-import { wms, type WmsClient, type WmsLocation } from '../integrations/wms';
+import { wms, type WmsLocation } from '../integrations/wms';
 import { DOCKS, HALL, LOCATIONS } from '../sim/layout';
 
 // Vergelijkt de locaties van de hal met die in de WMS. De hal is de fysieke wereld: elke locatie die
@@ -17,17 +17,10 @@ export function hallLocations(): HallLocation[] {
   ];
 }
 
-/**
- * Locaties waarvan bij het toevoegen bleek dat de WMS ze al had, terwijl ze niet in zijn lijst stonden
- * (de API gaf dan niet alle locaties terug). Per WMS-client; die tellen niet meer als ontbrekend.
- */
-const confirmed = new WeakMap<WmsClient, Set<string>>();
-
 /** Locaties van de hal die de WMS niet kent. */
 export function missingLocations(inWms: Location[]): HallLocation[] {
   const known = new Set(inWms.map((l) => l.id));
-  const present = confirmed.get(wms.client);
-  return hallLocations().filter((l) => !known.has(l.id) && !present?.has(l.id));
+  return hallLocations().filter((l) => !known.has(l.id));
 }
 
 /** Verschillen tussen de hal en de WMS: de hal ligt fysiek vast, dus afwijkingen moeten in de WMS worden rechtgezet. */
@@ -55,32 +48,17 @@ export function locationsCsv(list: HallLocation[]) {
 }
 
 /**
- * Maakt de ontbrekende locaties aan in de WMS, één voor één. Een locatie die er al blijkt te staan wordt
- * overgeslagen (existing). Stopt na drie fouten achter elkaar: dan mag de API-gebruiker het waarschijnlijk
- * niet, of wijkt de entiteit af.
+ * Zet de WMS gelijk met de hal: ontbrekende locaties worden aangemaakt, afwijkende krijgen het type, de positie
+ * en het niveau van de hal. Gaat in delen; bij een fout blijft staan wat al verwerkt was.
  */
-export async function addMissingLocations(missing: HallLocation[], onProgress: (done: number, total: number) => void) {
-  const client = wms.client;
-  let added = 0;
-  let existing = 0;
-  const present = confirmed.get(client) ?? new Set<string>();
-  confirmed.set(client, present);
-  let streak = 0;
-  let error = '';
-  for (const [i, l] of missing.entries()) {
-    try {
-      if (await client.createLocation(l)) added++;
-      else {
-        existing++;
-        present.add(l.id);
-      }
-      streak = 0;
-    } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
-      if (++streak >= 3) break;
-    }
-    onProgress(i + 1, missing.length);
+export async function syncLocationsToWms(list: HallLocation[], onProgress: (done: number, total: number) => void) {
+  let done = 0;
+  try {
+    const { created, updated } = await wms.client.syncLocations(list, (n) => onProgress((done = n), list.length));
+    return { created, updated, done: list.length, error: '' };
+  } catch (err) {
+    return { created: 0, updated: 0, done, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    wms.locationsChanged();
   }
-  if (added + existing > 0) wms.locationsChanged();
-  return { added, existing, error };
 }
