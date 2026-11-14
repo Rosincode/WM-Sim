@@ -59,7 +59,6 @@ export function createExterior(scene: THREE.Scene) {
   const PARKING: Rect = CAR_PARK.area;
   const PARK_DRIVE: Rect = { ...CAR_PARK.drive, minZ: PARKING.maxZ, maxZ: ROAD.minZ };
   const PLAZA: Rect = { minX: X0, maxX: W / 2 + 2, minZ: D / 2, maxZ: D / 2 + 8 };
-  const APRON: Rect = { minX: X0 - 6, maxX: X0, minZ: -D / 2 + 1, maxZ: D / 2 - 1 };
   const paved = [YARD, ROAD, YARD_DRIVE, PARKING, PARK_DRIVE, PLAZA];
 
   // Ruim groter dan het zicht (mist dicht op 520 m, camera tot 260 m uit het midden),
@@ -67,7 +66,6 @@ export function createExterior(scene: THREE.Scene) {
   ground({ minX: -1500, maxX: 1500, minZ: -1500, maxZ: 1500 }, -0.2, grassMat, 34);
   for (const r of [YARD, ROAD, YARD_DRIVE, PARKING, PARK_DRIVE]) ground(r, -0.02, asphaltMat, 9);
   ground(PLAZA, -0.012, concreteMat, 1);
-  ground(APRON, -0.012, concreteMat, 1);
 
   // ---------- Belijning ----------
   const lines = new Batch();
