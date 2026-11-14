@@ -213,22 +213,42 @@ export function createWarehouse(scene: THREE.Scene) {
     const [n, s] = [crossZ - 0.75, crossZ + 0.75];
     const doorZ = ROOMS.office.minZ - 0.1;
     const wallZ = D / 2 - 0.1;
-    pathZ(WALK_X, walkFrom, crossZ - 0.7);
-    pathX(crossZ, officeX - 0.7, EXIT_X + 0.7);
+    const wallX = -W / 2 + 0.1;
+    // De chauffeursdeuren in de dockwand sluiten ook aan. De zuidelijke komt op het dwarspad uit: dat loopt dan
+    // door tot de dockwand. Van de noordelijke loopt een eigen pad naar het begin van het looppad (een hoek als
+    // de deur daar vlakbij zit, anders een zijpad).
+    const southDoor = DRIVER_DOORS.some((z) => Math.abs(z - crossZ) < 0.6);
+    const northDoor = DRIVER_DOORS.find((z) => z < crossZ - 4 && z > walkFrom - 2);
+    const corner = northDoor !== undefined && northDoor - 0.7 - walkFrom < 2;
+    const top = corner ? northDoor - 0.7 : walkFrom;
+    const west = southDoor ? wallX : officeX - 0.7;
+    pathZ(WALK_X, top, crossZ - 0.7);
+    pathX(crossZ, west, EXIT_X + 0.7);
     for (const x of [officeX, WALK_X]) pathZ(x, crossZ + 0.7, doorZ); // de laatste stap naar de deuren
     pathZ(EXIT_X, crossZ + 0.7, wallZ);
-    for (const side of [-0.75, 0.75]) edgeZ(WALK_X + side, walkFrom, n);
-    edgeX(n, officeX - 0.75, WALK_X - 0.75);
+    edgeZ(WALK_X + 0.75, corner ? top - 0.05 : top, n);
+    if (northDoor === undefined) edgeZ(WALK_X - 0.75, top, n);
+    else {
+      const [bn, bs] = [northDoor - 0.75, northDoor + 0.75];
+      pathX(northDoor, wallX, WALK_X - 0.7);
+      edgeZ(WALK_X - 0.75, bs, n);
+      if (!corner) edgeZ(WALK_X - 0.75, top, bn);
+      edgeX(bn, wallX, corner ? WALK_X + 0.75 : WALK_X - 0.75);
+      edgeX(bs, wallX, WALK_X - 0.75);
+      for (const x of spread(WALK_X - wallX - 2, 10)) marking((wallX + WALK_X) / 2 + x, northDoor, 0.9, 0.9, '#ffffff', walkIcon);
+    }
+    edgeX(n, southDoor ? wallX : officeX - 0.75, WALK_X - 0.75);
     edgeX(n, WALK_X + 0.75, EXIT_X + 0.75);
+    if (southDoor) edgeX(s, wallX, officeX - 0.75);
     edgeX(s, officeX + 0.75, WALK_X - 0.75);
     edgeX(s, WALK_X + 0.75, EXIT_X - 0.75);
-    edgeZ(officeX - 0.75, n, doorZ);
+    edgeZ(officeX - 0.75, southDoor ? s : n, doorZ);
     for (const x of [officeX + 0.75, WALK_X - 0.75, WALK_X + 0.75]) edgeZ(x, s, doorZ);
     edgeZ(EXIT_X - 0.75, s, wallZ);
     edgeZ(EXIT_X + 0.75, n, wallZ);
-    iconsZ(WALK_X, walkFrom, n);
+    iconsZ(WALK_X, top, n);
     iconsZ(EXIT_X, s, wallZ);
-    for (const [x0, x1] of [[officeX, WALK_X], [WALK_X, EXIT_X]])
+    for (const [x0, x1] of [[southDoor ? wallX : officeX, WALK_X], [WALK_X, EXIT_X]])
       for (const x of spread(x1 - x0 - 2, 10)) marking((x0 + x1) / 2 + x, crossZ, 0.9, 0.9, '#ffffff', walkIcon);
   } else {
     pathZ(WALK_X, walkFrom, walkTo);
