@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { AISLE_Z, DOCKS, DOCK_PITCH, EMPTY_PALLETS, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROW_FACE, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, WALKWAY_X, emptyStackSizes, location, rackLocationId, rowBehind, rowName, type Bay } from '../../sim/layout';
 import { DOCK_RAMP, DRIVER_DOORS, TRUCK, dockScreen, jackBay } from '../../sim/drivers';
-import { articleName, articles } from '../../sim/catalog';
+import { articleName, articleOfRow, articles } from '../../sim/catalog';
 import { createRooms, ROOM_DOORS } from './rooms';
 import { drawRackBoard } from './robotArt';
 import { STYLE, onTop } from './style';
@@ -508,8 +508,8 @@ export function createWarehouse(scene: THREE.Scene) {
   const rackLabels: { id: string; arrow: 'up' | 'down' }[] = [];
   const rackLabelSpots: { index: number; position: THREE.Vector3; back: boolean }[] = [];
 
-  // Assortimentsbord op de kop van elke stelling (dockkant): de robots die in die stelling liggen, met hun afbeelding.
-  // Zo zie je vanaf het looppad per stellingpad wat er links (A) en rechts (B) ligt. Zie refreshBoards.
+  // Bord op de kop van elke stelling (dockkant): elke stelling heeft zijn eigen robot (artikel), met zijn afbeelding.
+  // Zo zie je vanaf het looppad per stellingpad wat er links (A) en rechts (B) hoort te liggen. Zie refreshBoards.
   const BOARD = { w: 1.2, h: 1.7, y: 1.5, px: 512 };
   const boardGeo = new THREE.PlaneGeometry(BOARD.w, BOARD.h);
   const boardBack = new THREE.BoxGeometry(0.012, BOARD.h + 0.04, BOARD.w + 0.04);
@@ -976,7 +976,7 @@ export function createWarehouse(scene: THREE.Scene) {
   /** Bezette palletplekken per locatie. */
   const usedSlots = new Map<string, Set<number>>();
 
-  /** De borden op de koppen van de stellingen: per stelling de artikelen die er nu liggen, op artikelnummer. */
+  /** De borden op de koppen van de stellingen: het artikel van de stelling, en wat er nu verder nog ligt. */
   const rowOfName = new Map(ROW_Z.map((_, r) => [rowName(r), r]));
   let boardArticles: unknown = null;
   function refreshBoards(list: PalletView[]) {
@@ -986,12 +986,14 @@ export function createWarehouse(scene: THREE.Scene) {
       if (r !== undefined && p.qty > 0) inRow[r].add(p.sku);
     }
     boards.forEach((b, r) => {
-      const items = [...inRow[r]].sort().map((sku) => ({ sku, name: articleName(sku) }));
-      const shown = items.map((i) => `${i.sku}=${i.name}`).join('|') || '-';
+      const own = articleOfRow(r);
+      // "Stofzuigrobot Dusty" -> "Dusty": alleen de naam van de robot
+      const others = [...inRow[r]].filter((sku) => sku !== own?.sku).sort().map((sku) => articleName(sku).split(' ').pop() || sku);
+      const shown = `${own?.sku}=${own?.name}|${others.join(',')}`;
       if (shown === b.shown) return;
       b.shown = shown;
       const canvas = b.texture.image as HTMLCanvasElement;
-      drawRackBoard(canvas.getContext('2d')!, canvas.width, canvas.height, b.title, items);
+      drawRackBoard(canvas.getContext('2d')!, canvas.width, canvas.height, b.title, own ? { sku: own.sku, name: own.name } : null, others);
       b.texture.needsUpdate = true;
     });
   }

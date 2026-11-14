@@ -20,6 +20,15 @@ export function setArticles(next: Article[]) {
   bySku = new Map(list.map((a) => [a.sku, a]));
 }
 
+/**
+ * Elke stelling heeft zijn eigen artikel: het eerste artikel (op artikelnummer) ligt in de eerste stelling (R1A),
+ * het tweede in R1B, enzovoort. Zijn er meer stellingen dan artikelen, dan blijven de laatste stellingen vrij.
+ * @param row index van de stelling (0 = R1A, 1 = R1B, 2 = R2A, ...)
+ */
+export const articleOfRow = (row: number): Article | undefined => [...list].sort((a, b) => a.sku.localeCompare(b.sku))[row];
+/** De stelling (index) waar een artikel thuishoort, of -1 als het artikel onbekend is. */
+export const rowOfArticle = (sku: string) => [...list].sort((a, b) => a.sku.localeCompare(b.sku)).findIndex((a) => a.sku === sku);
+
 export const isBlocked = (locationId: string) => blocked.has(locationId);
 
 /** Locaties die in de WMS geblokkeerd zijn: de WMS weigert daar elke boeking. */

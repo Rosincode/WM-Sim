@@ -53,9 +53,9 @@ De ingebouwde mock-WMS van de game (zonder aanmelden) kent alleen `SKU-001` t/m 
 Een artikel toevoegen in de WMS is genoeg om het in de hal te krijgen: de game geeft het een eigen
 doosmaat en kleur, afgeleid van de `sku`.
 
-Elk van de tien artikelen heeft in de game een eigen afbeelding van de robot (op `sku`). Op de kop van
-elke stelling hangt een bord met de robots die daar liggen. Een nieuw artikel krijgt een algemene
-robot als afbeelding tot er in de game een tekening voor is gemaakt.
+Elk van de tien artikelen heeft in de game een eigen afbeelding van de robot (op `sku`). Elke stelling
+heeft één eigen artikel, met die afbeelding op een bord op de kop: zie [14](14-vaste-stelling-per-artikel.md).
+Een nieuw artikel krijgt een algemene robot als afbeelding tot er in de game een tekening voor is gemaakt.
 
 ## 4. Nog niet gebouwd
 

@@ -318,8 +318,12 @@ export function drawRobot(g: G, sku: string, x: number, y: number, size: number)
 
 export type BoardItem = { sku: string; name: string };
 
-/** Het bord op de kop van een stelling: de robots (artikelen) die in die stelling liggen, elk met zijn afbeelding. */
-export function drawRackBoard(g: G, w: number, h: number, title: string, items: BoardItem[]) {
+/**
+ * Het bord op de kop van een stelling: de ene robot (artikel) die in deze stelling thuishoort, groot in beeld.
+ * @param item het artikel van deze stelling; null = een vrije stelling zonder eigen artikel
+ * @param others namen van andere artikelen die er nu ook liggen (horen er niet): klein onderaan
+ */
+export function drawRackBoard(g: G, w: number, h: number, title: string, item: BoardItem | null, others: string[] = []) {
   g.fillStyle = '#f7f7f2';
   g.fillRect(0, 0, w, h);
   const head = Math.round(h * 0.1);
@@ -330,32 +334,30 @@ export function drawRackBoard(g: G, w: number, h: number, title: string, items: 
   g.textBaseline = 'middle';
   g.font = `bold ${Math.round(head * 0.52)}px Arial`;
   g.fillText(title, w / 2, head / 2 + 2, w - 24);
-  if (!items.length) {
+  const foot = others.length ? Math.round(h * 0.07) : 0;
+  if (foot) {
+    g.fillStyle = '#fff1d6';
+    g.fillRect(0, h - foot, w, foot);
+    g.fillStyle = '#7a4b00';
+    g.font = `${Math.round(foot * 0.46)}px Arial`;
+    g.fillText(`Ligt hier ook: ${others.join(', ')}`, w / 2, h - foot / 2 + 1, w - 24);
+  }
+  if (!item) {
     g.fillStyle = '#8a9097';
     g.font = `bold ${Math.round(w * 0.075)}px Arial`;
-    g.fillText('Stelling is leeg', w / 2, head + (h - head) / 2);
+    g.fillText('Vrije stelling', w / 2, head + (h - head - foot) / 2);
     return;
   }
-  const cols = items.length <= 2 ? 1 : items.length <= 6 ? 2 : 3;
-  const rows = Math.ceil(items.length / cols);
-  const pad = 14;
-  const cw = (w - pad) / cols;
-  const ch = (h - head - pad) / rows;
-  items.forEach((it, i) => {
-    const text = Math.min(ch * 0.3, cw * 0.34);
-    const size = Math.min(cw - pad, ch - pad - text);
-    const cx = pad / 2 + (i % cols) * cw + cw / 2;
-    const top = head + pad / 2 + Math.floor(i / cols) * ch + (ch - size - text) / 2;
-    drawRobot(g, it.sku, cx - size / 2, top, size);
-    // "Stofzuigrobot Dusty": de soort klein, de naam van de robot groot
-    const cut = it.name.lastIndexOf(' ');
-    const kind = cut > 0 ? it.name.slice(0, cut) : '';
-    const name = cut > 0 ? it.name.slice(cut + 1) : it.name || it.sku;
-    g.fillStyle = '#23262b';
-    g.font = `bold ${Math.round(text * 0.46)}px Arial`;
-    g.fillText(name, cx, top + size + text * 0.34, cw - 10);
-    g.fillStyle = '#5b6168';
-    g.font = `${Math.round(text * 0.27)}px Arial`;
-    g.fillText(kind ? `${kind} · ${it.sku}` : it.sku, cx, top + size + text * 0.76, cw - 10);
-  });
+  const size = w - 40;
+  const top = head + (h - head - foot - size - h * 0.17) / 2;
+  drawRobot(g, item.sku, 20, top, size);
+  // "Stofzuigrobot Dusty": de naam van de robot groot, de soort en het artikelnummer klein
+  const cut = item.name.lastIndexOf(' ');
+  const kind = cut > 0 ? item.name.slice(0, cut) : '';
+  g.fillStyle = '#23262b';
+  g.font = `bold ${Math.round(h * 0.085)}px Arial`;
+  g.fillText(cut > 0 ? item.name.slice(cut + 1) : item.name || item.sku, w / 2, top + size + h * 0.065, w - 24);
+  g.fillStyle = '#5b6168';
+  g.font = `${Math.round(h * 0.042)}px Arial`;
+  g.fillText(kind ? `${kind} · ${item.sku}` : item.sku, w / 2, top + size + h * 0.135, w - 24);
 }
