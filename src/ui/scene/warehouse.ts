@@ -255,13 +255,15 @@ export function createWarehouse(scene: THREE.Scene) {
     for (const side of [-0.75, 0.75]) edgeZ(WALK_X + side, walkFrom, walkTo);
     iconsZ(WALK_X, walkFrom, walkTo);
   }
-  // Per dock: een inslagbaan (blauw) en een uitslagbaan (groen), met de locatiecode op de vloer
+  // Per dock: een inslagbaan (blauw) en een uitslagbaan (groen). Alleen een omlijning, met in de baan wat het is
+  // en aan de kop de locatiecode; het vlak zelf is gewoon vloer.
   for (const d of DOCKS) {
     const lanes = [
-      { p: d.laneIn, code: d.inId, color: '#2e8bd8' },
-      { p: d.laneOut, code: d.outId, color: '#3a9a5c' },
+      { p: d.laneIn, code: d.inId, color: '#2e8bd8', word: 'INKOMEND' },
+      { p: d.laneOut, code: d.outId, color: '#3a9a5c', word: 'UITGAAND' },
     ];
-    for (const { p, code, color } of lanes) {
+    for (const { p, code, color, word } of lanes) {
+      marking(p.x, p.z, 4.4, 1.1, color, tex.floorText(word));
       const len = LANE_LENGTH + 0.3;
       marking(p.x, p.z - 0.75, len, 0.1, color);
       marking(p.x, p.z + 0.75, len, 0.1, color);

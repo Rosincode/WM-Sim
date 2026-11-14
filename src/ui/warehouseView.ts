@@ -1,11 +1,10 @@
 import * as THREE from 'three';
-import { DOCKS, LANE_LENGTH, LANE_SLOTS, LEVEL_Y, ORDER_PALLETS_ACTIVE, POINTS, laneSlot, type Point } from '../sim/layout';
+import { DOCKS, LANE_SLOTS, ORDER_PALLETS_ACTIVE, POINTS, laneSlot, type Point } from '../sim/layout';
 import { TRUCK, cargoSpot } from '../sim/drivers';
 import type { Truck, Warehouse } from '../sim/warehouse';
 import { atGate, truckPoseOf } from '../sim/yard';
 import { createPcMesh } from './scene/pc';
 import { createTruck } from './scene/truck';
-import { onTop } from './scene/style';
 import type { Collider, Solid } from './scene/warehouse';
 
 // 3D-weergave van de processtaat. Leest alleen de sim; wijzigt niets.
@@ -59,17 +58,6 @@ function label(width = 4) {
       texture.needsUpdate = true;
     },
   };
-}
-
-function floorMark(p: Point, w: number, d: number, color: string) {
-  const m = new THREE.Mesh(
-    new THREE.PlaneGeometry(w, d),
-    // laag +2: het vlak ligt over de vloerverf van de baan heen
-    onTop(new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.35, depthWrite: false }), 2),
-  );
-  m.rotation.x = -Math.PI / 2;
-  m.position.set(p.x, 0.02, p.z);
-  return m;
 }
 
 /** Haalt een losse lading (pallet met dozen) uit beeld en geeft zijn buffers vrij; de vormen en materialen zijn gedeeld. */
@@ -158,11 +146,9 @@ export function createWarehouseView(
     build: (id) => opts.orderLoad(orderLines(id), id),
   };
 
-  // --- Vaste objecten: per dock een inslag- en uitslagbaan, en de pc (orderterminal + WMS-aanmelding) ---
-  // (het buitenterrein staat in src/ui/scene/exterior.ts)
-  for (const d of DOCKS) {
-    root.add(floorMark(d.laneIn, LANE_LENGTH + 0.3, 1.5, '#4fc3f7'), floorMark(d.laneOut, LANE_LENGTH + 0.3, 1.5, '#81c784'));
-  }
+  // --- Vaste objecten: de pc (orderterminal + WMS-aanmelding) ---
+  // De inslag- en uitslagbanen zijn alleen vloerverf (omlijning en tekst, src/ui/scene/warehouse.ts): geen gekleurd
+  // vlak dat oplicht. Het buitenterrein staat in src/ui/scene/exterior.ts.
   const pc = createPcMesh();
   pc.group.position.set(POINTS.terminal.x, 0, POINTS.terminal.z);
   root.add(pc.group);
@@ -208,17 +194,9 @@ export function createWarehouseView(
   // --- Wat de speler draagt: de pallet zelf, vlak boven de vloer voor hem uit ---
   const carried = loadSlot();
 
-  // --- Doelmarkering ---
-  const beam = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.6, 0.6, 6, 24, 1, true),
-    new THREE.MeshBasicMaterial({ color: '#00e5ff', transparent: true, opacity: 0.15, side: THREE.DoubleSide, depthWrite: false }),
-  );
-  const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.35, 0.7, 16), new THREE.MeshBasicMaterial({ color: '#00e5ff' }));
-  arrow.rotation.x = Math.PI;
-  root.add(beam, arrow);
+  // Een opdracht licht niet op in de hal (geen lichtbundel of pijl): wat je moet doen staat in het taakvenster.
 
   const forward = new THREE.Vector3();
-  let time = 0;
   /** Staat er een vrachtwagen bij de slagboom van het terrein, en hoe ver die open is (0..1). */
   let gateWanted = false;
   let gate = 0;
@@ -281,7 +259,6 @@ export function createWarehouseView(
   }
 
   function update(dt: number) {
-    time += dt;
     gateWanted = false;
 
     placeTruck(trucks.in, labels.truckIn, sim.trucks.in);
@@ -333,17 +310,6 @@ export function createWarehouseView(
       mesh.position.copy(player.position).addScaledVector(forward, CARRY_AHEAD);
       mesh.position.y += 0.03;
       mesh.rotation.y = player.rotation.y;
-    }
-
-    // Doelmarkering
-    // Zonder punt wijst de game niets aan: waar je heen moet staat dan in de WMS-app.
-    const obj = sim.objective();
-    const point = obj?.point;
-    beam.visible = arrow.visible = !!point;
-    if (obj && point) {
-      beam.position.set(point.x, 3, point.z);
-      const y = obj.level ? LEVEL_Y[obj.level] + 1.4 : 3;
-      arrow.position.set(point.x, y + Math.sin(time * 3) * 0.15, point.z);
     }
   }
 
