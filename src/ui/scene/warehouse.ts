@@ -3,7 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { AISLE_Z, DOCKS, DOCK_PITCH, EMPTY_PALLETS, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROW_FACE, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, WALKWAY_X, emptyStackSizes, location, rackLocationId, rowBehind, rowName, type Bay } from '../../sim/layout';
 import { DOCK_RAMP, DRIVER_DOORS, TRUCK, dockScreen, jackBay } from '../../sim/drivers';
 import { articleOfAisle, articles } from '../../sim/catalog';
-import { createRooms, ROOM_DOORS } from './rooms';
+import { createRooms, ROOM_WINDOWS } from './rooms';
 import { drawPoster } from './robotArt';
 import { STYLE, onTop } from './style';
 import { EXTINGUISHER_SIZE, extinguisherParts } from './extinguisher';
@@ -189,10 +189,10 @@ export function createWarehouse(scene: THREE.Scene) {
   });
   // Looppad tussen de dockzone en de stellingen
   const WALK_X = WALKWAY_X;
-  // Het loopt van de noordwand (daar zit de deur naar de kantine) tot aan de parkeerplaats, of anders tot de wand.
+  // Het loopt van de noordwand tot aan de kamers (daar zit de deur naar de kantine) of de parkeerplaats, of anders tot de wand.
   const across = (r: { minX: number; maxX: number }) => WALK_X > r.minX && WALK_X < r.maxX;
-  const walkFrom = across(ROOMS.canteen) || across(ROOMS.office) ? -D / 2 + 0.4 : -D / 2 + 2;
-  const walkTo = across(PARKING.area) ? PARKING.area.minZ - 0.3 : D / 2 - 2;
+  const walkFrom = -D / 2 + 2;
+  const walkTo = across(ROOMS.canteen) || across(ROOMS.office) ? ROOMS.office.minZ - 0.1 : across(PARKING.area) ? PARKING.area.minZ - 0.3 : D / 2 - 2;
   const walkMid = (walkFrom + walkTo) / 2;
   const walkLen = walkTo - walkFrom;
   marking(WALK_X, walkMid, 1.4, walkLen, '#2f7a4c');
@@ -291,20 +291,24 @@ export function createWarehouse(scene: THREE.Scene) {
     }
     plinth(cur, len / 2, 1.2);
   }
-  // Deuren naar het kantoor en de kantine: open gaten in de noordwand
-  wall(0, -D / 2, 0, W, ROOM_DOORS.map((d): [number, number, number, number] => [d.from, d.to, 0, d.height]));
+  // De ramen van het kantoor en de kantine: open gaten in de dockwand en de zuidwand (het glas zit in de kamers)
+  const windowHoles = (side: 'west' | 'south') =>
+    ROOM_WINDOWS.filter((w) => w.wall === side).map((w): [number, number, number, number] => [-w.to, -w.from, w.y0, w.y1]);
+  wall(0, -D / 2, 0, W);
   // Zuidwand: open gat voor de nooduitgang (langs deze wand loopt de eigen richting van het vlak naar -x)
-  wall(0, D / 2, Math.PI, W, [[-EXIT_X - 0.5, -EXIT_X + 0.5, 0, 2.1]]);
+  wall(0, D / 2, Math.PI, W, [[-EXIT_X - 0.5, -EXIT_X + 0.5, 0, 2.1], ...windowHoles('south')]);
   // Dockwand: open gaten voor de dockdeuren (de deur zelf gaat open en dicht) en de chauffeursdeuren.
   // Langs deze wand loopt de eigen richting van het vlak naar -z.
   wall(-W / 2, 0, Math.PI / 2, D, [
     ...DOCKS.map((d): [number, number, number, number] => [-d.z - 1.5, -d.z + 1.5, 0, 3.5]),
     ...DRIVER_DOORS.map((z): [number, number, number, number] => [-z - 0.5, -z + 0.5, 0, 2.1]),
+    ...windowHoles('west'),
   ]);
   wall(W / 2, 0, -Math.PI / 2, D);
 
-  // ---------- Kantoor en kantine: aanbouw buiten tegen de noordwand ----------
+  // ---------- Kantoor en kantine: twee kamers in de hal, tegen de zuidwand bij de dockwand ----------
   const rooms = createRooms({ scene, roof, solid });
+  colliders.push(rooms.footprint); // de heftruck rijdt er niet doorheen
 
   // Kolommen met aanrijbescherming
   const columns = new Batch();
@@ -1105,8 +1109,6 @@ export function createWarehouse(scene: THREE.Scene) {
   return {
     roof,
     colliders,
-    /** Waar de speler buiten de hal mag lopen: de deuren naar en de kamers van de aanbouw (kantoor, kantine). */
-    walkable: rooms.walkable,
     setDockDoor,
     setDriverDoor,
     setExitDoor,

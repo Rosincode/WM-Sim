@@ -50,7 +50,7 @@ type Pose = {
   /** Stand van de pompwagen, alleen als deze speler hem vasthoudt */ pj?: JackState;
   /** Versie van de foto op het hoofd ('' = geen foto); de foto zelf gaat apart over de lijn */ fv: string;
 };
-type StateMsg = { rev: number; w: string; sim: SharedState; fork: ForkliftState; jack?: JackState };
+type StateMsg = { rev: number; w: string; sim: SharedState; fork: ForkliftState; jack?: JackState; /** Indeling van de hal waar deze wereld bij hoort (zie LAYOUT). */ lay?: number };
 
 interface Options {
   scene: THREE.Scene;
@@ -119,18 +119,18 @@ function validJack(k: unknown): k is JackState {
   return isObj(k) && [k.x, k.z, k.r].every((v) => typeof v === 'number' && Number.isFinite(v)) && (k.load === null || isObj(k.load));
 }
 /**
- * Waar de heftruck en de pompwagen begonnen voordat de parkeerplaats er was (bij de pc). Een bewaarde hal van
- * toen heeft ze daar nog staan zonder dat iemand ze er heeft neergezet.
+ * De indeling van de hal waar een gedeelde of bewaarde wereld bij hoort; elke wereld die we versturen of bewaren
+ * draagt dit nummer. Het gaat omhoog als de parkeerplaats (of de hal eromheen) verhuist: sinds 2 staan kantoor,
+ * kantine en parkeerplaats tegen de zuidwand.
  */
-const OLD_STARTS = { forklift: { x: -12.6, z: 2.5 }, palletJack: { x: -13.4, z: 5.4 } };
+const LAYOUT = 2;
 /**
- * De stand van een voertuig uit een gedeelde of bewaarde hal. Staat het leeg en onaangeroerd op zijn oude
- * startplek, dan hoort het in zijn eigen vak op de parkeerplaats; elke andere plek is een plek waar iemand het
- * heeft neergezet, en daar blijft het.
+ * De stand van een voertuig uit een gedeelde of bewaarde hal. Hoort die wereld bij een oudere indeling (of bij
+ * geen: van vóór dit nummer), dan staat het voertuig op een plek die niet meer klopt, bijvoorbeeld vóór zijn vak
+ * of waar nu het kantoor is: het gaat dan terug naar zijn eigen vak op de parkeerplaats, met wat het draagt.
  */
-function parked<S extends { x: number; z: number; r: number; load: unknown }>(s: S, old: { x: number; z: number }, home: { x: number; z: number; r: number }): S {
-  const untouched = !s.load && Math.hypot(s.x - old.x, s.z - old.z) < 0.05 && Math.abs(Math.sin(s.r) - 1) < 0.01;
-  return untouched ? { ...s, x: home.x, z: home.z, r: home.r } : s;
+function parked<S extends { x: number; z: number; r: number }>(s: S, layout: number | undefined, home: { x: number; z: number; r: number }): S {
+  return layout === LAYOUT ? s : { ...s, x: home.x, z: home.z, r: home.r };
 }
 
 function validState(m: unknown): m is StateMsg {
@@ -391,7 +391,7 @@ export function mountMultiplayer(o: Options) {
   let lastSimKey = simKey();
   let lastStateAt = 0;
 
-  const stateMsg = (): StateMsg => ({ rev, w: writer, sim: o.shared.state(), fork: o.forklift.getState(), jack: o.jack.getState() });
+  const stateMsg = (): StateMsg => ({ rev, w: writer, sim: o.shared.state(), fork: o.forklift.getState(), jack: o.jack.getState(), lay: LAYOUT });
   function sendState() {
     lastStateAt = performance.now();
     room.send('s', stateMsg());
@@ -401,9 +401,9 @@ export function mountMultiplayer(o: Options) {
   function applyState(data: StateMsg, saved = false) {
     adopted = true;
     o.shared.apply(data.sim, saved);
-    if (!o.isDriving() && !remoteDriver()) o.forklift.applyState(parked(data.fork, OLD_STARTS.forklift, START.forklift));
+    if (!o.isDriving() && !remoteDriver()) o.forklift.applyState(parked(data.fork, data.lay, START.forklift));
     else o.forklift.applyLoose(data.fork.loose);
-    if (!o.jack.held() && !remoteHolder() && validJack(data.jack)) o.jack.applyState(parked(data.jack, OLD_STARTS.palletJack, START.palletJack));
+    if (!o.jack.held() && !remoteHolder() && validJack(data.jack)) o.jack.applyState(parked(data.jack, data.lay, START.palletJack));
     rev = data.rev;
     writer = data.w;
     lastSimKey = simKey();

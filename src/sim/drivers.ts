@@ -1,4 +1,4 @@
-import { CANTEEN, DOCKS, DOCK_PITCH, HALL, ROOM_DOORS, dist, laneSlot, type Dock, type Point } from './layout';
+import { CANTEEN, DOCKS, DOCK_PITCH, HALL, ROOMS, ROOM_DOORS, dist, laneSlot, type Dock, type Point } from './layout';
 import type { Pallet } from './warehouse';
 
 // De chauffeurs. Elke vrachtwagen heeft een chauffeur die zelf lost of laadt, zonder hulp van het magazijn:
@@ -121,13 +121,15 @@ const X0 = -HALL.w / 2;
  * tussen de wielkasten in de laadruimte: pallets, de pompwagen en de chauffeur blijven daarbinnen (zie cargoSpot).
  */
 export const TRUCK = { rear: X0 - 0.4, floor: 0.45, length: 8, cabX: X0 - 9.7, cabSide: 1.75, clear: 1.06 };
+/** De noordrand (z) van het vrachtwagenterrein: voorbij de noordgevel, met ruimte voor de wachtplaatsen. */
+export const YARD_NORTH = -HALL.d / 2 - 11.5;
 /**
  * De wachtplaatsen op het terrein, in de noordwesthoek (voorbij het eerste dock, aan de overkant van de rijlijn):
  * hier parkeert een wagen die te vroeg is of waarvan het dock nog bezet is. Het punt is de achterkant van de
  * laadbak; de cabine wijst van het gebouw af (-x), net als aan het dock. De rijroutes staan in yard.ts.
  */
 export const WAIT_BAYS: Point[] = (() => {
-  const edge = -HALL.d / 2 - 8; // de noordrand van het terrein (zie src/ui/scene/exterior.ts)
+  const edge = YARD_NORTH;
   const bays: Point[] = [];
   // vanaf het vak van het eerste dock naar het noorden, zolang er achter de wagen ruimte is om achteruit weg te draaien
   for (let z = (DOCKS[0]?.z ?? 0) - DOCK_PITCH / 2 - 2; z >= edge + 10.5 && bays.length < 3; z -= 3.2) bays.push({ x: TRUCK.rear - 30.95, z });
@@ -149,9 +151,12 @@ export function cargoSpot(dockZ: number, i: number): Point {
   const row = Math.min(Math.floor(i / 2), 5);
   return { x: TRUCK.rear - TRUCK.length + 0.85 + row * 1.3, z: dockZ + (i % 2 ? 0.52 : -0.52) };
 }
-/** De chauffeursdeuren in de dockwand (z): één aan elke kant van de rij docks. */
+/**
+ * De chauffeursdeuren in de dockwand (z): één aan elke kant van de rij docks. De zuidelijke blijft vóór het
+ * kantoor, dat daar in de hoek van de hal zit.
+ */
 export const DRIVER_DOORS = [...new Set([(DOCKS[0]?.z ?? 0) - 4.7, (DOCKS[DOCKS.length - 1]?.z ?? 0) + 4.7])]
-  .map((z) => Math.max(-HALL.d / 2 + 1.2, Math.min(HALL.d / 2 - 1.2, z)));
+  .map((z) => Math.max(-HALL.d / 2 + 1.2, Math.min(ROOMS.office.minZ - 0.9, z)));
 /** Zo ver (m) voor het midden van de pompwagen staat wat hij draagt, en zo ver erachter loopt de chauffeur. */
 export const JACK_REACH = 0.75;
 export const JACK_HANDLE = 0.85;
@@ -220,16 +225,16 @@ export function createDrivers(world: DriverWorld) {
   const walkOut = (dock: Dock): Waypoint[] => [...walkIn(dock).reverse().slice(1), cab(dock)];
 
   /**
-   * Te voet van de wachtplaats naar het koffieapparaat: over het terrein, door de chauffeursdeur, langs de
-   * noordwand van de hal en door de deur van de kantine.
+   * Te voet van de wachtplaats naar het koffieapparaat: over het terrein voor de cabines langs naar de zuidelijke
+   * chauffeursdeur (bij het kantoor), in de hal voor de kamers langs en door de deur van de kantine.
    */
   function toCanteen(bay: Point): Waypoint[] {
-    const z = doorNear(bay.z);
+    const z = doorNear(HALL.d / 2);
     const door = ROOM_DOORS.canteen.x;
-    const along = -HALL.d / 2 + 1.4; // de looplijn (z) langs de noordwand
+    // de looplijn (z) in de hal, voor de kamers langs: de deur komt daar al op uit
     return [
       { x: OUTSIDE_X, z: bayCab(bay).z }, { x: OUTSIDE_X, z }, { x: X0 - 1, z }, { x: X0 + 1, z }, { x: INSIDE_X, z },
-      { x: INSIDE_X, z: along }, { x: door, z: along }, { x: door, z: CANTEEN.front - 1.3 },
+      { x: door, z }, { x: door, z: CANTEEN.front + 1.3 },
       { x: CANTEEN.coffeeStand.x, z: CANTEEN.coffeeStand.z },
     ];
   }

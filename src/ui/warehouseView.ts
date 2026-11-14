@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { DOCKS, LANE_LENGTH, LANE_SLOTS, LEVEL_Y, POINTS, laneSlot, type Point } from '../sim/layout';
+import { DOCKS, LANE_LENGTH, LANE_SLOTS, LEVEL_Y, ORDER_PALLETS_ACTIVE, POINTS, laneSlot, type Point } from '../sim/layout';
 import { TRUCK, cargoSpot } from '../sim/drivers';
 import type { Truck, Warehouse } from '../sim/warehouse';
 import { atGate, truckPoseOf } from '../sim/yard';
@@ -306,7 +306,7 @@ export function createWarehouseView(
     gate = THREE.MathUtils.clamp(gate + (gateWanted ? dt : -dt) / 1.2, 0, 1);
 
     const open = sim.orders.filter((o) => o.status === 'open').length;
-    labels.stack.set(open ? `Lege pallets · ${open} order${open === 1 ? '' : 's'}` : '');
+    labels.stack.set(ORDER_PALLETS_ACTIVE && open ? `Lege pallets · ${open} order${open === 1 ? '' : 's'}` : '');
 
     const staging = sim.carry?.kind === 'order' && sim.order(sim.carry.orderId)?.status === 'picked';
     DOCKS.forEach((d, i) => {

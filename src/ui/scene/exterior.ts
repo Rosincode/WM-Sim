@@ -1,10 +1,10 @@
 import * as THREE from 'three';
-import { DRIVER_DOORS, WAIT_BAYS } from '../../sim/drivers';
-import { DOCKS, DOCK_PITCH, ROOMS } from '../../sim/layout';
+import { DRIVER_DOORS, WAIT_BAYS, YARD_NORTH } from '../../sim/drivers';
+import { DOCKS, DOCK_PITCH } from '../../sim/layout';
 import logoUrl from '../assets/robodu-logo.jpg';
 import { onTop } from './style';
 import * as tex from './textures';
-import { ROOM_HEIGHT, ROOM_WINDOWS } from './rooms';
+import { ROOM_WINDOWS } from './rooms';
 import { CAR_PARK } from '../../sim/staff';
 import { CAR, CAR_PAINTS, createCar } from './car';
 import { createParkedTrailer } from './truck';
@@ -24,8 +24,6 @@ export function createExterior(scene: THREE.Scene) {
   const { w: W, d: D, h: H } = HALL;
   const X0 = -W / 2; // dockgevel (west)
   const TOP = H + 2.5; // gevel met dakrand
-  /** De aanbouw met kantoor en kantine, buiten tegen de noordgevel (zie rooms.ts). */
-  const ANNEX: Rect = { minX: ROOMS.office.minX, maxX: ROOMS.canteen.maxX, minZ: ROOMS.office.minZ, maxZ: ROOMS.office.maxZ };
   const root = new THREE.Group();
   scene.add(root);
   /** Waar de speler buiten tegenaan loopt: auto's, opleggers, de portiersloge, palen en bomen. */
@@ -52,7 +50,7 @@ export function createExterior(scene: THREE.Scene) {
     root.add(m);
   }
 
-  const YARD: Rect = { minX: X0 - 46, maxX: X0, minZ: -D / 2 - 8, maxZ: D / 2 + 8 };
+  const YARD: Rect = { minX: X0 - 46, maxX: X0, minZ: YARD_NORTH, maxZ: D / 2 + 8 };
   const ROAD_Z = D / 2 + 38; // hart van de openbare weg
   const ROAD_HALF = 1500; // net als het grasvlak: de weg loopt door tot voorbij de mist
   const ROAD: Rect = { minX: -ROAD_HALF, maxX: ROAD_HALF, minZ: ROAD_Z - 4, maxZ: ROAD_Z + 4 };
@@ -118,9 +116,10 @@ export function createExterior(scene: THREE.Scene) {
   const panelTex = tex.wallPanel();
   /**
    * Gevelvlak met het midden op (x, z), van hoogte `from` tot de dakrand.
-   * @param holes openingen (deuren) [van, tot, bovenkant], langs de gevel gemeten vanuit het midden
+   * @param holes openingen [van, tot, bovenkant, onderkant], langs de gevel gemeten vanuit het midden; zonder
+   *              onderkant is het een deur (vanaf de grond), met een onderkant een raam
    */
-  function facade(x: number, z: number, ry: number, len: number, from = 0, holes: [number, number, number][] = []) {
+  function facade(x: number, z: number, ry: number, len: number, from = 0, holes: [number, number, number, number?][] = []) {
     const t = panelTex.clone();
     t.repeat.set(len, (TOP - from) / TOP);
     t.offset.y = from / TOP;
@@ -132,7 +131,7 @@ export function createExterior(scene: THREE.Scene) {
         [new THREE.Vector2(a, y0), new THREE.Vector2(b, y0), new THREE.Vector2(b, y1), new THREE.Vector2(a, y1)];
       const shape = new THREE.Shape(rect(-len / 2, len / 2, -h / 2, h / 2));
       // het gat blijft 2 mm boven de onderrand, anders deelt het een zijde met de omtrek
-      for (const [a, b, top] of holes) shape.holes.push(new THREE.Path(rect(a, b, 0.002 - h / 2, top - from - h / 2)));
+      for (const [a, b, top, bottom = 0.002] of holes) shape.holes.push(new THREE.Path(rect(a, b, bottom - from - h / 2, top - from - h / 2)));
       geo = new THREE.ShapeGeometry(shape);
       const p = geo.attributes.position;
       const uv = geo.attributes.uv;
@@ -152,12 +151,13 @@ export function createExterior(scene: THREE.Scene) {
     ...DOCKS.map((d): [number, number, number] => [d.z - 1.5, d.z + 1.5, 3.5]),
     ...DRIVER_DOORS.map((z): [number, number, number] => [z - 0.5, z + 0.5, 2.1]),
   ].sort((a, b) => a[0] - b[0]);
-  facade(X0 - 0.03, 0, -Math.PI / 2, D, 0, openings);
+  // De ramen van het kantoor en de kantine (binnen in de hal, zie rooms.ts): gaten in de dockgevel en de voorgevel
+  const windowHoles = (side: 'west' | 'south') =>
+    ROOM_WINDOWS.filter((w) => w.wall === side).map((w): [number, number, number, number] => [w.from, w.to, w.y1, w.y0]);
+  facade(X0 - 0.03, 0, -Math.PI / 2, D, 0, [...openings, ...windowHoles('west')]);
   facade(W / 2 + 0.03, 0, Math.PI / 2, D);
-  facade(0, D / 2 + 0.03, 0, W, 0, [[EXIT_X - 0.5, EXIT_X + 0.5, 2.1]]); // open gat voor de entreedeur
-  // Noordgevel: waar de aanbouw (kantoor en kantine) ertegenaan staat begint de gevel pas boven het dak daarvan
-  facade((ANNEX.minX + ANNEX.maxX) / 2, -D / 2 - 0.03, Math.PI, ANNEX.maxX - ANNEX.minX, ROOM_HEIGHT);
-  facade((ANNEX.maxX + W / 2) / 2, -D / 2 - 0.03, Math.PI, W / 2 - ANNEX.maxX);
+  facade(0, D / 2 + 0.03, 0, W, 0, [[EXIT_X - 0.5, EXIT_X + 0.5, 2.1], ...windowHoles('south')]); // open gat voor de entreedeur
+  facade(0, -D / 2 - 0.03, Math.PI, W);
   // Binnenkant van de dakrand: het stuk gevel boven de halwanden. Zonder dak (overzicht) kijk je daar van
   // binnenuit tegenaan; een gevelvlak kijkt alleen naar buiten, dus zonder dit vlak kijk je er dwars doorheen.
   facade(X0 - 0.03, 0, Math.PI / 2, D, H);
@@ -178,9 +178,7 @@ export function createExterior(scene: THREE.Scene) {
   ]) {
     trimNavy.add(x, TOP - 0.3, z, sx, 0.6, sz);
     trimBlue.add(x, TOP - 0.72, z, thin(sx, 0.8), 0.16, thin(sz, 0.8));
-    // de plint van de noordgevel loopt alleen naast de aanbouw: erachter zitten de deuren naar de hal
-    if (z < 0 && sx > 1) plinth.add((ANNEX.maxX + W / 2 + 0.15) / 2, 0.25, z, W / 2 + 0.15 - ANNEX.maxX, 0.5, thin(sz, 0.7));
-    else if (x < 0 && sz > 1) {
+    if (x < 0 && sz > 1) {
       // de plint van de dockgevel loopt niet door voor de deuren langs
       let from = -thin(sz, 0.7) / 2;
       for (const [a, b] of [...openings, [thin(sz, 0.7) / 2, 0]]) {
@@ -270,14 +268,14 @@ export function createExterior(scene: THREE.Scene) {
     solid(EXIT_X + dx, D / 2 + 2.05, 0.12, 0.12, 0, 2.8);
   }
   root.add(windows.build(UNIT_BOX, glass, false), canopy.build(UNIT_BOX, paint(NAVY, 0.5, 0.3)));
-  // Ramen van het kantoor en de kantine (de aanbouw): van buiten donker glas. Een vlak dat alleen naar buiten
-  // kijkt, zodat je er van binnenuit doorheen naar het terrein kijkt.
+  // Ramen van het kantoor en de kantine: van buiten donker glas, precies in het gat in de gevel en een stukje
+  // erachter. Een vlak dat alleen naar buiten kijkt, zodat je er van binnenuit doorheen naar het terrein kijkt.
   for (const w of ROOM_WINDOWS) {
     const pane = new THREE.Mesh(new THREE.PlaneGeometry(w.to - w.from, w.y1 - w.y0), glass);
     const mid = (w.from + w.to) / 2;
-    if (w.wall === 'west') pane.position.set(w.at - 0.02, (w.y0 + w.y1) / 2, mid);
-    else pane.position.set(mid, (w.y0 + w.y1) / 2, w.at - 0.02);
-    pane.rotation.y = w.wall === 'west' ? -Math.PI / 2 : Math.PI;
+    if (w.wall === 'west') pane.position.set(X0 - 0.015, (w.y0 + w.y1) / 2, mid);
+    else pane.position.set(mid, (w.y0 + w.y1) / 2, D / 2 + 0.015);
+    pane.rotation.y = w.wall === 'west' ? -Math.PI / 2 : 0;
     root.add(pane);
   }
 
@@ -354,7 +352,7 @@ export function createExterior(scene: THREE.Scene) {
   // ---------- Bomen ----------
   const building: Rect = { minX: X0, maxX: W / 2, minZ: -D / 2, maxZ: D / 2 };
   const blocked = (x: number, z: number, margin: number) =>
-    [...paved, building, ANNEX].some((r) => x > r.minX - margin && x < r.maxX + margin && z > r.minZ - margin && z < r.maxZ + margin);
+    [...paved, building].some((r) => x > r.minX - margin && x < r.maxX + margin && z > r.minZ - margin && z < r.maxZ + margin);
   const trunks = new Batch();
   const crowns = new Batch();
   const crownTints: THREE.Color[] = [];
@@ -376,7 +374,7 @@ export function createExterior(scene: THREE.Scene) {
   root.add(trunks.build(UNIT_CYL, paint('#5b4532', 0.95, 0)), crownMesh);
 
   // ---------- Waar de speler buiten mag lopen ----------
-  // Het hele terrein rond het gebouw en de aanbouw (de gevels zijn massief), plus de deuren waardoor je naar
+  // Het hele terrein rond het gebouw (de gevels zijn massief), plus de deuren waardoor je naar
   // buiten komt: de chauffeursdeuren in de dockgevel en de entree (nooduitgang) in de voorgevel.
   const EDGE = 220; // zo ver van het midden houdt het terrein voor de speler op
   const M = 0.5; // zo ver blijf je met je middelpunt van een gevel
@@ -384,8 +382,7 @@ export function createExterior(scene: THREE.Scene) {
     { minX: -EDGE, maxX: X0 - M, minZ: -EDGE, maxZ: EDGE },
     { minX: W / 2 + M, maxX: EDGE, minZ: -EDGE, maxZ: EDGE },
     { minX: -EDGE, maxX: EDGE, minZ: D / 2 + M, maxZ: EDGE },
-    { minX: -EDGE, maxX: EDGE, minZ: -EDGE, maxZ: ANNEX.minZ - M },
-    { minX: ANNEX.maxX + M, maxX: EDGE, minZ: -EDGE, maxZ: -D / 2 - M },
+    { minX: -EDGE, maxX: EDGE, minZ: -EDGE, maxZ: -D / 2 - M },
     ...DRIVER_DOORS.map((z): Rect => ({ minX: X0 - M - 0.1, maxX: X0 + 0.7, minZ: z - 0.3, maxZ: z + 0.3 })),
     { minX: EXIT_X - 0.3, maxX: EXIT_X + 0.3, minZ: D / 2 - 0.7, maxZ: D / 2 + M + 0.1 },
   ];
@@ -395,8 +392,8 @@ export function createExterior(scene: THREE.Scene) {
     root,
     walkable,
     solids,
-    /** Staat dit punt in de open lucht (niet in de hal of de aanbouw)? */
-    isOutside: (x: number, z: number) => !within(building, x, z) && !within(ANNEX, x, z),
+    /** Staat dit punt in de open lucht (niet in de hal)? */
+    isOutside: (x: number, z: number) => !within(building, x, z),
     /** De slagboom bij de inrit van het terrein. @param open 0 = dicht, 1 = omhoog */
     setGate(open: number) {
       boom.rotation.z = -open * 1.4;

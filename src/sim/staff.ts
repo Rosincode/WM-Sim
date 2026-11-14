@@ -1,9 +1,9 @@
-import { FURNITURE, HALL, ROW_Z, WALKWAY_X, type Point, type Pose, type Rect } from './layout';
+import { FURNITURE, HALL, type Point, type Pose, type Rect } from './layout';
 import { ROAD } from './yard';
 
 // De kantoormedewerkers. Vier collega's werken op het kantoor; er is er altijd minstens één met de auto weg, zodat
 // er een bureau en een parkeervak vrij blijven. Ze komen aan met de auto, parkeren voor de deur, lopen door de
-// entree en over het looppad door de hal naar het kantoor en gaan achter een bureau zitten. Tussendoor halen ze
+// entree en langs de parkeerplaats van de heftruck naar het kantoor (in de hal, tegen de voorgevel) en gaan achter een bureau zitten. Tussendoor halen ze
 // koffie in de kantine (vaak) of pakken ze hun lunch uit de koelkast en eten die aan tafel op (af en toe). Na een
 // tijd loopt er weer een naar zijn auto en rijdt weg; pas als die van het terrein is, komt de ander terug.
 // Alleen aankleding: ze doen niets in de WMS en worden niet gedeeld met andere spelers (elke speler ziet zijn eigen
@@ -42,8 +42,10 @@ export const CAR_PARK = (() => {
 
 /** Waar de kamers staan; ingevuld door de hal (src/ui/scene/rooms.ts). Een stoel: x, z en de kijkrichting als je zit. */
 export interface StaffSite {
+  /** De lijn (z) in de hal voor de deuren van kantoor en kantine langs. */
+  frontZ: number;
   office: {
-    /** Midden (x) van de deur in de halwand, en z net binnen de kamer. */
+    /** Midden (x) van de deur naar de hal, en z net binnen de kamer. */
     door: number;
     inZ: number;
     /** Het gangpad (x) tussen de bureaus. */
@@ -98,7 +100,7 @@ export type Staff = {
 
 export type StaffObstacle = Point & { rad: number };
 
-/** Een plek waar hij staat, met de route van daar naar de lijn langs de noordwand van de hal. */
+/** Een plek waar hij staat, met de route van daar naar de lijn in de hal voor de kamers langs. */
 type Spot = { out: Point[]; r: number };
 type Step = {
   /** Loopt eerst hierheen. */
@@ -206,9 +208,8 @@ const routeOut = (bay: Point): Leg[] => [
 ];
 
 export function createStaff(site: StaffSite) {
-  /** De lijn (z) langs de noordwand waar de deuren van kantoor en kantine op uitkomen, en die langs de zuidkant. */
-  const NORTH = -HALL.d / 2 + 1.2;
-  const SOUTH = Math.min(HALL.d / 2 - 2, Math.max(...ROW_Z) + 2.9);
+  /** De lijn (z) in de hal waar de deuren van kantoor en kantine op uitkomen: tussen de stellingen en de kamers door. */
+  const FRONT = site.frontZ;
   const { office, canteen } = site;
 
   // ========== Plekken en routes ==========
@@ -216,17 +217,17 @@ export function createStaff(site: StaffSite) {
   function deskSpot(i: number): Spot {
     const s = office.desks[i];
     const b = behindSeat(s);
-    return { r: s.r, out: [b, { x: office.aisle, z: b.z }, { x: office.aisle, z: office.inZ - 0.3 }, { x: office.door, z: office.inZ }, { x: office.door, z: NORTH }] };
+    return { r: s.r, out: [b, { x: office.aisle, z: b.z }, { x: office.aisle, z: office.inZ + 0.3 }, { x: office.door, z: office.inZ }, { x: office.door, z: FRONT }] };
   }
-  const canteenSpot = (p: Point, r: number): Spot => ({ r, out: [p, { x: canteen.door, z: p.z }, { x: canteen.door, z: NORTH }] });
+  const canteenSpot = (p: Point, r: number): Spot => ({ r, out: [p, { x: canteen.door, z: p.z }, { x: canteen.door, z: FRONT }] });
   const tableSpot = (i: number) => canteenSpot(behindSeat(canteen.seats[i]), canteen.seats[i].r);
-  /** Naast het portier van zijn auto; van daar tussen de auto's door naar de stoep, de entree in en over het looppad. */
+  /** Naast het portier van zijn auto; van daar tussen de auto's door naar de stoep, de entree in en naar de lijn voor de kamers. */
   function lotSpot(bay: Point): Spot {
     return {
       r: Math.PI / 2,
       out: [
         { x: bay.x - 1.2, z: bay.z + 0.3 }, { x: bay.x - 1.3, z: area.minZ - 1 }, { x: ENTRANCE.x, z: ENTRANCE.z + 2.6 }, { x: ENTRANCE.x, z: ENTRANCE.z - 1.2 },
-        { x: ENTRANCE.x - 2.5, z: SOUTH }, { x: WALKWAY_X + 2.5, z: SOUTH }, { x: WALKWAY_X, z: SOUTH - 2.5 }, { x: WALKWAY_X, z: NORTH },
+        { x: ENTRANCE.x - 2.5, z: FRONT },
       ],
     };
   }

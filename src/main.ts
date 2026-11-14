@@ -258,7 +258,7 @@ const view = createPlayerView({
   hud,
   bounds: BOUNDS,
   // Ook buiten: het terrein rond het gebouw, via de chauffeursdeuren en de nooduitgang
-  walkable: [...hall.walkable, ...exterior.walkable],
+  walkable: exterior.walkable,
   solids: [hall.solids, () => forklift.solids(), () => jack.solids(), ...otherSolids, ...outdoorSolids],
   // Wat je voor je uit hebt botst ook: de pallet die je draagt, of de pompwagen met wat erop staat
   probes: () => (jack.held ? jack.probes() : warehouse.carrying() ? [{ ahead: CARRY_AHEAD, radius: CARRY_RADIUS }] : []),

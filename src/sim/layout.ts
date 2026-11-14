@@ -11,16 +11,17 @@
 //                   (gezien vanaf de dockkant), R2A en R2B die van pad 2, enzovoort
 //   docks           dockdeuren in de westwand (x = -width/2), elk met een inslag- en een uitslagbaan
 //   desk            bureau met de pc; radio en printer staan erop (dx/dz ten opzichte van het bureau)
-//   orderPallets    de eerste stapel lege pallets, tegen de zuidwand naast de andere stapels: hier pak je er een om
-//                   aan een order te beginnen
-//   rooms           kantoor en kantine: aanbouw buiten tegen de noordwand, bij de dockwand (het kantoor op de hoek);
-//                   depth is de diepte van de aanbouw, vanuit de hal door een deur in de noordwand te bereiken
-//   parking         parkeerplaats in de andere hoek van de dockwand (zuid): een vak voor de heftruck en een voor
+//   orderPallets    de eerste stapel lege pallets, tegen de zuidwand naast de andere stapels (voorlopig alleen
+//                   aankleding: zie ORDER_PALLETS_ACTIVE)
+//   rooms           kantoor en kantine: in de hal, tegen de zuidwand (de voorkant van het magazijn) in de hoek met
+//                   de dockwand (het kantoor op de hoek); depth is de diepte van de kamers, de deuren komen uit op de hal
+//   parking         parkeerplaats tegen de zuidwand, naast de kantine: een vak voor de heftruck en een voor
 //                   de pompwagen (de robots staan bij hun laadstation aan het eind van hun pad)
 //   equipment       startplek van de heftruck en de pompwagen (standaard in hun vak op de parkeerplaats)
 //   playerStart     waar de speler begint
 //   furniture       paktafel, palletstapels (de overige stapels lege pallets; count = hoeveel er bij het begin liggen),
-//                   nooduitgang (zuidwand), brandblussers
+//                   nooduitgang (zuidwand), brandblussers. Alles staat aan de zuidkant: tussen de noordwand en de
+//                   stellingen is alleen een doorgang
 //
 // De locaties moeten gelijk lopen met de WMS (pos_x = x, pos_y = z in de 3D-scène); het WMS-paneel
 // laat zien welke locaties van de hal de WMS nog niet kent.
@@ -70,6 +71,8 @@ export function modelError(m: unknown): string | null {
   const { rooms, parking } = m as WarehouseModel;
   if (rooms.depth < 4 || rooms.officeWidth < 4 || rooms.canteenWidth < 6) return 'rooms: kantoor minstens 4 × 4 m, kantine minstens 6 × 4 m';
   if (parking.width < 6.2 || parking.depth < 5) return 'parking: minstens 6,2 m breed en 5 m diep';
+  if (rooms.officeWidth + rooms.canteenWidth + parking.width > hall.width) return 'rooms en parking: samen breder dan de hal';
+  if (rooms.depth > hall.depth / 2) return 'rooms.depth: hooguit de halve diepte van de hal';
   return null;
 }
 
@@ -222,9 +225,15 @@ export const PER_PALLET = 20;
 export const POINTS = {
   /** De pc met de WMS-app. */
   terminal: { x: desk.x, z: desk.z },
-  /** De eerste stapel lege pallets (zie EMPTY_PALLETS): hier pak je er een om aan een order te beginnen. */
+  /** De eerste stapel lege pallets (zie EMPTY_PALLETS); een order begin je er alleen als ORDER_PALLETS_ACTIVE aan staat. */
   orderPallets: { ...model.orderPallets },
 } satisfies Record<string, Point>;
+
+/**
+ * Kun je bij de stapels lege pallets een pallet pakken om aan een order te beginnen? Voorlopig niet: de stapels
+ * zijn alleen aankleding en er hoort (nog) geen opdracht bij.
+ */
+export const ORDER_PALLETS_ACTIVE: boolean = false;
 
 /** Wat er op het bureau staat. */
 export const DESK = {
@@ -247,30 +256,23 @@ export type Bay = Point & { w: number; d: number };
 export const WALKWAY_X = SECTION_X[0] - SECTION_PITCH / 2 - 4.8;
 
 /**
- * Kantoor en kantine: een aanbouw buiten tegen de noordwand, bij de hoek met de dockwand. Het kantoor zit op de
- * hoek en de kantine ernaast; vanuit de hal loop je er door een deur in de noordwand in.
+ * Kantoor en kantine: in de hal, tegen de zuidwand (de voorkant van het magazijn) in de hoek met de dockwand. Het
+ * kantoor zit op de hoek en de kantine ernaast; de deuren komen uit op de hal (de noordkant van de kamers).
  */
 export const ROOMS = (() => {
   const { depth, officeWidth, canteenWidth } = model.rooms;
-  const maxZ = -HALL.d / 2;
+  const maxZ = HALL.d / 2;
   const minZ = maxZ - depth;
   const office: Rect = { minX: WALL_X, maxX: WALL_X + officeWidth, minZ, maxZ };
   const canteen: Rect = { minX: office.maxX, maxX: office.maxX + canteenWidth, minZ, maxZ };
   return { office, canteen };
 })();
 
-/** De kolommen langs de wanden van de hal staan om de zoveel meter (x), vanaf de dockwand. */
-const COLUMN_PITCH = 7;
-/** Midden (x) van een deur van 2 × `half` breed in de noordwand: zo dicht mogelijk bij x, binnen de kamer en vrij van de kolommen. */
+/** Midden (x) van een deur van 2 × `half` breed in de wand naar de hal: zo dicht mogelijk bij x, binnen de kamer. */
 function roomDoor(x: number, r: Rect, half: number) {
-  const within = (v: number) => Math.min(r.maxX - half - 0.6, Math.max(r.minX + half + 0.6, v));
-  let c = within(x);
-  const column = WALL_X + Math.round((c - WALL_X) / COLUMN_PITCH) * COLUMN_PITCH;
-  const clear = half + 0.45;
-  if (Math.abs(c - column) < clear) c = within(column + (c < column ? -clear : clear));
-  return { x: c, half };
+  return { x: Math.min(r.maxX - half - 0.6, Math.max(r.minX + half + 0.6, x)), half };
 }
-/** De deuren in de noordwand van de hal: die van de kantine ligt waar het looppad op de wand uitkomt (als het past). */
+/** De deuren van de kamers naar de hal: die van de kantine ligt waar het looppad op de wand uitkomt (als het past). */
 export const ROOM_DOORS = {
   office: roomDoor(ROOMS.office.maxX - 1.2, ROOMS.office, 0.55),
   canteen: roomDoor(WALKWAY_X, ROOMS.canteen, 0.6),
@@ -282,14 +284,14 @@ export const ROOM_DOORS = {
  */
 export const CANTEEN = (() => {
   const r = ROOMS.canteen;
-  /** Binnenkant (z) van de wand naar de hal. */
-  const front = r.maxZ - 0.18;
+  /** Binnenkant (z) van de wand naar de hal; de kamer ligt daarachter (+z). */
+  const front = r.minZ + 0.18;
   /** Het keukenblok: midden, en zijn lengte langs z. De voorkant kijkt de kamer in (-x). */
-  const counter = { x: r.maxX - 0.53, z: r.minZ + 2.6, length: 3.2 };
+  const counter = { x: r.maxX - 0.53, z: r.maxZ - 2.9, length: 3.2 };
   /** Het koffieapparaat op het keukenblok. */
   const machine: Point = { x: counter.x, z: counter.z + 0.2 };
   const tableX = r.minX + Math.min(3.2, (r.maxX - r.minX) / 2 - 0.6);
-  const tables: Point[] = [r.minZ + 2.2, r.minZ + 4.9].filter((z) => z + 1.2 <= front).map((z) => ({ x: tableX, z }));
+  const tables: Point[] = [r.maxZ - 2.4, r.maxZ - 5.1].filter((z) => z - 1.2 >= front).map((z) => ({ x: tableX, z }));
   /** Zo ver (x) naast het midden van de tafel staan de stoelen; aan elke lange kant drie. */
   const CHAIR_DX = [-0.6, 0, 0.6];
   /** Elke stoel: waar hij staat, en waar je heen kijkt als je erop zit (naar de tafel). */
@@ -311,23 +313,24 @@ export const CANTEEN = (() => {
   };
 })();
 
-/** Parkeerplaats tegen de zuidwand bij de docks: vakken voor de heftruck en de pompwagen. */
+/** Parkeerplaats tegen de zuidwand, naast de kantine: vakken voor de heftruck en de pompwagen. */
 export const PARKING = (() => {
   const { width, depth } = model.parking;
   const maxZ = HALL.d / 2;
-  const area: Rect = { minX: WALL_X, maxX: WALL_X + width, minZ: maxZ - depth, maxZ };
+  const minX = ROOMS.canteen.maxX;
+  const area: Rect = { minX, maxX: minX + width, minZ: maxZ - depth, maxZ };
   /** Vak met zijn achterkant 0,3 m van de wand. */
   const bay = (x: number, w: number, d: number): Bay => ({ x, z: maxZ - 0.3 - d / 2, w, d });
   return {
     area,
-    forklift: bay(WALL_X + 2.3, 2.6, 4.3),
-    palletJack: bay(WALL_X + 4.7, 1.4, 2.4),
+    forklift: bay(minX + 2.3, 2.6, 4.3),
+    palletJack: bay(minX + 4.7, 1.4, 2.4),
   };
 })();
 
 /**
- * De lege pallets: stapels naast elkaar tegen de wand. Van de eerste pak je een pallet voor een order; raakt een
- * pallet in een stelling leeg, dan komt hij hier op een stapel. Hoeveel er liggen houdt de sim bij.
+ * De lege pallets: stapels naast elkaar tegen de wand. Raakt een pallet in een stelling leeg, dan komt hij hier
+ * op een stapel. Hoeveel er liggen houdt de sim bij.
  */
 export const EMPTY_PALLETS = (() => {
   const stacks: Point[] = [{ ...model.orderPallets }, ...model.furniture.palletStacks.map(({ x, z }) => ({ x, z }))];

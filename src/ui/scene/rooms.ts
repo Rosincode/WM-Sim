@@ -6,39 +6,51 @@ import { COFFEE_SPOTS, coffeeMachine } from './coffee';
 import { STYLE, onTop } from './style';
 import * as tex from './textures';
 
-// Kantoor (administratie) en kantine: een aanbouw buiten tegen de noordgevel, bij de hoek met de dockgevel.
-// Vanuit de hal loop je er door een openstaande deur in de noordwand naar binnen. Het kantoor zit op de hoek
-// en kijkt door een raam uit over het vrachtwagenterrein; de kantine ligt ernaast.
+// Kantoor (administratie) en kantine: twee kamers in de hal, tegen de zuidwand (de voorkant van het magazijn) in
+// de hoek met de dockwand. Vanuit de hal loop je er door een openstaande deur naar binnen. Het kantoor zit op de
+// hoek en kijkt door een raam uit over het vrachtwagenterrein; de kantine ligt ernaast, met de parkeerplaats van
+// de heftruck en de pompwagen aan de andere kant van haar oostwand.
 // Alleen aankleding: geen sim-logica. Stijl: zie "Stijl van 3D-modellen" in CLAUDE.md.
 
-/** Hoogte van de kamers; de aanbouw is veel lager dan de hal. */
+/** Hoogte van de kamers; ze zijn veel lager dan de hal. */
 export const ROOM_HEIGHT = 2.9;
 const WALL = 0.12; // dikte van de binnenwand tussen kantoor en kantine
-const OUTER = 0.2; // dikte van de buitenwanden van de aanbouw
-const HALL_SIDE = 0.16; // dikte van de wand tussen de aanbouw en de hal (met de deuren)
+// Dikte van de voorzetwand tegen de buitenwanden van de hal (west en zuid): de kolommen van de hal vallen erin weg.
+const OUTER = 0.32;
+const GAP = 0.02; // de voorzetwand staat zo ver los van het wandvlak van de hal
+const SIDE = 0.2; // dikte van de oostwand, naar de parkeerplaats
+const HALL_SIDE = 0.16; // dikte van de wand naar de hal (met de deuren)
+/** De kolommen langs de zuidwand van de hal staan om de zoveel meter (x), vanaf de dockwand (zie warehouse.ts). */
+const COLUMN_PITCH = 7;
 const SILL = 0.9; // onderkant van de ramen
 const HEAD = 2.3; // bovenkant van de ramen
 const DOOR_H = 2.1;
 
 /**
- * Raam in een buitenwand van de aanbouw: `from`..`to` loopt langs z (westwand) of langs x (noordwand);
- * `at` is de buitenkant van die wand (x voor west, z voor noord).
+ * Raam in een buitenwand van de hal, ter hoogte van een kamer: `from`..`to` loopt langs z (westwand, de dockgevel)
+ * of langs x (zuidwand, de voorgevel). De hal en de gevel laten er een gat voor open (warehouse.ts, exterior.ts).
  */
-export type WallWindow = { wall: 'west' | 'north'; at: number; from: number; to: number; y0: number; y1: number };
+export type WallWindow = { wall: 'west' | 'south'; from: number; to: number; y0: number; y1: number };
 
 const { office, canteen } = ROOMS;
-/** De noordwand van de hal: de aanbouw ligt daar aan de buitenkant tegenaan. */
-const HALL_WALL = -HALL.d / 2;
+/** De zuidwand van de hal: de kamers liggen daar aan de binnenkant tegenaan. */
+const HALL_WALL = HALL.d / 2;
 const canteenMid = (canteen.minX + canteen.maxX) / 2;
+/** Staat er in de zuidwand een kolom van de hal in dit stuk (x)? Daar komt geen raam. */
+const onColumn = (from: number, to: number) => {
+  const first = Math.ceil((from - 0.25 - office.minX) / COLUMN_PITCH);
+  return office.minX + first * COLUMN_PITCH <= to + 0.25;
+};
+const south = (from: number, to: number): WallWindow[] => (to - from < 0.8 || onColumn(from, to) ? [] : [{ wall: 'south', from, to, y0: SILL, y1: HEAD }]);
 export const ROOM_WINDOWS: WallWindow[] = [
-  { wall: 'west', at: office.minX, from: office.minZ + 1.2, to: office.maxZ - 1.2, y0: SILL, y1: HEAD }, // uitzicht op het terrein
-  { wall: 'north', at: office.minZ, from: office.minX + 1.5, to: office.maxX - 1.5, y0: SILL, y1: HEAD },
-  { wall: 'north', at: office.minZ, from: canteen.minX + 1.6, to: canteenMid - 0.4, y0: SILL, y1: HEAD },
-  { wall: 'north', at: office.minZ, from: canteenMid + 0.4, to: canteen.maxX - 1.6, y0: SILL, y1: HEAD },
+  { wall: 'west', from: office.minZ + 1.2, to: office.maxZ - 1.2, y0: SILL, y1: HEAD }, // uitzicht op het vrachtwagenterrein
+  ...south(office.minX + 1.5, office.maxX - 1.5),
+  ...south(canteen.minX + 1.6, canteenMid - 0.4),
+  ...south(canteenMid + 0.4, canteen.maxX - 1.6),
 ];
 
 const door = (text: string, at: { x: number; half: number }) => ({ text, x: at.x, from: at.x - at.half, to: at.x + at.half, height: DOOR_H });
-/** Deuropeningen in de noordwand van de hal (langs x); waar ze zitten staat in src/sim/layout.ts. */
+/** Deuropeningen in de wand van de kamers naar de hal (langs x); waar ze zitten staat in src/sim/layout.ts. */
 export const ROOM_DOORS = [door('KANTOOR', DOOR_SPOTS.office), door('KANTINE', DOOR_SPOTS.canteen)];
 
 /** Beeldvlak van de monitor op een kantoorbureau (m): 16:9, net binnen de behuizing. */
@@ -167,10 +179,14 @@ function plant(): Part[] {
 }
 
 export function createRooms({ scene, roof, solid }: Options) {
-  const back = office.minZ; // buitenkant van de noordwand van de aanbouw
-  /** Binnenkant van de wand naar de hal: daar zitten de deuren in. */
-  const frontZ = HALL_WALL - 0.02 - HALL_SIDE;
-  const all: Rect = { minX: office.minX, maxX: canteen.maxX, minZ: back, maxZ: HALL_WALL };
+  const all: Rect = { minX: office.minX, maxX: canteen.maxX, minZ: office.minZ, maxZ: HALL_WALL };
+  /** Buitenkant (z) van de wand naar de hal, en de binnenkant ervan: daar zitten de deuren in. */
+  const front = all.minZ;
+  const frontZ = front + HALL_SIDE;
+  /** Binnenkant van de voorzetwanden (west en zuid) en van de oostwand. */
+  const westX = all.minX + GAP + OUTER;
+  const southZ = HALL_WALL - GAP - OUTER;
+  const eastX = all.maxX - SIDE;
 
   // Alles met hetzelfde materiaal gaat samen in één mesh.
   const parts = new Map<THREE.Material, THREE.BufferGeometry[]>();
@@ -189,9 +205,9 @@ export function createRooms({ scene, roof, solid }: Options) {
     solid(x, z, turned ? block[1] : block[0], turned ? block[0] : block[1], 0, reach(block[2]));
   };
   // Het plafond is massief: je stoot je hoofd eraan. Waar je niet rechtop op kunt staan (koelkast, kast, automaat,
-  // deurblad) loopt het blok door tot het plafond, zodat je er niet op kunt klimmen en door het dak naar buiten komt.
+  // deurblad) loopt het blok door tot het plafond, zodat je er niet op kunt klimmen en door het dak de hal in komt.
   const reach = (top: number) => (top > ROOM_HEIGHT - 1.85 ? ROOM_HEIGHT : top);
-  solid((all.minX + all.maxX) / 2, (back + HALL_WALL - 0.02) / 2, all.maxX - all.minX, HALL_WALL - 0.02 - back, ROOM_HEIGHT, ROOM_HEIGHT + 0.3);
+  solid((all.minX + all.maxX) / 2, (front + HALL_WALL) / 2, all.maxX - all.minX, HALL_WALL - front, ROOM_HEIGHT, ROOM_HEIGHT + 0.3);
 
   /**
    * Wand langs x (op z = at) of langs z (op x = at) met openingen: een deur begint op de vloer, een raam krijgt
@@ -230,20 +246,21 @@ export function createRooms({ scene, roof, solid }: Options) {
   }
 
   // ---------- Wanden ----------
-  // De wand naar de hal staat 2 cm achter de halwand (die op de plek van de deuren open is) en heeft de deuropeningen.
-  wallRun('x', HALL_WALL - 0.02 - HALL_SIDE / 2, all.minX + OUTER, all.maxX - OUTER, HALL_SIDE, ROOM_DOORS.map((d) => ({ from: d.from, to: d.to, y0: 0, y1: d.height })));
-  const windows = (wall: 'west' | 'north') => ROOM_WINDOWS.filter((w) => w.wall === wall).map((w): Opening => ({ ...w, glass: true }));
-  wallRun('z', all.minX + OUTER / 2, back, HALL_WALL - 0.01, OUTER, windows('west'));
-  wallRun('z', all.maxX - OUTER / 2, back, HALL_WALL - 0.01, OUTER, []);
-  wallRun('x', back + OUTER / 2, all.minX + OUTER, all.maxX - OUTER, OUTER, windows('north'));
-  wallRun('z', office.maxX, back + OUTER, frontZ, WALL, []); // tussen kantoor en kantine
+  // De wand naar de hal (met de deuropeningen) en de oostwand naar de parkeerplaats staan vrij in de hal. Tegen de
+  // dockwand en de zuidwand staat een voorzetwand met de ramen: 2 cm los van het wandvlak van de hal, dat op de
+  // plek van de ramen open is.
+  wallRun('x', front + HALL_SIDE / 2, all.minX + GAP, all.maxX, HALL_SIDE, ROOM_DOORS.map((d) => ({ from: d.from, to: d.to, y0: 0, y1: d.height })));
+  const windows = (wall: WallWindow['wall']) => ROOM_WINDOWS.filter((w) => w.wall === wall).map((w): Opening => ({ ...w, glass: true }));
+  wallRun('z', all.minX + GAP + OUTER / 2, frontZ, HALL_WALL - GAP, OUTER, windows('west'));
+  wallRun('z', all.maxX - SIDE / 2, frontZ, HALL_WALL - GAP, SIDE, []);
+  wallRun('x', HALL_WALL - GAP - OUTER / 2, westX, eastX, OUTER, windows('south'));
+  wallRun('z', office.maxX, frontZ, southZ, WALL, []); // tussen kantoor en kantine
 
-  // Fundering (ook de drempel in de deuropeningen) en de vloeren
-  box(STYLE.dark, all.maxX - all.minX, 0.3, HALL_WALL - back, (all.minX + all.maxX) / 2, -0.15, (back + HALL_WALL) / 2);
+  // De vloeren: een dunne plaat op de halvloer
   const floor = (mat: THREE.Material, x0: number, x1: number) =>
-    box(mat, x1 - x0, 0.012, frontZ - back - OUTER, (x0 + x1) / 2, 0.006, (back + OUTER + frontZ) / 2);
-  floor(STYLE.carpet, office.minX + OUTER, office.maxX - WALL / 2);
-  floor(STYLE.vinyl, canteen.minX + WALL / 2, canteen.maxX - OUTER);
+    box(mat, x1 - x0, 0.012, southZ - frontZ, (x0 + x1) / 2, 0.006, (frontZ + southZ) / 2);
+  floor(STYLE.carpet, westX, office.maxX - WALL / 2);
+  floor(STYLE.vinyl, canteen.minX + WALL / 2, eastX);
 
   // Openstaande deuren: het blad staat de kamer in gedraaid, naast de opening
   const OPEN = (80 * Math.PI) / 180;
@@ -251,13 +268,13 @@ export function createRooms({ scene, roof, solid }: Options) {
     const w = d.to - d.from - 0.1;
     const h = d.height - 0.07;
     const hingeX = d.to - 0.05;
-    const hingeZ = frontZ - 0.03;
+    const hingeZ = frontZ + 0.03;
     const leaf: Part[] = [
       [STYLE.blue, rb(w, h, 0.04, 0.012, w / 2, h / 2 + 0.01, 0)],
       [STYLE.steel, rb(0.14, 0.025, 0.11, 0.01, w - 0.11, 1.03, 0)], // klink, steekt aan beide kanten uit
     ];
-    for (const [mat, geo] of leaf) put(mat, geo.rotateY(OPEN).translate(hingeX, 0, hingeZ));
-    solid(hingeX + (Math.cos(OPEN) * w) / 2, hingeZ - (Math.sin(OPEN) * w) / 2, 0.2, w, 0, reach(d.height));
+    for (const [mat, geo] of leaf) put(mat, geo.rotateY(-OPEN).translate(hingeX, 0, hingeZ));
+    solid(hingeX + (Math.cos(OPEN) * w) / 2, hingeZ + (Math.sin(OPEN) * w) / 2, 0.2, w, 0, reach(d.height));
   }
 
   // ---------- Kantoor: vier bureaus (twee aan het raam, twee tegen de tussenwand), kasten naast de deur ----------
@@ -280,7 +297,7 @@ export function createRooms({ scene, roof, solid }: Options) {
   };
   // Vier werkplekken: twee aan het raam (west) en twee ertegenover tegen de tussenwand (oost), met een gangpad ertussen.
   // side = de kant waar je zit ten opzichte van het bureau: +1 = aan de oostkant ervan, -1 = aan de westkant.
-  for (const [deskX, side] of [[office.minX + OUTER + 0.44, 1], [office.maxX - WALL / 2 - 0.44, -1]]) {
+  for (const [deskX, side] of [[westX + 0.44, 1], [office.maxX - WALL / 2 - 0.44, -1]]) {
     for (const dz of [-1.35, 1.35]) {
       const chairX = deskX + side * 0.64; // aangeschoven: de zitting raakt net de rand van het blad
       const z = officeMidZ + dz;
@@ -298,15 +315,15 @@ export function createRooms({ scene, roof, solid }: Options) {
   }
   const deskSeats = seats.length;
   // Kasten tegen de wand naar de hal, naast de deur
-  for (let i = 0; i < 3; i++) place(cabinet(), office.minX + OUTER + 0.75 + i * 0.85, frontZ - 0.25, Math.PI, [0.8, 0.45, 1.3]);
-  place(plant(), office.maxX - 0.5, office.minZ + 0.6);
+  for (let i = 0; i < 3; i++) place(cabinet(), westX + 0.75 + i * 0.85, frontZ + 0.25, 0, [0.8, 0.45, 1.3]);
+  place(plant(), office.maxX - 0.5, southZ - 0.4);
 
   // ---------- Kantine: keukenblok met het koffieapparaat en de koelkast langs de oostwand, twee tafels, automaat ----------
   // Waar alles staat komt uit src/sim/layout.ts (CANTEEN): de chauffeurs halen hier koffie en schuiven aan.
   const block = CANTEEN.counter;
-  const fridgeZ = canteen.minZ + 0.6;
+  const fridgeZ = southZ - 0.36;
   place(fridge(), block.x, fridgeZ, -QUARTER, [0.62, 0.62, 1.8]);
-  // De deur van de koelkast gaat echt open: hij scharniert aan de kant van de buitenwand
+  // De deur van de koelkast gaat echt open: hij scharniert aan de kant van het keukenblok
   const fridgeHinge = new THREE.Group();
   fridgeHinge.position.set(block.x - 0.27, 0, fridgeZ - 0.29);
   fridgeHinge.rotation.y = -QUARTER;
@@ -333,8 +350,8 @@ export function createRooms({ scene, roof, solid }: Options) {
     place(chair(), s.x, s.z, s.r);
     seatAt(s.x, s.z, s.r);
   }
-  place(vendingMachine(), canteen.minX + WALL / 2 + 0.42, frontZ - 1.2, QUARTER, [0.95, 0.8, 1.85]);
-  place(plant(), canteen.minX + 0.5, canteen.minZ + 0.6);
+  place(vendingMachine(), canteen.minX + WALL / 2 + 0.42, frontZ + 1.2, QUARTER, [0.95, 0.8, 1.85]);
+  place(plant(), canteen.minX + 0.5, southZ - 0.4);
 
   for (const [mat, geos] of parts) {
     const m = new THREE.Mesh(mergeGeometries(geos), mat);
@@ -345,12 +362,14 @@ export function createRooms({ scene, roof, solid }: Options) {
   }
 
   // ---------- Plafond met lichtbakken en het platte dak (verborgen in de overzicht-modus) ----------
-  // Net als het dak van de hal werpen ze geen schaduw: het daglicht valt gewoon naar binnen.
-  const roofTo = HALL_WALL - 0.035; // tot tegen de gevel van de hal
-  const ceiling = new THREE.Mesh(new THREE.BoxGeometry(all.maxX - all.minX, 0.08, roofTo - back), STYLE.ceiling);
-  ceiling.position.set((all.minX + all.maxX) / 2, ROOM_HEIGHT + 0.04, (back + roofTo) / 2);
-  const roofSlab = new THREE.Mesh(new THREE.BoxGeometry(all.maxX - all.minX + 0.3, 0.22, roofTo - back + 0.15), STYLE.dark);
-  roofSlab.position.set((all.minX + all.maxX) / 2, ROOM_HEIGHT + 0.19, (back - 0.15 + roofTo) / 2);
+  // Net als het dak van de hal werpen ze geen schaduw: het licht valt gewoon naar binnen.
+  const roofTo = HALL_WALL - GAP; // tot tegen de zuidwand van de hal
+  const roofFrom = all.minX + GAP; // en tot tegen de dockwand
+  const ceiling = new THREE.Mesh(new THREE.BoxGeometry(all.maxX - roofFrom, 0.08, roofTo - front), STYLE.ceiling);
+  ceiling.position.set((roofFrom + all.maxX) / 2, ROOM_HEIGHT + 0.04, (front + roofTo) / 2);
+  // het dak steekt aan de vrije kanten (hal en parkeerplaats) een stukje over
+  const roofSlab = new THREE.Mesh(new THREE.BoxGeometry(all.maxX - roofFrom + 0.15, 0.22, roofTo - front + 0.15), STYLE.dark);
+  roofSlab.position.set((roofFrom + all.maxX + 0.15) / 2, ROOM_HEIGHT + 0.19, (front - 0.15 + roofTo) / 2);
   roof.add(ceiling, roofSlab);
   const lampMat = new THREE.MeshBasicMaterial();
   lampMat.color.setRGB(3.2, 3.2, 3);
@@ -370,20 +389,18 @@ export function createRooms({ scene, roof, solid }: Options) {
   const signGeo = new THREE.PlaneGeometry(1.0, 0.5);
   for (const d of ROOM_DOORS) {
     const s = new THREE.Mesh(signGeo, onTop(new THREE.MeshStandardMaterial({ map: tex.sign(d.text, '#17346b', '#ffffff'), roughness: 0.7 })));
-    s.position.set(d.x, d.height + 0.42, HALL_WALL + 0.012);
+    s.position.set(d.x, d.height + 0.42, front - 0.012);
+    s.rotation.y = Math.PI; // leesbaar vanuit de hal
     scene.add(s);
   }
 
-  /** Waar de speler buiten de hal mag lopen: de deuropeningen en de kamers erachter (de wanden zijn massief). */
-  const walkable: Rect[] = [
-    { minX: all.minX, maxX: all.maxX, minZ: back, maxZ: frontZ },
-    ...ROOM_DOORS.map((d): Rect => ({ minX: d.from, maxX: d.to, minZ: frontZ - 0.5, maxZ: HALL_WALL + 0.7 })),
-  ];
   /** Voor de kantoormedewerkers (src/sim/staff.ts): waar de deuren, de bureaustoelen, de kantinestoelen en het aanrecht zijn. */
   const pose = (s: THREE.Object3D) => ({ x: s.position.x, z: s.position.z, r: s.rotation.y });
   const staff = {
-    office: { door: ROOM_DOORS[0].x, inZ: frontZ - 0.9, aisle: (office.minX + OUTER + office.maxX - WALL / 2) / 2, desks: seats.slice(0, deskSeats).map(pose) },
-    canteen: { door: ROOM_DOORS[1].x, inZ: frontZ - 0.9, ...stations, seats: seats.slice(deskSeats).map(pose) },
+    /** De lijn (z) in de hal voor de deuren langs. */
+    frontZ: front - 1.2,
+    office: { door: ROOM_DOORS[0].x, inZ: frontZ + 0.9, aisle: (westX + office.maxX - WALL / 2) / 2, desks: seats.slice(0, deskSeats).map(pose) },
+    canteen: { door: ROOM_DOORS[1].x, inZ: frontZ + 0.9, ...stations, seats: seats.slice(deskSeats).map(pose) },
     /** Het aantal bureaustoelen: de eerste stoelen in `seats`; daarna komen de kantinestoelen. */
     deskSeats,
     /** @param open 0 = koelkast dicht, 1 = open */
@@ -391,5 +408,6 @@ export function createRooms({ scene, roof, solid }: Options) {
       fridgeHinge.rotation.y = -QUARTER - open * 1.6;
     },
   };
-  return { walkable, desks, seats, staff };
+  /** footprint: het blok dat de kamers in de hal innemen (daar rijdt de heftruck niet doorheen). */
+  return { footprint: all, desks, seats, staff };
 }

@@ -35,8 +35,9 @@ export function mountStaff({
   /** Handig bij testen: zoveel seconden laat de sim de collega's vooraf al lopen. */
   skip?: number;
 }) {
-  const { office, canteen, deskSeats } = hall.staff;
+  const { frontZ, office, canteen, deskSeats } = hall.staff;
   const sim = createStaff({
+    frontZ,
     office,
     canteen,
     deskBusy: (i) => playerSeat() === hall.seats[i],

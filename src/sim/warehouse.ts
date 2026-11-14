@@ -2,7 +2,7 @@ import type { Item, Order } from '../shared/contract';
 import { publish, type Direction, type ProcessEvent, type ScanKind } from './events';
 import { articles, isBlocked, skus } from './catalog';
 import {
-  DOCKS, EMPTY_PALLETS, LANE_SLOTS, LOCATIONS, PER_PALLET, POINTS, SLOT_DX, currentLocationId,
+  DOCKS, EMPTY_PALLETS, LANE_SLOTS, LOCATIONS, ORDER_PALLETS_ACTIVE, PER_PALLET, POINTS, SLOT_DX, currentLocationId,
   dist, lanePoint, laneSlot, location, shelfLocations, type Dock, type Point,
 } from './layout';
 import { createCounter } from './counter';
@@ -1223,10 +1223,11 @@ export function createWarehouse({
       }
     }
 
-    // De stapel lege pallets: hier begin je aan de volgende order uit de WMS
+    // De stapel lege pallets: hier begin je aan de volgende order uit de WMS. Voorlopig staat dat uit
+    // (ORDER_PALLETS_ACTIVE): de stapels zijn alleen aankleding. Wie nog met een order bezig was kan hem wel terugzetten.
     if (!carry) {
       const open = orders.find((x) => x.status === 'open');
-      push(
+      if (ORDER_PALLETS_ACTIVE) push(
         open
           ? interaction(`Pak een lege pallet voor ${open.id} (${plural(open.lines.length, 'regel')})`, POINTS.orderPallets, takeContainer)
           : interaction('Geen open orders in de WMS', POINTS.orderPallets),
@@ -1381,7 +1382,7 @@ export function createWarehouse({
       const staged = [DOCKS[to.dock], ...DOCKS].find((d) => laneOut[d.index].some((id) => id));
       if (staged) return { point: staged.laneOut, text: `Pak de order op ${staged.outId} op om in te laden` };
     }
-    if (orders.some((x) => x.status === 'open')) return { point: POINTS.orderPallets, text: 'Pak een lege pallet voor de volgende order' };
+    if (ORDER_PALLETS_ACTIVE && orders.some((x) => x.status === 'open')) return { point: POINTS.orderPallets, text: 'Pak een lege pallet voor de volgende order' };
     if (to?.status === 'checkedIn' && to.loaded.length) return { point: outPoint, text: `Meld ${to.id} uit` };
     return null;
   }
