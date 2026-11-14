@@ -227,7 +227,7 @@ export function createStaff(site: StaffSite) {
       r: Math.PI / 2,
       out: [
         { x: bay.x - 1.2, z: bay.z + 0.3 }, { x: bay.x - 1.3, z: area.minZ - 1 }, { x: ENTRANCE.x, z: ENTRANCE.z + 2.6 }, { x: ENTRANCE.x, z: ENTRANCE.z - 1.2 },
-        { x: ENTRANCE.x - 2.5, z: FRONT },
+        { x: ENTRANCE.x, z: FRONT }, // over het looppad: van de entree recht de hal in, dan voor de kamers langs
       ],
     };
   }

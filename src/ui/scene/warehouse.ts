@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { AISLE_Z, DOCKS, DOCK_PITCH, EMPTY_PALLETS, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROW_FACE, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, WALKWAY_X, emptyStackSizes, location, rackLocationId, rowBehind, rowName, type Bay } from '../../sim/layout';
+import { AISLE_Z, DOCKS, DOCK_PITCH, EMPTY_PALLETS, FURNITURE, HALL as FLOOR, LANE_LENGTH, LEVEL_HEIGHTS, PARKING, ROOMS, ROOM_DOORS, ROW_FACE, ROW_Z, SECTION_PITCH, SECTION_X as BAY_X, SLOT_DX, WALKWAY_X, emptyStackSizes, location, rackLocationId, rowBehind, rowName, type Bay } from '../../sim/layout';
 import { DOCK_RAMP, DRIVER_DOORS, TRUCK, dockScreen, jackBay } from '../../sim/drivers';
 import { articleOfAisle, articles } from '../../sim/catalog';
 import { createRooms, ROOM_WINDOWS } from './rooms';
@@ -193,13 +193,48 @@ export function createWarehouse(scene: THREE.Scene) {
   const across = (r: { minX: number; maxX: number }) => WALK_X > r.minX && WALK_X < r.maxX;
   const walkFrom = -D / 2 + 2;
   const walkTo = across(ROOMS.canteen) || across(ROOMS.office) ? ROOMS.office.minZ - 0.1 : across(PARKING.area) ? PARKING.area.minZ - 0.3 : D / 2 - 2;
-  const walkMid = (walkFrom + walkTo) / 2;
-  const walkLen = walkTo - walkFrom;
-  marking(WALK_X, walkMid, 1.4, walkLen, '#2f7a4c');
-  marking(WALK_X - 0.75, walkMid, 0.1, walkLen, '#e9e9e2');
-  marking(WALK_X + 0.75, walkMid, 0.1, walkLen, '#e9e9e2');
+  const GREEN = '#2f7a4c';
+  const EDGE = '#e9e9e2';
   const walkIcon = tex.walkwayIcon();
-  for (const z of spread(walkLen - 2, 10)) marking(WALK_X, walkMid + z, 0.9, 0.9, '#ffffff', walkIcon, Math.PI / 2);
+  /** Stuk looppad langs z (op x) of langs x (op z), zonder randlijnen. */
+  const pathZ = (x: number, z0: number, z1: number) => marking(x, (z0 + z1) / 2, 1.4, z1 - z0, GREEN);
+  const pathX = (z: number, x0: number, x1: number) => marking((x0 + x1) / 2, z, x1 - x0, 1.4, GREEN);
+  const edgeZ = (x: number, z0: number, z1: number) => marking(x, (z0 + z1) / 2, 0.1, z1 - z0 + 0.1, EDGE);
+  const edgeX = (z: number, x0: number, x1: number) => marking((x0 + x1) / 2, z, x1 - x0 + 0.1, 0.1, EDGE);
+  const iconsZ = (x: number, z0: number, z1: number) => {
+    for (const z of spread(z1 - z0 - 2, 10)) marking(x, (z0 + z1) / 2 + z, 0.9, 0.9, '#ffffff', walkIcon, Math.PI / 2);
+  };
+  // Komt het looppad bij de kamers uit, dan loopt er een dwarspad voor de kamers langs: naar de deur van het
+  // kantoor aan de ene kant en naar de entree (vanaf het parkeerterrein buiten) aan de andere kant. De stukken
+  // sluiten op elkaar aan zonder te overlappen (de verf is doorzichtig) en de randlijnen lopen om de hoeken mee.
+  const officeX = ROOM_DOORS.office.x;
+  const crossZ = ROOMS.office.minZ - 1.2; // de looplijn van de kantoormedewerkers (src/sim/staff.ts)
+  if (across(ROOMS.canteen) && officeX < WALK_X - 1.5 && EXIT_X > WALK_X + 1.5) {
+    const [n, s] = [crossZ - 0.75, crossZ + 0.75];
+    const doorZ = ROOMS.office.minZ - 0.1;
+    const wallZ = D / 2 - 0.1;
+    pathZ(WALK_X, walkFrom, crossZ - 0.7);
+    pathX(crossZ, officeX - 0.7, EXIT_X + 0.7);
+    for (const x of [officeX, WALK_X]) pathZ(x, crossZ + 0.7, doorZ); // de laatste stap naar de deuren
+    pathZ(EXIT_X, crossZ + 0.7, wallZ);
+    for (const side of [-0.75, 0.75]) edgeZ(WALK_X + side, walkFrom, n);
+    edgeX(n, officeX - 0.75, WALK_X - 0.75);
+    edgeX(n, WALK_X + 0.75, EXIT_X + 0.75);
+    edgeX(s, officeX + 0.75, WALK_X - 0.75);
+    edgeX(s, WALK_X + 0.75, EXIT_X - 0.75);
+    edgeZ(officeX - 0.75, n, doorZ);
+    for (const x of [officeX + 0.75, WALK_X - 0.75, WALK_X + 0.75]) edgeZ(x, s, doorZ);
+    edgeZ(EXIT_X - 0.75, s, wallZ);
+    edgeZ(EXIT_X + 0.75, n, wallZ);
+    iconsZ(WALK_X, walkFrom, n);
+    iconsZ(EXIT_X, s, wallZ);
+    for (const [x0, x1] of [[officeX, WALK_X], [WALK_X, EXIT_X]])
+      for (const x of spread(x1 - x0 - 2, 10)) marking((x0 + x1) / 2 + x, crossZ, 0.9, 0.9, '#ffffff', walkIcon);
+  } else {
+    pathZ(WALK_X, walkFrom, walkTo);
+    for (const side of [-0.75, 0.75]) edgeZ(WALK_X + side, walkFrom, walkTo);
+    iconsZ(WALK_X, walkFrom, walkTo);
+  }
   // Per dock: een inslagbaan (blauw) en een uitslagbaan (groen), met de locatiecode op de vloer
   for (const d of DOCKS) {
     const lanes = [
