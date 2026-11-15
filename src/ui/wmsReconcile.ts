@@ -4,8 +4,8 @@ import { location } from '../sim/layout';
 // Legt de pallets in de stellingen van de hal naast die in de WMS, en werkt de WMS bij naar de hal.
 // De hal is de fysieke wereld: staat een pallet daar ergens anders dan de WMS denkt, dan heeft de WMS het mis.
 // Het tegenovergestelde van 'Hal resetten' (src/ui/warehouse.ts), dat de hal gelijkzet met de WMS.
-// Via de API zet de game een verplaatsing recht (pallet_move) en een ander aantal (correct_pallet). Een pallet die
-// maar aan één kant bestaat, of met een ander artikel, kan de game alleen laten zien: dat moet in de WMS-app.
+// Via de API kan alleen een verplaatsing worden rechtgezet (pallet_move). Een ander aantal, of een pallet die
+// maar aan één kant bestaat, kan de game alleen laten zien: dat moet in de WMS-app (docs/wms/13).
 
 export type HallPallet = { id: string; sku: string; qty: number; locationId: string };
 type WmsPallet = Awaited<ReturnType<WmsClient['getPallets']>>[number];
@@ -18,7 +18,7 @@ export type StockDiff = {
   /** De WMS heeft de pallet op een andere locatie dan waar hij in de hal staat. */
   moves: PalletMove[];
   /** Zelfde pallet, ander aantal of ander artikel. */
-  quantities: { palletId: string; locationId: string; hall: string; wms: string; qty: number; sameSku: boolean }[];
+  quantities: { palletId: string; locationId: string; hall: string; wms: string }[];
   /** In een stelling van de hal, in de WMS geen actieve pallet met dit nummer. */
   onlyHall: HallPallet[];
   /** In de WMS in een stelling, in de hal nergens te vinden. */
@@ -48,9 +48,7 @@ export function compareStock(racked: HallPallet[], busy: Set<string>, inWms: Wms
       diff.moves.push({ palletId: h.id, sku: h.sku, qty: h.qty, fromLocationId: w.locationId, toLocationId: h.locationId });
     }
     if (w.sku !== h.sku || w.qty !== h.qty) {
-      diff.quantities.push({
-        palletId: h.id, locationId: h.locationId, hall: `${h.qty}× ${h.sku}`, wms: `${w.qty}× ${w.sku}`, qty: h.qty, sameSku: w.sku === h.sku,
-      });
+      diff.quantities.push({ palletId: h.id, locationId: h.locationId, hall: `${h.qty}× ${h.sku}`, wms: `${w.qty}× ${w.sku}` });
     }
   }
   // Wat de WMS op een dock heeft staan is nog onderweg in het inslagproces en hoort niet in deze vergelijking
@@ -58,24 +56,14 @@ export function compareStock(racked: HallPallet[], busy: Set<string>, inWms: Wms
   return diff;
 }
 
-/** De aantallen die de game in de WMS kan rechtzetten: zelfde pallet en artikel, ander aantal. */
-export const correctable = (client: WmsClient, diff: StockDiff) => (client.correctPallet ? diff.quantities.filter((q) => q.sameSku) : []);
-
 /**
- * Verplaatst de pallets in de WMS naar waar ze in de hal staan en zet afwijkende aantallen recht. Een geweigerde
- * verplaatsing krijgt een tweede kans: de plek kan vol zijn geweest tot een andere pallet uit deze lijst er weg was.
+ * Verplaatst de pallets in de WMS naar waar ze in de hal staan. Een geweigerde verplaatsing krijgt een tweede
+ * kans: de plek kan vol zijn geweest tot een andere pallet uit deze lijst er weg was.
  */
-export async function alignWms(
-  client: WmsClient,
-  moves: PalletMove[],
-  quantities: StockDiff['quantities'],
-  onProgress: (done: number, total: number) => void,
-) {
+export async function alignWms(client: WmsClient, moves: PalletMove[], onProgress: (done: number, total: number) => void) {
   let todo = moves;
   let moved = 0;
-  let corrected = 0;
   let errors: string[] = [];
-  const total = moves.length + quantities.length;
   for (let pass = 0; pass < 2 && todo.length; pass++) {
     const failed: PalletMove[] = [];
     errors = [];
@@ -87,21 +75,12 @@ export async function alignWms(
         failed.push(m);
         errors.push(`${m.palletId} naar ${m.toLocationId}: ${err instanceof Error ? err.message : String(err)}`);
       }
-      onProgress(moved, total);
+      onProgress(moved, moves.length);
     }
     if (failed.length === todo.length) break; // niets gelukt: nog een ronde helpt niet
     todo = failed;
   }
-  for (const q of quantities) {
-    try {
-      await client.correctPallet!({ palletId: q.palletId, qty: q.qty });
-      corrected++;
-    } catch (err) {
-      errors.push(`${q.palletId} naar ${q.hall}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    onProgress(moved + corrected, total);
-  }
-  return { moved, corrected, errors };
+  return { moved, errors };
 }
 
 const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -153,19 +132,17 @@ export function mountWmsReconcile(
 
   async function align() {
     const client = wms.client;
-    if (!diff || busy) return;
+    if (!diff?.moves.length || busy) return;
     const moves = diff.moves;
-    const quantities = correctable(client, diff);
-    if (!moves.length && !quantities.length) return;
-    busy = `0 / ${moves.length + quantities.length}`;
+    busy = `0 / ${moves.length}`;
     note = '';
     render();
-    const result = await alignWms(client, moves, quantities, (done, total) => {
+    const result = await alignWms(client, moves, (done, total) => {
       busy = `${done} / ${total}`;
       render();
     });
     busy = '';
-    note = `${count(result.moved, 'pallet', 'pallets')} verplaatst en ${count(result.corrected, 'aantal', 'aantallen')} rechtgezet in de WMS.${
+    note = `${count(result.moved, 'pallet', 'pallets')} verplaatst in de WMS.${
       result.errors.length ? ` Geweigerd: ${result.errors.slice(0, 3).join(' · ')}${result.errors.length > 3 ? ' · …' : ''}` : ''
     }`;
     await check();
@@ -208,8 +185,7 @@ export function mountWmsReconcile(
       }
     }
     const time = checkedAt?.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    const fixable = diff ? diff.moves.length + correctable(wms.client, diff).length : 0;
-    const manual = diff && diff.moves.length + diff.quantities.length + diff.onlyHall.length + diff.onlyWms.length > fixable;
+    const manual = diff && diff.quantities.length + diff.onlyHall.length + diff.onlyWms.length > 0;
     box.innerHTML = `<b style="display:block;margin-bottom:4px">Pallets: hal naast WMS</b>
       ${
         !diff
@@ -219,14 +195,14 @@ export function mountWmsReconcile(
             : `<div style="color:#a5d6a7">Alle ${diff.compared} pallets in de stellingen staan in de WMS op dezelfde plek met dezelfde inhoud.</div>`
       }
       ${
-        fixable
+        diff?.moves.length
           ? `<button data-act="align" ${busy ? 'disabled' : ''} style="margin-top:6px;padding:6px 10px;border:0;border-radius:5px;background:#3b6ea5;color:#fff;font:inherit;cursor:pointer">${
-              busy ? `Bezig… ${busy}` : `WMS bijwerken naar de hal (${count(fixable, 'pallet', 'pallets')})`
+              busy ? `Bezig… ${busy}` : `WMS bijwerken naar de hal (${count(diff.moves.length, 'pallet', 'pallets')})`
             }</button>`
           : ''
       }
       <button data-act="check" ${checking || busy ? 'disabled' : ''} style="margin-top:6px;padding:6px 10px;border:0;border-radius:5px;background:#444;color:#fff;font:inherit;cursor:pointer">Opnieuw vergelijken</button>
-      ${manual ? '<div style="margin-top:6px;color:#9aa0a6">Een pallet die maar aan één kant bestaat, of met een ander artikel, kan de game niet rechtzetten: dat moet in de WMS-app. Of zet de hal gelijk met de WMS (Hal resetten).</div>' : ''}
+      ${manual ? '<div style="margin-top:6px;color:#9aa0a6">Een ander aantal, of een pallet die maar aan één kant bestaat, kan de game niet rechtzetten: dat moet in de WMS-app.</div>' : ''}
       ${note ? `<div style="margin-top:6px">${escapeHtml(note)}</div>` : ''}
       ${error ? `<div style="margin-top:6px;color:#ff8a80">${escapeHtml(error)}</div>` : ''}
       <div style="margin-top:6px;color:#9aa0a6">${time ? `Vergeleken om ${time}. ` : ''}Pallets die onderweg zijn (dock, wagen, robot, vorken) tellen niet mee.</div>`;

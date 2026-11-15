@@ -13,6 +13,7 @@ import { createWarehouseView } from './warehouseView';
 import { createWmsGateway } from './wmsGateway';
 import { compareLocations } from './wmsLocations';
 import { wmsSync } from './wmsSync';
+import { mountWmsImages } from './wmsImages';
 import { mountWmsPanel } from './wmsPanel';
 import { compareStock, mountWmsReconcile } from './wmsReconcile';
 
@@ -50,6 +51,8 @@ const MASTER_MS = 30000;
  * van een medespeler of van de broker komt, en wie de host is.
  */
 const ALIGN_AFTER_MS = 15000;
+/** Elke zoveelste stand uit de WMS kijkt de hal of de WMS zelf iets heeft verzet of gepickt (dan volgt de hal). */
+const FOLLOW_EVERY = 4;
 
 /** De laatste stand uit de WMS, voor het scherm van de handscanner. */
 export type WmsData = { mode: 'live' | 'mock'; locations: WmsLocation[]; items: WmsItem[]; stock: Item[]; orders: Order[] };
@@ -144,7 +147,8 @@ export function mountWarehouse({
       }
       if (sim.carry?.kind === 'pallet') busy.add(sim.carry.pallet.id);
       // Met de heftruck verplaatst en nog niet gescand: die boekt de speler zelf
-      const racked = sim.pallets().filter((p) => (p.unbooked ? (busy.add(p.id), false) : true));
+      // Zonder sticker: losse voorraad, die kent de WMS niet als pallet en telt hier dus niet mee
+      const racked = sim.pallets().filter((p) => !p.unlabeled && (p.unbooked ? (busy.add(p.id), false) : true));
       return { racked, busy };
   }
   const reconcile = mountWmsReconcile(wmsSection, {
@@ -152,15 +156,42 @@ export function mountWarehouse({
     // Vóór de eerste stand uit de WMS is de hal nog leeg: dan valt er niets te vergelijken
     settled: () => started && sim.pending === 0 && wms.pending === 0 && !mockOutOfStep(),
   });
+  // Artikelen in de WMS een afbeelding geven: de tekening van de robot
+  mountWmsImages(wmsSection);
   let stockDiffs = 0;
   const resetListeners: (() => void)[] = [];
   /** Zet de hal gelijk met de voorraad en open orders in de WMS; geeft het aantal voorraadregels terug. */
   async function resetToWms() {
     const client = wms.client;
-    const [stock, orders, pallets] = await Promise.all([client.getStock(), client.getOpenOrders(), readPallets(client)]);
+    const [stock, orders, pallets, outbound] = await Promise.all([client.getStock(), client.getOpenOrders(), readPallets(client), readOutbound(client)]);
     resetListeners.forEach((l) => l()); // eerst: wat op vorken of los op de vloer staat verdwijnt
-    sim.loadSnapshot(stock, orders, client.mode === 'live' ? 'de WMS' : 'de mock-WMS', pallets);
+    sim.loadSnapshot(stock, orders, client.mode === 'live' ? 'de WMS' : 'de mock-WMS', pallets, outbound.staged);
+    releaseTrucks(client, outbound.trucks);
     return stock.length;
+  }
+  /**
+   * Wat er in de WMS aan de uitgaande kant nog loopt: de orders die gepickt zijn en nog niet in een wagen staan,
+   * en de uitgaande wagens die zijn aangemeld. Lukt het lezen niet, dan begint de hal zonder.
+   */
+  async function readOutbound(client: WmsClient) {
+    try {
+      const [staged, trucks] = await Promise.all([client.getStagedOrders?.() ?? [], client.getOutboundTrucks?.() ?? []]);
+      return { staged, trucks };
+    } catch (err) {
+      hud.addError(`Klaargezette orders ophalen uit de WMS mislukt: ${err instanceof Error ? err.message : err}`);
+      return { staged: [], trucks: [] };
+    }
+  }
+  /**
+   * Na een reset staat er in de hal geen uitgaande wagen meer aan een dock. Een wagen die in de WMS nog is aangemeld
+   * (van vóór de reset) wordt daar afgemeld: hij vertrekt met wat er al in stond en het dock is weer vrij.
+   */
+  function releaseTrucks(client: WmsClient, truckIds: string[]) {
+    const here = sim.trucks.out?.status === 'checkedIn' ? sim.trucks.out.id : null;
+    for (const truckId of truckIds) {
+      if (truckId === here) continue;
+      client.truckCheckOut({ truckId }).catch((err: unknown) => hud.addError(`${truckId} afmelden in de WMS mislukt: ${err instanceof Error ? err.message : err}`));
+    }
   }
   /**
    * De pallets met sticker uit de WMS: de hal neemt hun nummers over, zodat een scan in de WMS op dezelfde pallet
@@ -230,6 +261,7 @@ export function mountWarehouse({
    * de stand van de WMS over. Alleen de host doet dit, één keer per login.
    */
   let alignWith: WmsClient | null = wms.client.mode === 'live' ? wms.client : null;
+  let followTick = 0;
   const hallIds = new Set(LOCATIONS.map((l) => l.id)); // stellingen en in-/uitslaglocaties: wat de hal kan tonen
 
   /** Geeft de stand door aan de scanner en het WMS-paneel, alleen als er iets is veranderd. */
@@ -338,8 +370,11 @@ export function mountWarehouse({
         // voorraad uit de WMS. Komt de bewaarde wereld daarna alsnog binnen, dan vervangt die deze stand.
         // Later in- of uitloggen laat de hal met rust: die is van de game, niet van de WMS.
         started = true;
-        const pallets = await readPallets(client);
-        if (!sim.foreign) sim.loadSnapshot(stock, orders, client.mode === 'live' ? 'de WMS' : 'de mock-WMS', pallets);
+        const [pallets, outbound] = await Promise.all([readPallets(client), readOutbound(client)]);
+        if (!sim.foreign) {
+          sim.loadSnapshot(stock, orders, client.mode === 'live' ? 'de WMS' : 'de mock-WMS', pallets, outbound.staged);
+          releaseTrucks(client, outbound.trucks);
+        }
       } else if (sim.authority && !mockOutOfStep() && sim.pending === 0 && sim.revision === revision) {
         // Alleen de host haalt de open orders binnen (de rest krijgt ze via de gedeelde wereld), en alleen als
         // er sinds het ophalen niets is gebeurd: anders zou een oude stand een verse handeling terugdraaien.
@@ -347,15 +382,26 @@ export function mountWarehouse({
       }
       if (alignWith === client && sim.authority && sim.pending === 0 && wms.pending === 0 && sim.revision === revision && performance.now() > ALIGN_AFTER_MS) {
         alignWith = null;
-        const pallets = await readPallets(client);
+        const [pallets, outbound] = await Promise.all([readPallets(client), readOutbound(client)]);
         if (client !== wms.client) return;
-        // Pallets zonder sticker kent de WMS niet als pallet: die tellen hier niet als verschil
         const { racked, busy } = hallPallets();
-        const diff = compareStock(racked.filter((p) => !p.unlabeled), busy, pallets);
+        const diff = compareStock(racked, busy, pallets);
         const n = diff.moves.length + diff.quantities.length + diff.onlyHall.length + diff.onlyWms.length;
         if (n > 0 && sim.pending === 0 && sim.revision === revision) {
           resetListeners.forEach((l) => l());
-          sim.loadSnapshot(stock, orders, `de WMS: de hal week op ${n} pallet${n === 1 ? '' : 's'} af`, pallets);
+          sim.loadSnapshot(stock, orders, `de WMS: de hal week op ${n} pallet${n === 1 ? '' : 's'} af`, pallets, outbound.staged);
+          releaseTrucks(client, outbound.trucks);
+        }
+      }
+      // De WMS zet soms zelf een stap (zijn eigen simulatie lost, zet weg of pickt): dan volgt de hal. Alleen als er
+      // niets onderweg is naar de WMS en er in de hal niets is gebeurd sinds deze stand werd opgehaald.
+      const quiet = () => client === wms.client && sim.pending === 0 && wms.pending === 0 && sim.revision === revision;
+      if (client.mode === 'live' && started && !alignWith && sim.authority && ++followTick % FOLLOW_EVERY === 0 && quiet()) {
+        try {
+          const pallets = await client.getPallets();
+          if (quiet()) sim.followWms(pallets, stock);
+        } catch {
+          // de volgende keer opnieuw
         }
       }
       if (deliveries && sim.authority) {

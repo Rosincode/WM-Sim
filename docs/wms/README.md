@@ -23,7 +23,8 @@ URL-opbouw in de game staat alleen in `src/integrations/wms/live.ts`.
 | [12](12-robotkoppeling.md) | Robotopdrachten uit de WMS, lossen en tellen | de game gebruikt het; **nog te doen in de WMS**: 8 robots, `pos_y`, limiet |
 | [13](13-wms-gelijk-met-de-hal.md) | Vergelijking hal en WMS van 2026-11-14; de game werkt palletlocaties in de WMS bij | **nog te doen in de WMS**: `pos_y`, 8 robots, ontvangsten zonder pallet, correctie-actie |
 | [14](14-vaste-stelling-per-artikel.md) | Tien paden, elk recht voor zijn dock en met zijn eigen artikel (R1 = `SKU-001`, …) | **nog te doen in de WMS**: 84 locaties, `pos_y`, 4 robots, doellocatie van robotopdrachten, voorraad herverdelen |
-| [15](15-automatisch-gelijk-lopen.md) | Automatisch gelijk lopen: al gedaan is geen fout, de hal neemt bij inloggen de WMS over, order overnemen van een robot | **nog te doen in de WMS**: herverdelen uitvoeren, meer beginvoorraad, bestellen op minimum en vraag (MRP), doorlopen zonder game |
+| [15](15-automatisch-gelijk-lopen.md) | Automatisch gelijk lopen: al gedaan is geen fout, de hal volgt de WMS, order overnemen van een robot | **nog te doen in de WMS**: de WMS en de game doen hetzelfde werk (2.9), herverdelen uitvoeren, meer beginvoorraad, bestellen op minimum en vraag (MRP), doorlopen zonder game |
+| [16](16-artikelafbeeldingen.md) | Afbeeldingen van artikelen uploaden vanuit de game | de tien tekeningen staan in de WMS; **nog te doen in de WMS**: CORS (`X-File-Name`, `localhost:5173`) |
 
 ## Wat er in de WMS nog moet gebeuren
 

@@ -55,14 +55,38 @@ weer op en gaat verder waar de speler ophield.
 Een pallet met een open robotopdracht zet een speler gewoon met de hand weg (`pallet_move`); de WMS
 laat de opdracht dan vervallen. Dat werkte al.
 
-### 1.5 Aantallen rechtzetten
+### 1.5 De hal volgt wat de WMS zelf doet
 
-*WMS bijwerken naar de hal* (WMS-paneel, toets K) zet nu ook een afwijkend aantal recht: `GET
-pallet?pallet_id=<nummer>` en dan `pallet/<id>/_flows/correct_pallet {counted_qty}`. Alleen voor een
-pallet die aan beide kanten bestaat met hetzelfde artikel. Een pallet die maar aan één kant bestaat
-zet de game niet recht; daarvoor is er *Hal resetten*.
+De WMS zet zelf stappen (zie 2.9): hij lost, zet weg en pickt op de hele minuut. Elke 12 seconden legt
+de game `GET stock` en `GET pallet?status=active` naast de stellingen van de hal en neemt over wat de WMS
+heeft:
 
-### 1.6 Meldingen
+- een pallet die in de WMS in een stelling staat en in de hal nog in de wagen, op een inslagbaan of in
+  een andere stelling: die verhuist in de hal;
+- een ander aantal op een stellinglocatie of op een pallet: de hal krijgt het aantal van de WMS;
+- een pallet die in de WMS leeg is: die verdwijnt uit de hal.
+
+Wat onderweg is (op een robot, op vorken, in handen van een speler) blijft met rust. De game stuurt
+daarom geen aantallen meer naar de WMS; `correct_pallet` gebruikt hij niet.
+
+Na een reset (ook 1.3) haalt de game ook op wat er aan de uitgaande kant loopt: orders op `done` en
+`staged` komen terug op een uitslagbaan (die van `staged_dock_id`), en een uitgaande wagen die in de WMS
+nog is aangemeld meldt de game af (`truck_check_out`): hij vertrekt met wat er al in stond.
+
+### 1.6 Eén actie tegelijk
+
+De WMS weigert een actie als dezelfde actie nog loopt (`409`, `flow 'start_robot_task' draait al`). De
+game stuurt daarom alles wat schrijft één voor één en probeert zo'n weigering na een korte pauze opnieuw.
+De voorraadteller logt niet meer elke locatie in `scan_log`: dat waren drie aanroepen per seconde.
+
+### 1.7 Pickrobots nemen alleen orders die kunnen
+
+Een pickrobot neemt de oudste order waarvoor alles in de stellingen ligt. Blijkt er onderweg toch geen
+voorraad te zijn, dan gaat de order terug (in de WMS blijft hij op `picking`) en komt hij na een levering
+opnieuw aan de beurt. Op 2026-11-15 konden 22 van de 30 open orders niet worden gepickt: geen voorraad
+van `SKU-006` t/m `SKU-009`.
+
+### 1.8 Meldingen
 
 Weigert de WMS een stap van een robot, een chauffeur of de telrobot, dan staat dat in het API-log van
 de game en niet meer rood in beeld: zij proberen het zelf opnieuw. Rood in beeld komt alleen nog wat
@@ -192,6 +216,21 @@ Veld `uitvoerder` op `customer_order` (tekst: `PCK-01`, `PCK-02` of de naam van 
 geven als optionele invoer van `start_picking`. Dan toont de WMS-app wie de order heeft, en na het
 overnemen (1.4) de nieuwe naam. Meld terug of dit er komt; de game geeft het dan mee.
 
+### 2.9 De WMS en de game doen hetzelfde werk (belangrijkste punt)
+
+Getest op 2026-11-15 met de game ingelogd en de robots aan. De WMS zet zelf ook stappen, op de hele
+minuut: `unload` (bijvoorbeeld `PAL-SIM-IN-2611151235` van `DOCK-08` naar `DOCK-08-IN` om 12:42:00),
+wegzetten (`PAL-SIM-IN-2611141555` naar `R8A-01-1` om 12:42:00) en picken (`ORD-0493` en `ORD-0495`,
+elke minuut een regel). De game heeft die orders en pallets niet aangeraakt. Gevolg: de robots in de
+hal en de WMS pakken uit dezelfde voorraad en dezelfde orders. Dat gaf de weigeringen `Te weinig
+voorraad van … op …`, `Regel … heeft geen … meer open` en `Opdracht … staat niet op open`.
+
+De game vangt dit nu op (1.1, 1.2 en 1.5), maar de hal toont dan werk dat niemand heeft zien doen:
+pallets en dozen verspringen.
+
+- **Rechtzetten:** zolang de game aanwezig is (2.7) doet de WMS deze stappen niet zelf. Tot de
+  aanwezigheid er is: een instelling om het zelf afhandelen uit te zetten.
+
 ## Terug te melden
 
 - Dat de voorraad is herverdeeld (2.1) en hoe: als robotopdrachten of in de gegevens.
@@ -200,3 +239,4 @@ overnemen (1.4) de nieuwe naam. Meld terug of dit er komt; de game geeft het dan
 - Wat er met de tien aangemelde wagens is gedaan (2.6).
 - De naam van de entiteit en de actie voor de aanwezigheid (2.7), en wat de WMS zelf afhandelt als de
   game afwezig is.
+- Hoe het zelf afhandelen door de WMS uit gaat zolang de game aanwezig is (2.9).

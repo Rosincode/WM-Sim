@@ -118,8 +118,10 @@ export interface RobotWorld {
   refill(): { palletId: string; fromLocationId: string; toLocationId: string }[];
   /** Orders picken zonder speler. Een tekst als antwoord = waarom het niet lukte; null = gelukt. */
   orders: {
-    /** De volgende open order die nog niemand heeft. */
+    /** De volgende open order die nog niemand heeft en waarvoor alles op voorraad ligt. */
     next(skip: Set<string>): string | null;
+    /** De robot komt niet verder met de order (geen voorraad): de pallet gaat terug en de order staat weer open. */
+    giveBack(orderId: string): void;
     status(orderId: string): 'picking' | 'picked' | 'other';
     start(orderId: string): Promise<string | null>;
     /** Waar de robot het volgende artikel van de order pakt; 'done' = alles is gepickt, null = nergens voorraad. */
@@ -276,6 +278,8 @@ export function createRobotFleet(world: RobotWorld) {
   let open: RobotTask[] = [];
   /** Afgehandelde opdrachten: een stand uit de WMS van net daarvoor mag ze niet opnieuw aanbieden. */
   const finished = new Set<string>();
+  /** Opdrachten waarvan het starten nog bij de WMS loopt: die krijgt intussen geen tweede robot. */
+  const starting = new Set<string>();
   /** De robots die de WMS kent: alleen die krijgen een opdracht, want een andere kan hem niet terugmelden. null = allemaal. */
   let known: Set<string> | null = null;
   let obstacles: () => Obstacle[] = () => [];
@@ -525,10 +529,12 @@ export function createRobotFleet(world: RobotWorld) {
     const l = state(r);
     const before = resets;
     l.busy = true;
+    starting.add(task.id);
     const reply = await world.ask({
       type: 'RobotTaskStarted', taskId: task.id, robotId: r.id,
       palletId: task.palletId, fromLocationId: task.fromLocationId, locationId: task.toLocationId,
     });
+    starting.delete(task.id);
     l.busy = false;
     if (!reply.ok) {
       finished.add(task.id);
@@ -595,7 +601,16 @@ export function createRobotFleet(world: RobotWorld) {
     if (status === 'picked') return goStage(r);
     const next = world.orders.pickSpot(o, r, l.avoid);
     if (next === 'done') return void finishOrder(r);
-    if (!next) return stuck(r, `voor ${o} is nergens voorraad te vinden`);
+    if (!next) {
+      // Nergens voorraad: de order gaat terug en de robot pakt een order die wel kan. Zodra er weer voorraad is
+      // (een levering) komt deze order vanzelf opnieuw aan de beurt.
+      world.say(`${r.id}: voor ${o} is nergens voorraad te vinden. De order wacht op een levering.`, 'err');
+      world.orders.giveBack(o);
+      r.order = null;
+      l.avoid.clear();
+      l.why = '';
+      return goHome(r);
+    }
     r.goal = next.locationId;
     r.phase = 'toPick';
     r.path = route(r, next);
@@ -871,6 +886,7 @@ export function createRobotFleet(world: RobotWorld) {
     claiming.clear();
     open = [];
     finished.clear();
+    starting.clear();
     snapshotAt = -1;
   }
 
@@ -900,7 +916,7 @@ export function createRobotFleet(world: RobotWorld) {
      * vallen eruit; wat de WMS niet meer aanbiedt vervalt.
      */
     setTasks(list: RobotTask[]) {
-      open = list.filter((t) => !finished.has(t.id) && !robots.some((r) => r.task?.id === t.id));
+      open = list.filter((t) => !finished.has(t.id) && !starting.has(t.id) && !robots.some((r) => r.task?.id === t.id));
     },
     /** De robots die de WMS kent (zie `known`); null = de game speelt de robotsturing zelf na en elke robot doet mee. */
     setKnown(ids: string[] | null) {

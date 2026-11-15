@@ -103,8 +103,8 @@ De afleiding van de inslaglocatie moet een `dock_id` die al op `-IN` eindigt lat
 
 ### 2.5 Een correctie-actie voor aantallen (nieuw)
 
-**Gebouwd:** de WMS heeft `correct_pallet`; de game gebruikt hem sinds 2026-11-15, zie
-[15](15-automatisch-gelijk-lopen.md) (1.5).
+**Gebouwd:** de WMS heeft `correct_pallet`. De game gebruikt hem niet: sinds 2026-11-15 is de WMS leidend
+en neemt de hal de aantallen van de WMS over, zie [15](15-automatisch-gelijk-lopen.md) (1.5).
 
 De game kan via de API een pallet verplaatsen, maar geen aantal rechtzetten: `stock` en `pallet` zijn
 alleen te lezen. Nu wijkt af:

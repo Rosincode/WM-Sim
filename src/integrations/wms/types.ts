@@ -6,7 +6,7 @@ export type WmsCredentials = { baseUrl: string; apiKey: string };
 export type OrderLine = { sku: string; qty: number };
 
 /** Artikel zoals de WMS het kent (entiteit `item`, docs/wms/01 en 03). */
-export type WmsItem = { sku: string; description: string; category?: string };
+export type WmsItem = { sku: string; description: string; category?: string; /** Heeft het artikel in de WMS een afbeelding? */ hasImage?: boolean };
 
 /** Locatie met wat de WMS er verder van weet; level en blocked ontbreken als de WMS ze niet teruggeeft. */
 export type WmsLocation = Location & { level?: number; blocked?: boolean };
@@ -46,8 +46,20 @@ export interface WmsClient {
   /** Actieve pallets (met sticker). Voorraad zonder pallet staat alleen in getStock. */
   getPallets(): Promise<WmsPallet[]>;
   getOpenOrders(): Promise<WmsOrder[]>;
+  /**
+   * Orders die gepickt zijn en nog niet in een vrachtwagen staan (status done of staged), met de uitslaglocatie
+   * waar de WMS ze heeft klaarstaan. Bij een reset zet de hal ze terug op een uitslagbaan. Ontbreekt bij de mock.
+   */
+  getStagedOrders?(): Promise<(WmsOrder & { dockId?: string })[]>;
+  /** De nummers van de uitgaande vrachtwagens die in de WMS zijn aangemeld. Ontbreekt bij de mock. */
+  getOutboundTrucks?(): Promise<string[]>;
   /** Ontvangst op een docklocatie: de voorraad ligt daar daarna los (zonder pallet). */
   registerGoodsReceived(p: { sku: string; qty: number; dockId: string }): Promise<void>;
+  /**
+   * Geeft een artikel een afbeelding (jpg, png of webp, hooguit 5 MB); een bestaande afbeelding wordt vervangen.
+   * Ontbreekt bij een WMS zonder afbeeldingen (de mock).
+   */
+  uploadItemImage?(p: { sku: string; fileName: string; data: Blob }): Promise<void>;
   /**
    * Zet het aantal op een pallet recht naar wat er in de hal op staat (0 = de pallet is leeg). De WMS boekt het
    * verschil als correctie. Ontbreekt bij een WMS zonder correctie-actie (de mock: die houdt geen pallets bij).

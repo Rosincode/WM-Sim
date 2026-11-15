@@ -875,7 +875,19 @@ export function createWarehouse({
       });
     },
     orders: {
-      next: (skip) => orders.find((o) => o.status === 'open' && !skip.has(o.id))?.id ?? null,
+      // De oudste order eerst, en alleen een order waarvoor alles in de stellingen ligt: anders staat de robot met
+      // een halve order te wachten op een levering en blijven orders liggen die wel kunnen.
+      next: (skip) =>
+        orders
+          .filter((o) => o.status === 'open' && !skip.has(o.id) && openLines(o).every((l) => shelfQty(l.sku) >= l.qty - l.picked))
+          .sort((a, b) => a.id.localeCompare(b.id))[0]?.id ?? null,
+      giveBack(id) {
+        const o = order(id);
+        if (!o || o.status !== 'picking') return;
+        o.status = 'open'; // in de WMS blijft hij op picking: een robot gaat later verder waar deze ophield
+        returnEmpty();
+        touch();
+      },
       status(id) {
         const s = order(id)?.status;
         return s === 'picking' || s === 'picked' ? s : 'other';
@@ -975,7 +987,8 @@ export function createWarehouse({
             if (moved.has(p.id) && (await bookMove(p.id)).ok) seen.booked++;
           }
         }
-        scanned('location', l.id, true, l.id);
+        // Geen scan per locatie naar het scanlog: de voorraadteller komt langs 420 locaties, dat zijn er drie per
+        // seconde en daarmee loopt de WMS tegen zijn limiet van aanroepen per minuut aan.
       }
       return seen;
     },
@@ -1734,6 +1747,112 @@ export function createWarehouse({
   }
 
   /**
+   * De WMS is leidend en zet soms zelf een stap: zijn eigen simulatie lost een wagen, zet een pallet weg of pickt een
+   * order, zonder dat de hal daar iets van hoort. De hal volgt dan wat de WMS heeft:
+   * - een pallet die de WMS in een stelling heeft staan en die in de hal nog in de wagen, op een inslagbaan of in een
+   *   andere stelling staat, verhuist naar de locatie van de WMS;
+   * - ligt er op een stellinglocatie in de WMS een ander aantal dan in de hal, dan krijgt de hal het aantal van de WMS;
+   * - staat hetzelfde aantal anders over de pallets verdeeld (de WMS pickte van een andere pallet dan de hal), dan
+   *   krijgen de pallets in de hal het aantal van de WMS.
+   * Wat onderweg is (op een robot, op de vorken, in handen, verplaatst en nog niet geboekt) blijft met rust.
+   * Alleen aanroepen als er geen vraag bij de WMS loopt en de stand van de WMS van ná de laatste handeling is.
+   * @returns het aantal aanpassingen
+   */
+  function followWms(wmsPallets: (Pallet & { locationId: string })[], items: Item[]): number {
+    const busyPallets = new Set<string>([...moved.keys(), ...transit.keys()]);
+    /** Locaties waar net iets weg is of bij komt: daar klopt het aantal pas als dat werk klaar is. */
+    const busyLocations = new Set<string>();
+    for (const m of moved.values()) {
+      busyLocations.add(m.locationId);
+      if (m.at) busyLocations.add(m.at);
+    }
+    for (const r of robots.robots) {
+      if (r.load) busyPallets.add(r.load.id);
+      if (r.loadFrom) busyLocations.add(r.loadFrom);
+      if (!r.task) continue;
+      busyPallets.add(r.task.palletId);
+      busyLocations.add(r.task.fromLocationId);
+      busyLocations.add(r.task.toLocationId);
+    }
+    if (carry?.kind === 'pallet') busyPallets.add(carry.pallet.id);
+    for (const d of drivers.drivers) if (d.load) busyPallets.add(d.load.id); // op de pompwagen van een chauffeur
+    let changed = 0;
+
+    for (const w of wmsPallets) {
+      if (busyPallets.has(w.id) || w.qty <= 0 || !isShelf(w.locationId)) continue;
+      const here = racked.get(w.id);
+      if (here?.locationId === w.locationId || busyLocations.has(w.locationId)) continue;
+      const slot = freeSlot(w.locationId);
+      if (slot === undefined) continue; // geen plek in de hal: de vergelijking in het WMS-paneel laat het zien
+      let pallet: Pallet | undefined;
+      let from = '';
+      if (here) {
+        if (busyLocations.has(here.locationId)) continue;
+        racked.delete(w.id);
+        add(here.locationId, here.sku, -here.qty);
+        pallet = { id: here.id, sku: here.sku, qty: here.qty };
+        from = here.locationId;
+      } else {
+        const lane = lanePallet(w.id);
+        if (lane) {
+          const row = laneIn[lane.dock.index];
+          row[row.indexOf(lane.pallet)] = null;
+          pallet = lane.pallet;
+          from = lane.dock.inId;
+        } else {
+          for (const t of inbound()) {
+            const i = t.cargo.findIndex((p) => p.id === w.id);
+            if (i < 0) continue;
+            pallet = t.cargo.splice(i, 1)[0];
+            from = `de wagen aan ${t.dockId}`;
+            break;
+          }
+        }
+      }
+      if (!pallet) {
+        // Nergens in de hal: de pallet staat er weer, met wat de WMS erop heeft. Het aantal op de locatie volgt hieronder.
+        racked.set(w.id, { id: w.id, sku: w.sku, qty: w.qty, locationId: w.locationId, slot });
+        changed++;
+        continue;
+      }
+      add(w.locationId, pallet.sku, pallet.qty);
+      racked.set(w.id, { id: w.id, sku: pallet.sku, qty: pallet.qty, locationId: w.locationId, slot });
+      note(`De WMS heeft ${w.id} zelf van ${from} naar ${w.locationId} gezet: de hal volgt.`);
+      changed++;
+    }
+
+    const inWms = new Map(items.map((i) => [key(i.locationId, i.sku), i.qty]));
+    for (const k of new Set([...stock.keys(), ...inWms.keys()])) {
+      const [loc, sku] = k.split('|');
+      if (!isShelf(loc) || busyLocations.has(loc)) continue;
+      const diff = (inWms.get(k) ?? 0) - qtyAt(loc, sku);
+      if (diff === 0) continue;
+      add(loc, sku, diff);
+      note(
+        diff < 0
+          ? `De WMS heeft zelf ${-diff}× ${sku} van ${loc} gehaald: de hal volgt.`
+          : `In de WMS ligt op ${loc} ${diff}× ${sku} meer dan in de hal: de hal volgt.`,
+      );
+      changed++;
+    }
+    // De pallets zelf: het aantal dat de WMS erop heeft. Een pallet met sticker die de WMS niet (meer) als actieve
+    // pallet kent is daar leeg: hij gaat weg, en palletize() verdeelt wat er op de locatie ligt over de rest.
+    if (wmsPallets.length) {
+      const active = new Map(wmsPallets.map((w) => [w.id, w]));
+      for (const p of [...racked.values()]) {
+        if (p.unlabeled || busyPallets.has(p.id) || busyLocations.has(p.locationId)) continue;
+        const w = active.get(p.id);
+        if (!w) racked.delete(p.id);
+        else if (w.locationId === p.locationId && w.sku === p.sku && w.qty !== p.qty) p.qty = w.qty;
+        else continue;
+        changed++;
+      }
+    }
+    if (changed) touch();
+    return changed;
+  }
+
+  /**
    * Na het laden van een bewaarde wereld draagt niemand nog iets: wat onderweg was toen de vorige spelers
    * weggingen gaat terug naar waar het vandaan kwam, zodat er niets zoekraakt.
    */
@@ -1764,10 +1883,18 @@ export function createWarehouse({
   /**
    * Allereerste start of een bewuste reset: de hele hal gelijkzetten met de WMS, ook wat er bij de docks staat.
    * Alles wat fysiek afweek (verplaatste pallets, lopende picks, wat spelers dragen) vervalt.
+   * @param staged Orders die in de WMS gepickt zijn en nog niet in een wagen staan: die komen terug op een
+   *   uitslagbaan (die van `dockId` als daar plek is), zodat een chauffeur ze laadt.
    * @param wmsPallets De pallets met sticker zoals de WMS ze kent. Houdt de WMS pallets bij, dan heeft de rest
    *   van de voorraad geen sticker (de speler plakt die); zonder pallets uit de WMS stickert de hal alles zelf.
    */
-  function loadSnapshot(items: Item[], wmsOrders: WmsOrder[], source: string, wmsPallets: (Pallet & { locationId: string })[] = []) {
+  function loadSnapshot(
+    items: Item[],
+    wmsOrders: WmsOrder[],
+    source: string,
+    wmsPallets: (Pallet & { locationId: string })[] = [],
+    staged: (WmsOrder & { dockId?: string })[] = [],
+  ) {
     laneIn.forEach((lane) => lane.fill(null));
     laneOut.forEach((lane) => lane.fill(null));
     moved.clear();
@@ -1803,6 +1930,13 @@ export function createWarehouse({
     seeding = restoring = false;
     const open = wmsOrders.filter(isOpen);
     orders.push(...open.map(fromWms));
+    for (const s of staged) {
+      const own = laneOut[DOCKS.findIndex((d) => d.outId === s.dockId)];
+      const lane = own?.includes(null) ? own : laneOut[outDock]?.includes(null) ? laneOut[outDock] : laneOut.find((l) => l.includes(null));
+      if (!lane || order(s.id)) continue;
+      lane[lane.indexOf(null)] = s.id;
+      orders.push({ ...fromWms(s), lines: s.lines.map((l) => ({ sku: l.sku, qty: l.qty, picked: l.qty })), status: 'staged', wmsStatus: 'done' });
+    }
     touch();
     say(`Voorraad (${items.length} regels) en ${plural(open.length, 'open order')} geladen uit ${source}.`, 'ok');
   }
@@ -1815,6 +1949,7 @@ export function createWarehouse({
     scan,
     loadSnapshot,
     syncOrders,
+    followWms,
     syncDeliveries,
     /** De inkomende vrachtwagens die de WMS heeft aangemeld. */
     get deliveries(): readonly Truck[] { return deliveries; },

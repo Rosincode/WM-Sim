@@ -20,6 +20,8 @@ import {
 // Al gedaan is geen fout: weigert de WMS een stap omdat hij al is verwerkt (de order staat al op de status waar de
 // stap heen leidt, de regel is al gepickt, de vrachtwagen is al afgemeld), dan telt de stap als gelukt. Zo loopt
 // de hal door na een herstart, een tweede sessie of een stap die de WMS zelf al heeft gezet.
+//   PUT  {base}/item/{id}/_files/afbeelding     -> afbeelding van een artikel: de ruwe inhoud als body
+//                                                  (application/octet-stream), de naam in de header X-File-Name
 //   POST {base}/location/_batch                 -> locaties aanmaken of bijwerken: { operations: [{ op: 'upsert',
 //                                                  match: { location_id }, values: {...} }] }, hooguit 100 per call,
 //                                                  alles of niets. Antwoord { results: [{ outcome }] }.
@@ -29,14 +31,14 @@ import {
 // Wijkt de WMS af, pas dan alleen deze file aan.
 
 type Row = { id: string };
-type ItemRow = Row & { sku: string; description?: string | null; category?: string | null };
+type ItemRow = Row & { sku: string; description?: string | null; category?: string | null; afbeelding?: object | null };
 type LocationRow = Row & {
   location_id: string; location_type: Location['type']; pos_x: number; pos_y: number;
   level?: number | null; blocked?: boolean | number | string | null;
 };
 type StockRow = Row & { sku: string; location_id: string; qty: number };
 type PalletRow = Row & { pallet_id: string; sku: string; qty: number; location_id: string; status: 'active' | 'empty' };
-type OrderRow = Row & { order_id: string; status: string };
+type OrderRow = Row & { order_id: string; status: string; staged_dock_id?: string | null };
 type OrderLineRow = Row & { order_id: string; sku: string; qty: number; picked_qty?: number | null };
 type TruckVisitRow = Row & {
   truck_id: string; status?: string | null; direction?: string | null; dock_id?: string | null; created_at?: string | null;
@@ -54,6 +56,8 @@ type RobotTaskRow = Row & {
 type Refs = { keyById: Map<string, string>; idByKey: Map<string, string> };
 
 const MAX_RETRIES = 3; // bij 429
+const MAX_BUSY_RETRIES = 4; // bij 409 'flow ... draait al'
+const BUSY_WAIT_MS = 400;
 const MAX_WAIT_S = 30;
 const PAGE_SIZE = 200; // het maximum dat de WMS per call teruggeeft
 const MAX_PAGES = 50;
@@ -66,7 +70,29 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
   const base = c.baseUrl.trim().replace(/\/+$/, '');
   const auth = `Bearer ${(c.apiKey ?? '').trim()}`;
 
-  async function request<T>(path: string, init: RequestInit = {}, attempt = 0): Promise<T> {
+  // De WMS draait een actie (flow) maar één keer tegelijk: start de game dezelfde actie twee keer vlak na elkaar
+  // (twee robots beginnen in dezelfde tel), dan weigert hij de tweede met 409 "flow '...' draait al". Alles wat
+  // schrijft gaat daarom één voor één naar de WMS, en zo'n weigering proberen we na een korte pauze opnieuw.
+  let writes: Promise<unknown> = Promise.resolve();
+  function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    // Het scanlog is alleen een logboek: dat wacht niet in de rij en houdt geen boeking op.
+    if (!init.method || init.method === 'GET' || path === 'scan_log') return send<T>(path, init);
+    const run = async () => {
+      for (let busy = 0; ; busy++) {
+        try {
+          return await send<T>(path, init);
+        } catch (err) {
+          if (busy >= MAX_BUSY_RETRIES || !(err instanceof WmsError && err.status === 409 && /draait al/i.test(err.message))) throw err;
+          await new Promise((r) => setTimeout(r, BUSY_WAIT_MS * (busy + 1)));
+        }
+      }
+    };
+    const result = writes.then(run, run);
+    writes = result.catch(() => undefined);
+    return result;
+  }
+
+  async function send<T>(path: string, init: RequestInit = {}, attempt = 0): Promise<T> {
     let res: Response;
     try {
       res = await fetch(`${base}/${path}`, {
@@ -75,6 +101,7 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
           Authorization: auth,
           Accept: 'application/json',
           ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+          ...(init.headers as Record<string, string> | undefined),
         },
       });
     } catch {
@@ -86,7 +113,7 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
       const seconds = Number(res.headers.get('Retry-After'));
       const wait = Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, MAX_WAIT_S) : 1;
       await new Promise((r) => setTimeout(r, wait * 1000));
-      return request<T>(path, init, attempt + 1);
+      return send<T>(path, init, attempt + 1);
     }
     const text = await res.text();
     if (res.ok) return (text ? JSON.parse(text) : undefined) as T;
@@ -329,7 +356,7 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
     async getItems() {
       const rows = await list<ItemRow>('item');
       items = Promise.resolve(toRefs(rows.map((r) => [r.id, r.sku])));
-      return rows.map((r): WmsItem => ({ sku: r.sku, description: r.description ?? '', category: r.category ?? undefined }));
+      return rows.map((r): WmsItem => ({ sku: r.sku, description: r.description ?? '', category: r.category ?? undefined, hasImage: !!r.afbeelding }));
     },
 
     async syncLocations(list, onProgress) {
@@ -400,9 +427,45 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
         });
     },
 
+    async getStagedOrders() {
+      const [done, staged, lines, item, loc] = await Promise.all([
+        list<OrderRow>('customer_order', { status: 'done' }),
+        list<OrderRow>('customer_order', { status: 'staged' }),
+        list<OrderLineRow>('order_line'),
+        loadItems(),
+        loadLocations(),
+      ]);
+      return [...done, ...staged]
+        .filter((o) => o.status === 'done' || o.status === 'staged')
+        .map((o) => {
+          orderIds.set(o.order_id, o.id);
+          return {
+            id: o.order_id,
+            status: 'done' as const,
+            dockId: (o.staged_dock_id && loc.keyById.get(o.staged_dock_id)) || undefined,
+            lines: lines
+              .filter((l) => l.order_id === o.id || l.order_id === o.order_id)
+              .map((l) => ({ sku: item.keyById.get(l.sku) ?? l.sku, qty: Number(l.qty), picked: Number(l.picked_qty ?? 0) })),
+          };
+        });
+    },
+
+    async getOutboundTrucks() {
+      const visits = await list<TruckVisitRow>('truck_visit', { status: 'checked_in' });
+      return visits.filter((v) => v.status === 'checked_in' && v.direction === 'out').map((v) => v.truck_id);
+    },
+
     async registerGoodsReceived({ sku, qty, dockId }) {
       const [skuRef, dockRef] = await Promise.all([itemId(sku), locationId(dockId)]);
       await post('goods_receipt', { sku: skuRef, qty, dock_id: dockRef });
+    },
+
+    async uploadItemImage({ sku, fileName, data }) {
+      await request(`item/${await itemId(sku)}/_files/afbeelding`, {
+        method: 'PUT',
+        body: data,
+        headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(fileName) },
+      });
     },
 
     async correctPallet({ palletId, qty }) {
