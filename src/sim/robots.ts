@@ -687,6 +687,23 @@ export function createRobotFleet(world: RobotWorld) {
     goHome(r);
   }
 
+  /**
+   * Een speler neemt de order van een pickrobot over: de robot geeft de pallet van de order af en rijdt naar zijn
+   * laadstation. Geeft het ordernummer terug, of null als de robot geen order heeft of net op de WMS wacht.
+   */
+  function release(robotId: string): string | null {
+    const r = robots.find((x) => x.id === robotId);
+    if (!r || r.kind !== 'pick' || !r.order || state(r).busy) return null;
+    const l = state(r);
+    const order = r.order;
+    r.order = null;
+    l.why = '';
+    l.avoid.clear();
+    l.timer = 6; // niet meteen de volgende order pakken: eerst weg bij de speler
+    goHome(r);
+    return order;
+  }
+
   // ========== Telrobot: de palletstickers in alle paden scannen (alleen de host) ==========
 
   /** De stops van een telronde: per pad elke sectie, van de robotbaan af de hal in. */
@@ -904,6 +921,7 @@ export function createRobotFleet(world: RobotWorld) {
     inbound: world.inbound,
     space: world.space,
     refill: world.refill,
+    release,
     statusText,
     /** Staat de robot stil omdat er iets of iemand voor hem staat? */
     blocked: (r: Robot) => state(r).wait === 'obstakel',

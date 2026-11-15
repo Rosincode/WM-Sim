@@ -1,6 +1,7 @@
-import type { Item, Location, Order } from '../../shared/contract';
+import type { Item, Location } from '../../shared/contract';
 import {
-  WmsError, type WmsClient, type WmsCredentials, type WmsDelivery, type WmsItem, type WmsLocation, type WmsPallet, type WmsRobotTask,
+  WmsError, type WmsClient, type WmsCredentials, type WmsDelivery, type WmsItem, type WmsLocation, type WmsOrder, type WmsPallet,
+  type WmsRobotTask,
 } from './types';
 
 // URL-opbouw van de WMS-API (basis: https://<host>/t/wm_sim/api):
@@ -14,8 +15,11 @@ import {
 //                                                  zonder invoer: {}. Gelukt = 200, geweigerd = 409 met { error }.
 // Acties: customer_order (start_picking, confirm_pick, stage_order, load_order), order_line (confirm_pick_line),
 // stock (putaway, register_pallet), truck_visit (truck_check_out), goods_receipt (unload, count),
-// robot_task (start_robot_task, complete_robot_task, fail_robot_task). De volledige beschrijving staat in
-// GET {base}/_openapi. Artikelen en voorraad leest de game alleen.
+// robot_task (start_robot_task, complete_robot_task, fail_robot_task), pallet (correct_pallet). De volledige
+// beschrijving staat in GET {base}/_openapi.
+// Al gedaan is geen fout: weigert de WMS een stap omdat hij al is verwerkt (de order staat al op de status waar de
+// stap heen leidt, de regel is al gepickt, de vrachtwagen is al afgemeld), dan telt de stap als gelukt. Zo loopt
+// de hal door na een herstart, een tweede sessie of een stap die de WMS zelf al heeft gezet.
 //   POST {base}/location/_batch                 -> locaties aanmaken of bijwerken: { operations: [{ op: 'upsert',
 //                                                  match: { location_id }, values: {...} }] }, hooguit 100 per call,
 //                                                  alles of niets. Antwoord { results: [{ outcome }] }.
@@ -32,7 +36,7 @@ type LocationRow = Row & {
 };
 type StockRow = Row & { sku: string; location_id: string; qty: number };
 type PalletRow = Row & { pallet_id: string; sku: string; qty: number; location_id: string; status: 'active' | 'empty' };
-type OrderRow = Row & { order_id: string; status: Order['status'] };
+type OrderRow = Row & { order_id: string; status: string };
 type OrderLineRow = Row & { order_id: string; sku: string; qty: number; picked_qty?: number | null };
 type TruckVisitRow = Row & {
   truck_id: string; status?: string | null; direction?: string | null; dock_id?: string | null; created_at?: string | null;
@@ -264,6 +268,21 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
     return id;
   }
 
+  /**
+   * Een stap in de order (starten, afmelden, klaarzetten, laden). Weigert de WMS en staat de order al op een van
+   * de statussen in `reached`, dan was de stap al gezet: geen fout.
+   */
+  async function orderStep(orderId: string, reached: string[], run: (orderRef: string) => Promise<unknown>) {
+    const orderRef = await orderUuid(orderId);
+    try {
+      await run(orderRef);
+    } catch (err) {
+      if (!(err instanceof WmsError) || err.status !== 409) throw err;
+      const row = (await list<OrderRow>('customer_order', { order_id: orderId })).find((r) => r.order_id === orderId);
+      if (!row || !reached.includes(row.status)) throw err;
+    }
+  }
+
   /** Het bezoek van een aangemelde vrachtwagen; na een herstart van de game zoeken we het op. */
   async function visitUuid(truckId: string): Promise<string> {
     let id = visitIds.get(truckId);
@@ -368,14 +387,15 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
       ]);
       return open
         .filter((o) => o.status === 'open' || o.status === 'picking')
-        .map((o) => {
+        .map((o): WmsOrder => {
           orderIds.set(o.order_id, o.id);
           return {
             id: o.order_id,
-            status: o.status,
+            status: o.status as WmsOrder['status'],
             lines: lines
               .filter((l) => l.order_id === o.id || l.order_id === o.order_id)
-              .map((l) => ({ sku: item.keyById.get(l.sku) ?? l.sku, qty: Number(l.qty) })),
+              // picked: wat de WMS al heeft geboekt. Zo pickt de hal na een herstart alleen wat nog open staat.
+              .map((l) => ({ sku: item.keyById.get(l.sku) ?? l.sku, qty: Number(l.qty), picked: Number(l.picked_qty ?? 0) })),
           };
         });
     },
@@ -383,6 +403,12 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
     async registerGoodsReceived({ sku, qty, dockId }) {
       const [skuRef, dockRef] = await Promise.all([itemId(sku), locationId(dockId)]);
       await post('goods_receipt', { sku: skuRef, qty, dock_id: dockRef });
+    },
+
+    async correctPallet({ palletId, qty }) {
+      const row = (await list<PalletRow>('pallet', { pallet_id: palletId })).find((r) => r.pallet_id === palletId);
+      if (!row) throw new WmsError(`Pallet ${palletId} staat niet in de WMS.`, 409);
+      await flow('pallet', row.id, 'correct_pallet', { counted_qty: qty });
     },
 
     async registerPallet({ palletId, sku, qty, locationId: at }) {
@@ -422,18 +448,18 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
     },
 
     async startPicking(orderId) {
-      await flow('customer_order', await orderUuid(orderId), 'start_picking');
+      await orderStep(orderId, ['picking'], (ref) => flow('customer_order', ref, 'start_picking'));
     },
 
     async confirmPickLine({ orderId, sku, qty, locationId: at }) {
       const [orderRef, skuRef, locRef] = await Promise.all([orderUuid(orderId), itemId(sku), locationId(at)]);
-      const lines = (await list<OrderLineRow>('order_line', { order_id: orderRef }))
-        .filter((l) => l.order_id === orderRef && l.sku === skuRef)
-        .map((l) => ({ id: l.id, open: Number(l.qty) - Number(l.picked_qty ?? 0) }))
-        .filter((l) => l.open > 0);
-      if (lines.reduce((n, l) => n + l.open, 0) < qty) throw new WmsError(`Order ${orderId} heeft geen ${qty}× ${sku} meer open.`, 409);
+      const all = (await list<OrderLineRow>('order_line', { order_id: orderRef })).filter((l) => l.order_id === orderRef && l.sku === skuRef);
+      if (!all.length) throw new WmsError(`Order ${orderId} heeft geen regel met ${sku}.`, 409);
+      const lines = all.map((l) => ({ id: l.id, open: Number(l.qty) - Number(l.picked_qty ?? 0) })).filter((l) => l.open > 0);
+      // Heeft de WMS (een deel van) deze pick al geboekt, dan boeken we alleen wat daar nog open staat: een regel
+      // gaat niet verder dan zijn aantal. Staat er niets meer open, dan was de pick al verwerkt.
       // Staat het artikel op meer regels, dan gaat de pick over die regels heen.
-      let rest = qty;
+      let rest = Math.min(qty, lines.reduce((n, l) => n + l.open, 0));
       for (const l of lines) {
         if (rest <= 0) break;
         const take = Math.min(rest, l.open);
@@ -443,17 +469,17 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
     },
 
     async confirmPick(orderId) {
-      await flow('customer_order', await orderUuid(orderId), 'confirm_pick');
+      await orderStep(orderId, ['done', 'staged', 'loaded', 'shipped'], (ref) => flow('customer_order', ref, 'confirm_pick'));
     },
 
     async stageOrder({ orderId, dockId }) {
-      const [orderRef, dockRef] = await Promise.all([orderUuid(orderId), locationId(dockId)]);
-      await flow('customer_order', orderRef, 'stage_order', { dock_id: dockRef });
+      const dockRef = await locationId(dockId);
+      await orderStep(orderId, ['staged', 'loaded', 'shipped'], (ref) => flow('customer_order', ref, 'stage_order', { dock_id: dockRef }));
     },
 
     async loadOrder({ orderId, truckId }) {
-      const [orderRef, visitRef] = await Promise.all([orderUuid(orderId), visitUuid(truckId)]);
-      await flow('customer_order', orderRef, 'load_order', { truck_visit_id: visitRef });
+      const visitRef = await visitUuid(truckId);
+      await orderStep(orderId, ['loaded', 'shipped'], (ref) => flow('customer_order', ref, 'load_order', { truck_visit_id: visitRef }));
     },
 
     async truckCheckIn({ truckId, direction, dockId }) {
@@ -470,7 +496,12 @@ export function createLiveClient(c: WmsCredentials): WmsClient {
     },
 
     async truckCheckOut({ truckId }) {
-      await flow('truck_visit', await visitUuid(truckId), 'truck_check_out');
+      try {
+        await flow('truck_visit', await visitUuid(truckId), 'truck_check_out');
+      } catch (err) {
+        // Al afgemeld in de WMS (door de WMS zelf of in een eerdere sessie): de wagen mag gewoon weg.
+        if (!(err instanceof WmsError && /is niet aangemeld/i.test(err.message))) throw err;
+      }
       visitIds.delete(truckId);
     },
 

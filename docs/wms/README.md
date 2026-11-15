@@ -23,6 +23,7 @@ URL-opbouw in de game staat alleen in `src/integrations/wms/live.ts`.
 | [12](12-robotkoppeling.md) | Robotopdrachten uit de WMS, lossen en tellen | de game gebruikt het; **nog te doen in de WMS**: 8 robots, `pos_y`, limiet |
 | [13](13-wms-gelijk-met-de-hal.md) | Vergelijking hal en WMS van 2026-11-14; de game werkt palletlocaties in de WMS bij | **nog te doen in de WMS**: `pos_y`, 8 robots, ontvangsten zonder pallet, correctie-actie |
 | [14](14-vaste-stelling-per-artikel.md) | Tien paden, elk recht voor zijn dock en met zijn eigen artikel (R1 = `SKU-001`, …) | **nog te doen in de WMS**: 84 locaties, `pos_y`, 4 robots, doellocatie van robotopdrachten, voorraad herverdelen |
+| [15](15-automatisch-gelijk-lopen.md) | Automatisch gelijk lopen: al gedaan is geen fout, de hal neemt bij inloggen de WMS over, order overnemen van een robot | **nog te doen in de WMS**: herverdelen uitvoeren, meer beginvoorraad, bestellen op minimum en vraag (MRP), doorlopen zonder game |
 
 ## Wat er in de WMS nog moet gebeuren
 
@@ -35,3 +36,6 @@ Gecontroleerd met de API-client van de game op 2026-11-14; de details staan in [
    wegzetten kunnen daardoor niet in de WMS worden geboekt.
 4. **Correctie-actie voor aantallen** (13, 2.5): nieuw voorstel.
 5. **Insluiten in een iframe** (06) werkt nog niet.
+6. **Automatisch gelijk lopen** (15, stand 2026-11-15): voorraad herverdelen, meer beginvoorraad, volle
+   pallets in leveringen, bestellen op minimumvoorraad en vraag, en doorlopen als de game niet is ingelogd.
+   De punten 2 en 4 hierboven zijn inmiddels gebouwd (`correct_pallet`, schrijfrechten); de game gebruikt ze.

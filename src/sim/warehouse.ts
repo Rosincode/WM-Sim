@@ -78,7 +78,9 @@ export type SimOrder = {
   wmsStatus: Order['status'];
   picks: Pick[];
 };
-export type Carry = { kind: 'pallet'; pallet: Pallet; fromId: string } | { kind: 'order'; orderId: string } | null;
+/** Open order zoals de WMS hem geeft; `picked` = wat de WMS van de regel al als gepickt heeft geboekt. */
+export type WmsOrder = Omit<Order, 'lines'> & { lines: { sku: string; qty: number; picked?: number }[] };
+export type Carry ={ kind: 'pallet'; pallet: Pallet; fromId: string } | { kind: 'order'; orderId: string } | null;
 export type Message = { text: string; kind: 'info' | 'ok' | 'err'; at: number };
 export type Interaction = { label: string; point: Point; enabled: boolean; run?: () => void };
 /** point ontbreekt als de WMS (app of scanner) de speler moet vertellen waar hij heen moet. */
@@ -185,6 +187,22 @@ export function createWarehouse({
     messages.push({ text, kind, at: clock });
     if (messages.length > 6) messages.shift();
   }
+  /**
+   * Meldingen van de robots, de chauffeurs en de telrobot dat iets niet lukte. De speler hoeft er niets mee: ze
+   * proberen het zelf opnieuw. Ze komen daarom niet in beeld maar in het logboek (takeNotes). Dezelfde melding
+   * komt hooguit eens per minuut.
+   */
+  const notes: string[] = [];
+  const noted = new Map<string, number>();
+  function note(text: string) {
+    if (clock - (noted.get(text) ?? -Infinity) < 60) return;
+    if (noted.size > 200) noted.clear();
+    noted.set(text, clock);
+    notes.push(text);
+    if (notes.length > 40) notes.shift();
+  }
+  /** Wat het automatische werk meldt: gewoon nieuws in beeld, wat misging naar het logboek. */
+  const autoSay = (text: string, kind: Message['kind'] = 'info') => (kind === 'err' ? note(text) : say(text, kind));
   const done = (text: string): ScanResult => (say(text, 'ok'), { ok: true, text });
   const refused = (text: string): ScanResult => (say(text, 'err'), { ok: false, text });
   const wmsRefused = (r: WmsReply & { ok: false }, what = '') => refused(`WMS weigert${what}: ${r.error}`);
@@ -353,26 +371,33 @@ export function createWarehouse({
 
   // ========== Handelingen: eerst de WMS, dan de fysieke wereld ==========
 
-  async function checkIn(truckId: string): Promise<ScanResult> {
+  /** Een weigering bij werk van een chauffeur (auto): naar het logboek, niet in beeld. */
+  const refusedBy = (auto: boolean) => (auto ? (text: string): ScanResult => (note(text), { ok: false, text }) : refused);
+
+  /** @param auto de chauffeur doet het zelf */
+  async function checkIn(truckId: string, auto = false): Promise<ScanResult> {
+    const no = refusedBy(auto);
     const t = truck(truckId);
-    if (!t || t.status !== 'waiting') return refused(`${truckId} staat niet te wachten.`);
+    if (!t || t.status !== 'waiting') return no(`${truckId} staat niet te wachten.`);
     const r = await ask({ type: 'TruckCheckedIn', truckId, direction: t.direction, dockId: t.dockId });
     scanned('truck', truckId, r.ok, t.dockId);
-    if (!r.ok) return wmsRefused(r);
+    if (!r.ok) return no(`WMS weigert het aanmelden van ${truckId}: ${r.error}`);
     const now = truck(truckId);
     if (now) now.status = 'checkedIn';
     touch();
     return done(`${truckId} aangemeld aan ${t.dockId}.`);
   }
 
-  async function checkOut(truckId: string): Promise<ScanResult> {
+  /** @param auto de chauffeur doet het zelf */
+  async function checkOut(truckId: string, auto = false): Promise<ScanResult> {
+    const no = refusedBy(auto);
     const t = truck(truckId);
-    if (!t || t.status !== 'checkedIn') return refused(`${truckId} is niet aangemeld.`);
+    if (!t || t.status !== 'checkedIn') return no(`${truckId} is niet aangemeld.`);
     const r = await ask({ type: 'TruckCheckedOut', truckId, direction: t.direction, dockId: t.dockId, orderIds: [...t.loaded] });
     scanned('truck', truckId, r.ok, t.dockId);
-    if (!r.ok) return wmsRefused(r);
+    if (!r.ok) return no(`WMS weigert het afmelden van ${truckId}: ${r.error}`);
     const now = truck(truckId);
-    if (!now) return refused(`${truckId} is al vertrokken.`);
+    if (!now) return no(`${truckId} is al vertrokken.`);
     now.status = 'departing';
     for (const id of now.loaded) {
       const o = order(id);
@@ -507,11 +532,44 @@ export function createWarehouse({
     return done(`Lege pallet voor ${now.id}: ${linesText(now.lines)}. Zoek de locaties op in de WMS-app.`);
   }
 
+  /** Zo dichtbij (m) moet je bij een pickrobot staan om zijn order over te nemen. */
+  const TAKE_OVER_REACH = 2.8;
+  /**
+   * De speler neemt de order over waar een pickrobot mee bezig is: de pallet van de order gaat van de robot naar
+   * de speler, met wat er al op ligt. In de WMS verandert niets: de order staat daar al op picking (of is al
+   * afgemeld) en de speler maakt hem af met zijn eigen scans.
+   */
+  function takeOver(robotId: string): ScanResult {
+    if (carry) return refused('Handen vol.');
+    const id = robots.release(robotId);
+    const o = id ? order(id) : undefined;
+    if (!o) return refused(`${robotId} wacht op de WMS: probeer het zo opnieuw.`);
+    carry = { kind: 'order', orderId: o.id };
+    scanned('order', o.id, true);
+    touch();
+    const rest = openLines(o).map((l) => ({ sku: l.sku, qty: l.qty - l.picked }));
+    return done(
+      o.status === 'picked'
+        ? `${o.id} overgenomen van ${robotId}: zet hem klaar op een uitslagbaan.`
+        : rest.length
+          ? `${o.id} overgenomen van ${robotId}. Nog nodig: ${linesText(rest)}.`
+          : `${o.id} overgenomen van ${robotId}: alles is gepickt, meld hem af.`,
+    );
+  }
+
   /** Legt alles terug en zet de lege pallet weer op de stapel. */
   function returnContainer(): ScanResult {
     const o = carriedOrder();
     if (!o || o.status !== 'picking') return refused('Je hebt geen order onderhanden.');
-    if (o.picks.some((p) => p.booked)) return refused(`${o.id}: de WMS heeft al picks geboekt; maak de order af.`);
+    if (o.picks.some((p) => p.booked) || o.lines.some((l) => l.picked > 0 && !o.picks.length)) {
+      // De WMS heeft al picks geboekt: terugleggen kan niet meer. Staan de robots aan, dan maakt een pickrobot hem af.
+      if (!automation()) return refused(`${o.id}: de WMS heeft al picks geboekt; maak de order af.`);
+      o.status = 'open'; // in de WMS blijft hij op picking: de robot gaat verder waar de speler ophield
+      returnEmpty();
+      carry = null;
+      touch();
+      return done(`${o.id} teruggegeven: een pickrobot maakt hem af.`);
+    }
     for (const p of o.picks) add(p.locationId, p.sku, p.qty);
     o.picks = [];
     for (const l of o.lines) l.picked = 0;
@@ -753,7 +811,7 @@ export function createWarehouse({
     authority: () => authority,
     revision: () => revision,
     touch: () => touch(),
-    say,
+    say: autoSay,
     ask,
     pickupSpot(palletId, fromId) {
       const found = robotPallet(palletId, fromId);
@@ -958,11 +1016,11 @@ export function createWarehouse({
     const { inId } = before.dock;
     if (before.pallet.unlabeled) {
       const r = await ask({ type: 'PalletLabeled', palletId: id, sku: before.pallet.sku, qty: before.pallet.qty, locationId: inId });
-      if (!r.ok) return (say(`Telrobot: de WMS weigert de palletsticker voor ${what(before.pallet)} op ${inId}: ${r.error}`, 'err'), false);
+      if (!r.ok) return (note(`Telrobot: de WMS weigert de palletsticker voor ${what(before.pallet)} op ${inId}: ${r.error}`), false);
     } else {
       // Een pallet die al een sticker had kan uit een levering van de WMS komen: die wil de telling horen
       const r = await ask({ type: 'PalletCounted', palletId: id, sku: before.pallet.sku, qty: before.pallet.qty, locationId: inId });
-      if (!r.ok) return (say(`Telrobot: de WMS weigert de telling van ${id} op ${inId}: ${r.error}`, 'err'), false);
+      if (!r.ok) return (note(`Telrobot: de WMS weigert de telling van ${id} op ${inId}: ${r.error}`), false);
     }
     const now = lanePallet(id);
     if (!now) return false; // intussen opgepakt
@@ -1000,7 +1058,7 @@ export function createWarehouse({
     async checkIn(truckId) {
       const t = truck(truckId);
       if (t?.status === 'checkedIn') return true; // een levering uit de WMS is daar al aangemeld
-      return (await checkIn(truckId)).ok;
+      return (await checkIn(truckId, true)).ok;
     },
     takeCargo(truckId) {
       const pallet = truck(truckId)?.cargo.pop() ?? null;
@@ -1014,7 +1072,7 @@ export function createWarehouse({
       const { inId } = DOCKS[t.dock];
       const r = await bookUnload(t, pallet, inId);
       scanned('pallet', pallet.id, r.ok, inId);
-      if (!r.ok) return (say(`WMS weigert de ontvangst van ${what(pallet)} op ${inId}: ${r.error}`, 'err'), false);
+      if (!r.ok) return (note(`WMS weigert de ontvangst van ${what(pallet)} op ${inId}: ${r.error}`), false);
       const lane = laneIn[t.dock];
       lane[lane[slot] ? lane.lastIndexOf(null) : slot] = { ...pallet, unloading: true };
       touch();
@@ -1027,7 +1085,7 @@ export function createWarehouse({
       const d = DOCKS[t.dock];
       const pallets = laneIn[t.dock].filter((p) => p?.unloading).length;
       const r = await ask({ type: 'UnloadCompleted', truckId, dockId: d.id, pallets });
-      if (!r.ok) return (say(`WMS weigert 'klaar met lossen' van ${truckId}: ${r.error}`, 'err'), false);
+      if (!r.ok) return (note(`WMS weigert 'klaar met lossen' van ${truckId}: ${r.error}`), false);
       for (const p of laneIn[t.dock]) if (p) delete p.unloading;
       if (laneIn[t.dock].some((p) => p)) checking.set(t.dock, { truckId });
       touch();
@@ -1058,7 +1116,7 @@ export function createWarehouse({
       if (t.loaded.includes(orderId)) return true; // staat al in de wagen: de WMS zou het een tweede keer weigeren
       const r = await ask({ type: 'OrderLoaded', orderId, truckId, dockId: t.dockId });
       scanned('order', orderId, r.ok, t.dockId);
-      if (!r.ok) return (say(`WMS weigert het laden van ${orderId} in ${truckId}: ${r.error}`, 'err'), false);
+      if (!r.ok) return (note(`WMS weigert het laden van ${orderId} in ${truckId}: ${r.error}`), false);
       const o = order(orderId);
       const now = truck(truckId);
       if (!o || !now) return false;
@@ -1072,11 +1130,11 @@ export function createWarehouse({
       const t = truck(truckId);
       if (!t) return false;
       const r = await ask({ type: 'LoadCompleted', truckId, dockId: t.dockId, orderIds: [...t.loaded] });
-      if (!r.ok) return (say(`WMS weigert 'klaar met laden' van ${truckId}: ${r.error}`, 'err'), false);
+      if (!r.ok) return (note(`WMS weigert 'klaar met laden' van ${truckId}: ${r.error}`), false);
       say(`${truckId} is klaar met laden: ${plural(t.loaded.length, 'order')}.`, 'ok');
       return true;
     },
-    checkOut: async (truckId) => (await checkOut(truckId)).ok,
+    checkOut: async (truckId) => (await checkOut(truckId, true)).ok,
     callToDock(truckId) {
       const t = truck(truckId);
       if (!t || t.status !== 'parked') return false;
@@ -1115,7 +1173,7 @@ export function createWarehouse({
       void ask({ type: 'CountConfirmed', truckId: c.truckId, dockId: d.id, pallets: lane.length, qty }).then((r) => {
         if (checking.get(dock) !== c) return; // intussen is de hal gereset
         if (!r.ok) {
-          say(`WMS weigert de telling van ${c.truckId}: ${r.error}`, 'err');
+          note(`WMS weigert de telling van ${c.truckId}: ${r.error}`);
           return void setTimeout(() => (c.busy = false), 15000); // straks opnieuw
         }
         checking.delete(dock);
@@ -1188,6 +1246,14 @@ export function createWarehouse({
   function candidates(pos: Point): (Interaction & { radius: number })[] {
     const list: (Interaction & { radius: number })[] = [];
     const push = (it: Interaction | null, radius: number) => it && list.push({ ...it, radius });
+
+    // Een pickrobot met een order vlakbij: die order overnemen gaat voor op alles wat hier verder te doen is
+    if (!carry) {
+      const r = robots.robots
+        .filter((x) => x.kind === 'pick' && x.order && dist(x, pos) <= TAKE_OVER_REACH)
+        .sort((a, b) => dist(a, pos) - dist(b, pos))[0];
+      if (r) push(interaction(`${r.order} overnemen van ${r.id}`, pos, () => takeOver(r.id)), TAKE_OVER_REACH);
+    }
 
     push(truckInteraction(trucks.in), 2.2);
     for (const t of deliveries) push(truckInteraction(t), 2.2);
@@ -1360,8 +1426,11 @@ export function createWarehouse({
         : `Scan de sticker van ${unbooked[0]} op ${unbooked[1].at} om de verplaatsing te boeken`;
       return { point: at, level: at?.level, text };
     }
+    // Staan de robots aan, dan krijgt de speler geen werk opgedragen: alles loopt vanzelf, en wie toch iets wil
+    // doen neemt een order over van een pickrobot
+    if (automation()) return null;
     // De vrachtwagens regelen de chauffeurs zelf; staat er geen chauffeur bij, dan doet de speler het
-    const mine = (t: Truck | null) => (t && !drivers.at(t.dock) ? t : null);
+    const mine =(t: Truck | null) => (t && !drivers.at(t.dock) ? t : null);
     const ti = mine(trucks.in);
     const to = mine(trucks.out);
     const inPoint = ti ? DOCKS[ti.dock].truck : undefined;
@@ -1476,7 +1545,7 @@ export function createWarehouse({
       .map((sku) => ({ sku, qty: 1 + rand(Math.min(5, shelfQty(sku))) }));
     const id = `ORD-${stamp}-${pad(seq.order++)}`;
     void ask({ type: 'OrderCreated', order: { id, lines, status: 'open' } }).then((r) => {
-      if (!r.ok) return void say(`WMS weigert testorder ${id}: ${r.error}`, 'err');
+      if (!r.ok) return void note(`WMS weigert testorder ${id}: ${r.error}`);
       if (!order(id)) orders.push(fromWms({ id, lines, status: 'open' }));
       touch();
       say(`Nieuwe order ${id} (${plural(lines.length, 'regel')}).`);
@@ -1596,9 +1665,10 @@ export function createWarehouse({
 
   /** Alleen orders waar nog aan gewerkt moet worden (de WMS kent ook latere statussen, zie docs/wms/04). */
   const isOpen = (o: Order) => (o.status as string) === 'open' || (o.status as string) === 'picking';
-  const fromWms = (o: Order): SimOrder => ({
+  // Wat de WMS al als gepickt heeft geboekt ligt al op de pallet van de order: de hal pickt alleen de rest.
+  const fromWms = (o: WmsOrder): SimOrder => ({
     id: o.id,
-    lines: o.lines.map((l) => ({ sku: l.sku, qty: l.qty, picked: 0 })),
+    lines: o.lines.map((l) => ({ sku: l.sku, qty: l.qty, picked: Math.max(0, Math.min(l.qty, l.picked ?? 0)) })),
     status: 'open',
     wmsStatus: o.status,
     picks: [],
@@ -1647,7 +1717,7 @@ export function createWarehouse({
    * Open orders uit de WMS: daar worden ze ingevoerd. De voorraad komt hier bewust niet mee: de hal heeft
    * zijn eigen voorraad, en de WMS hoort alleen via scans wat daar verandert.
    */
-  function syncOrders(wmsOrders: Order[]) {
+  function syncOrders(wmsOrders: WmsOrder[]) {
     const open = wmsOrders.filter(isOpen);
     const ids = new Set(open.map((o) => o.id));
     const before = JSON.stringify(orders);
@@ -1697,7 +1767,7 @@ export function createWarehouse({
    * @param wmsPallets De pallets met sticker zoals de WMS ze kent. Houdt de WMS pallets bij, dan heeft de rest
    *   van de voorraad geen sticker (de speler plakt die); zonder pallets uit de WMS stickert de hal alles zelf.
    */
-  function loadSnapshot(items: Item[], wmsOrders: Order[], source: string, wmsPallets: (Pallet & { locationId: string })[] = []) {
+  function loadSnapshot(items: Item[], wmsOrders: WmsOrder[], source: string, wmsPallets: (Pallet & { locationId: string })[] = []) {
     laneIn.forEach((lane) => lane.fill(null));
     laneOut.forEach((lane) => lane.fill(null));
     moved.clear();
@@ -1763,6 +1833,10 @@ export function createWarehouse({
     get emptyPallets() { return empties; },
     get orders() { return orders; },
     get messages() { return messages; },
+    /** De meldingen van het automatische werk sinds de vorige keer (voor het logboek); daarna is de lijst leeg. */
+    takeNotes: () => notes.splice(0, notes.length),
+    /** Doen de robots het werk zelf? Dan krijgt de speler geen opdrachten. */
+    get automated() { return automation(); },
     get clock() { return clock; },
     /** Loopt er nog een vraag bij de WMS? */
     get pending() { return pending; },

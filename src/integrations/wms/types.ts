@@ -11,6 +11,9 @@ export type WmsItem = { sku: string; description: string; category?: string };
 /** Locatie met wat de WMS er verder van weet; level en blocked ontbreken als de WMS ze niet teruggeeft. */
 export type WmsLocation = Location & { level?: number; blocked?: boolean };
 
+/** Open order uit de WMS; `picked` = wat de WMS van de regel al als gepickt heeft geboekt. */
+export type WmsOrder = Omit<Order, 'lines'> & { lines: { sku: string; qty: number; picked?: number }[] };
+
 /** Pallet met sticker zoals de WMS hem kent (entiteit `pallet`): `id` is het nummer op de sticker. */
 export type WmsPallet = { id: string; sku: string; qty: number; locationId: string };
 
@@ -42,9 +45,14 @@ export interface WmsClient {
   getStock(): Promise<Item[]>;
   /** Actieve pallets (met sticker). Voorraad zonder pallet staat alleen in getStock. */
   getPallets(): Promise<WmsPallet[]>;
-  getOpenOrders(): Promise<Order[]>;
+  getOpenOrders(): Promise<WmsOrder[]>;
   /** Ontvangst op een docklocatie: de voorraad ligt daar daarna los (zonder pallet). */
   registerGoodsReceived(p: { sku: string; qty: number; dockId: string }): Promise<void>;
+  /**
+   * Zet het aantal op een pallet recht naar wat er in de hal op staat (0 = de pallet is leeg). De WMS boekt het
+   * verschil als correctie. Ontbreekt bij een WMS zonder correctie-actie (de mock: die houdt geen pallets bij).
+   */
+  correctPallet?(p: { palletId: string; qty: number }): Promise<void>;
   /** Sticker plakken: legt losse voorraad op een locatie vast als pallet met dit nummer. */
   registerPallet(p: { palletId: string; sku: string; qty: number; locationId: string }): Promise<void>;
   /**

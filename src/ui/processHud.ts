@@ -114,6 +114,9 @@ export function createProcessHud(sim: Warehouse) {
   let stockRefresh = 0;
 
   function update(dt: number) {
+    // Wat bij de robots, de chauffeurs of de telrobot misging: zij proberen het zelf opnieuw. Het staat hier in het
+    // logboek en niet rood in beeld, want de speler hoeft er niets mee.
+    for (const text of sim.takeNotes()) pushLog({ at: now(), title: 'Melding van het automatische werk', detail: text, badge: 'robots', cls: 'proposed' });
     const obj = sim.objective();
     const c = sim.carry;
     const carrying =
@@ -123,8 +126,8 @@ export function createProcessHud(sim: Warehouse) {
           ? `Je hebt de pallet van ${c.orderId}`
           : 'Handen vrij';
     const html = `
-      <div class="goal">${esc(obj?.text ?? 'Wachten op werk…')}</div>
-      <div class="msg">${esc(carrying)}</div>
+      <div class="goal">${esc(obj?.text ?? (sim.automated ? 'De robots doen het werk' : 'Wachten op werk…'))}</div>
+      <div class="msg">${esc(carrying)}${!obj && !c && sim.automated ? ' · sta bij een pickrobot en druk op E om zijn order over te nemen' : ''}</div>
       ${sim.messages.slice(-3).map((m) => `<div class="msg ${m.kind}">${esc(m.text)}</div>`).join('')}`;
     if (html !== lastTask) {
       task.innerHTML = html;
