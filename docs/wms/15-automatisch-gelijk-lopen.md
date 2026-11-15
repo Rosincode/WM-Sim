@@ -121,19 +121,39 @@ Voer *Voorraad herverdelen* uit. Kies één van de twee:
 
 ### 2.2 Meer beginvoorraad
 
-`SKU-006` t/m `SKU-010` hebben 2 tot 10 stuks; daar valt niets te picken. Gewenst per artikel:
+Stand op 2026-11-15 (13:45): 109 actieve pallets met samen ongeveer 1.700 stuks, in een hal met 450
+locaties. 34 pallets hebben 1 of 2 stuks. `SKU-006` heeft 3 stuks; `SKU-007` t/m `SKU-010` alleen 2
+stuks op een pallet aan het dock. In de racks staat dus weinig, en wat er staat is vaak bijna leeg. De
+hal toont één doos per stuk uit de WMS, dus de hal ziet er net zo leeg uit als de WMS is.
+
+Gewenst per artikel:
 
 - elke locatie van het eigen pad één volle pallet: 14 picklocaties (niveau 1) en 28 racklocaties, dus
   42 pallets per artikel, 420 in totaal. Een pad heeft 126 palletplekken; er blijft dus ruimte voor
   leveringen.
-- een volle pallet is 20 stuks (zo rekent de hal; een ander aantal mag, de hal toont wat de WMS
-  geeft).
+- een volle pallet heeft het aantal uit de tabel hieronder. Zoveel dozen van dat artikel passen er in
+  de hal op een pallet; met minder ziet de pallet er leeg uit, met meer worden de dozen kleiner
+  getekend.
+
+  | Artikel | Stuks op een volle pallet |
+  |---|---|
+  | `SKU-001` | 24 |
+  | `SKU-002` | 48 |
+  | `SKU-003` | 24 |
+  | `SKU-004` | 18 |
+  | `SKU-005` | 18 |
+  | `SKU-006` | 27 |
+  | `SKU-007` | 16 |
+  | `SKU-008` | 48 |
+  | `SKU-009` | 27 |
+  | `SKU-010` | 48 |
+
 - pallets met sticker (`pallet`, status `active`), genummerd in de reeks van de beginvoorraad.
 
 ### 2.3 Leveringen van `simulatie_tick`: volle pallets
 
-De ontvangsten van de flow zijn nu 2 stuks per pallet. Maak er volle pallets van (20 stuks), en
-hooguit 6 pallets per vrachtwagen: zoveel plekken heeft een inslagbaan.
+De ontvangsten van de flow zijn nu 2 stuks per pallet. Maak er volle pallets van (het aantal uit de
+tabel in 2.2), en hooguit 6 pallets per vrachtwagen: zoveel plekken heeft een inslagbaan.
 
 ### 2.4 Aanvullen op minimumvoorraad en verwachte vraag (MRP)
 
@@ -144,8 +164,8 @@ Velden op `item`:
 | Veld | Type | Toelichting |
 |---|---|---|
 | `min_voorraad` | geheel getal | Bestelpunt in stuks. Voorstel: 200 |
-| `max_voorraad` | geheel getal | Tot hier vult een levering aan. Voorstel: 840 (42 pallets) |
-| `stuks_per_pallet` | geheel getal | Voorstel: 20 |
+| `max_voorraad` | geheel getal | Tot hier vult een levering aan. Voorstel: 42 × `stuks_per_pallet` |
+| `stuks_per_pallet` | geheel getal | Het aantal uit de tabel in 2.2 |
 | `levertijd_min` | geheel getal | Minuten tussen bestellen en voorrijden. Voorstel: 5 |
 
 Berekend per artikel (alleen lezen, ook zichtbaar via de API):
