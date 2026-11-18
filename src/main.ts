@@ -9,6 +9,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { createPlayerView, type ViewMode } from './ui/playerView';
 import { createHandheld } from './ui/handheld';
 import { createRocketLauncher } from './ui/rocketLauncher';
+import { createEmoteHands } from './ui/emoteHands';
 import { createTabletApp } from './ui/tabletApp';
 import { createWarehouse, EXIT_X, HALL } from './ui/scene/warehouse';
 import { createForklift } from './ui/scene/forklift';
@@ -244,6 +245,9 @@ let driving = false;
 /** De 6-7 (toets 6 of 7): je figuur weegt een paar tellen met beide handen; andere spelers zien het ook. */
 let emoteUntil = 0;
 const emoting = () => performance.now() < emoteUntil && !driving && !chair && !pushing && !rocket.flying;
+/** Zolang de 6-7 duurt zie je in first person je eigen twee handen (src/ui/emoteHands.ts) in plaats van scanner of tablet. */
+let emoteShown = false;
+const emoteHands = createEmoteHands(camera);
 /** De stoel waar de speler op zit (in het kantoor achter een bureau met de WMS-app, of in de kantine), anders null. */
 let chair: THREE.Object3D | null = null;
 /** Bewerkmodus voor de indeling van de hal (src/ui/editor.ts); werkt alleen in het overzicht. */
@@ -269,8 +273,8 @@ function applyMode(mode: ViewMode) {
   // Met de pompwagen: beide handen op de handgreep, dus geen scanner of tablet in beeld
   // Aan het bureau: handen bij het toetsenbord, dus ook geen scanner of tablet
   // De raketwerper houd je met twee handen vast: dan geen scanner of tablet, en alleen te voet
-  const hands = mode === 'first' && !pushing && !chair;
-  rocket.setAllowed(hands && !driving);
+  const hands = mode === 'first' && !pushing && !chair && !emoteShown; // voor de 6-7 heb je je handen vrij
+  rocket.setAllowed(hands && !driving); // (ook niet tijdens de 6-7)
   handheld.setActive(hands && !rocket.active);
   handheld.setSeated(driving);
   character.setFirstPerson(mode === 'first' && (driving || pushing || !!chair));
@@ -680,7 +684,12 @@ renderer.setAnimationLoop((now) => {
   last = now;
 
   forklift.update(dt, now / 1000);
-  if (!rocket.flying) view.update(dt); // opgeblazen: je vliegt, lopen kan even niet
+  if (emoting() !== emoteShown) {
+    emoteShown = !emoteShown;
+    applyMode(view.mode); // scanner, tablet of raketwerper even weg
+  }
+  if (!rocket.flying) view.update(dt);
+  emoteHands.update(dt, emoteShown && view.mode === 'first'); // opgeblazen: je vliegt, lopen kan even niet
   rocket.update(dt); // na de camera: de klap van een inslag laat hem even schudden
   // In het overzicht staat de camera ver weg en is de dieptebuffer met een voorvlak op 5 cm te grof: onderdelen
   // die een paar cm voor elkaar liggen (grille en ruiten van een vrachtwagen) flikkeren dan door elkaar heen.

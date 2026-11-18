@@ -530,6 +530,7 @@ export function createCharacter(
   let holdScanner = 0;
   let holdTablet = 0;
   let emote = 0; // 0..1: hoe ver de armen in de 6-7 staan
+  const PALM_UP = 1.5; // zo ver draait de pols om de onderarm (rad) tot de handpalm naar boven wijst
 
   const prev = new THREE.Vector3();
   let hasPrev = false;
@@ -703,8 +704,8 @@ export function createCharacter(
         elbow = THREE.MathUtils.lerp(elbow, -1.15 + 0.4 * scan, holdScanner);
       }
       // 6-7: de handen wegen om de beurt, links omhoog als rechts omlaag gaat
-      shoulder = THREE.MathUtils.lerp(shoulder, -0.45 + 0.3 * Math.sin(time * 10 + i * Math.PI), emote);
-      elbow = THREE.MathUtils.lerp(elbow, -1.45 - 0.2 * Math.sin(time * 10 + i * Math.PI), emote);
+      shoulder = THREE.MathUtils.lerp(shoulder, -0.62 + 0.26 * Math.sin(time * 10 + i * Math.PI), emote);
+      elbow = THREE.MathUtils.lerp(elbow, -1.2 - 0.18 * Math.sin(time * 10 + i * Math.PI), emote);
       a.shoulder.rotation.set(shoulder, 0, a.restZ + a.side * 0.1 * run * gait * (1 - carry) * (1 - seat));
       a.elbow.rotation.x = elbow;
     });
@@ -744,7 +745,7 @@ export function createCharacter(
       a.reach = target ? ease(a.reach, 1, dt, 10) : 0;
       a.wrist.visible = !target?.hideHand;
       if (target) reachFor(a, target, a.reach);
-      else a.wrist.quaternion.identity();
+      else a.wrist.rotation.set(0, a.side * PALM_UP * emote, 0); // 6-7: de onderarm draait, de handpalm komt boven
     });
   }
 
