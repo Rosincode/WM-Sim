@@ -397,13 +397,15 @@ export function mountWarehouse({
         sim.syncOrders(orders);
       }
       if (alignWith === client && sim.authority && sim.pending === 0 && wms.pending === 0 && sim.revision === revision && performance.now() > ALIGN_AFTER_MS) {
-        alignWith = null;
         const [pallets, outbound] = await Promise.all([readPallets(client), readOutbound(client)]);
         if (client !== wms.client) return;
+        // Is er tijdens het lezen iets gebeurd in de hal (robots aan het werk), dan de volgende stand opnieuw proberen
+        if (sim.pending !== 0 || wms.pending !== 0 || sim.revision !== revision) return;
+        alignWith = null;
         const { racked, busy } = hallPallets();
         const diff = compareStock(racked, busy, pallets);
         const n = diff.moves.length + diff.quantities.length + diff.onlyHall.length + diff.onlyWms.length;
-        if (n > 0 && sim.pending === 0 && sim.revision === revision) {
+        if (n > 0) {
           resetListeners.forEach((l) => l());
           sim.loadSnapshot(stock, orders, `de WMS: de hal week op ${n} pallet${n === 1 ? '' : 's'} af`, pallets, outbound.staged);
           releaseTrucks(client, outbound.trucks);
