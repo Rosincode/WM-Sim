@@ -15,6 +15,59 @@ const H = 1080;
 export type PcDisplay = { object: THREE.Object3D; w: number; h: number };
 /** Verder weg dan dit (m) tonen we de app niet in de wereld. */
 const MAX_DISTANCE = 40;
+/** Zoveel losse uitsparingen kan het scherm hebben voor wat de speler voor zich houdt (elk een eigen laag om de app). */
+const MAX_CUTS = 6;
+
+// ---------- Vlakke meetkunde voor de uitsparingen (schermpixels) ----------
+type Pt = [number, number];
+const cross = (o: Pt, a: Pt, b: Pt) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+/** Convex omhulsel (monotone chain). */
+function hull(points: Pt[]): Pt[] {
+  const p = [...points].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (p.length < 3) return p;
+  const lower: Pt[] = [];
+  for (const q of p) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], q) <= 0) lower.pop();
+    lower.push(q);
+  }
+  const upper: Pt[] = [];
+  for (let i = p.length - 1; i >= 0; i--) {
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p[i]) <= 0) upper.pop();
+    upper.push(p[i]);
+  }
+  return lower.slice(0, -1).concat(upper.slice(0, -1));
+}
+/** Oppervlakte met teken (het teken hangt af van de draairichting). */
+function signedArea(poly: Pt[]) {
+  let a = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length];
+    a += p[0] * q[1] - q[0] * p[1];
+  }
+  return a / 2;
+}
+/** Knipt een veelhoek bij tot binnen een convexe veelhoek (Sutherland–Hodgman). */
+function clipTo(poly: Pt[], clip: Pt[]): Pt[] {
+  const s = Math.sign(signedArea(clip)) || 1;
+  let out = poly;
+  for (let i = 0; i < clip.length && out.length; i++) {
+    const a = clip[i], b = clip[(i + 1) % clip.length];
+    const inside = (p: Pt) => s * cross(a, b, p) >= 0;
+    const input = out;
+    out = [];
+    for (let j = 0; j < input.length; j++) {
+      const p = input[j], q = input[(j + 1) % input.length];
+      const pin = inside(p), qin = inside(q);
+      if (pin) out.push(p);
+      if (pin !== qin) {
+        const cp = cross(a, b, p), cq = cross(a, b, q);
+        const t = cp / (cp - cq);
+        out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
+      }
+    }
+  }
+  return out;
+}
 
 const css = `
 .pc-backdrop { position: fixed; inset: 0; z-index: 50; display: none; background: rgba(0,0,0,.5); }
@@ -27,6 +80,8 @@ const css = `
 .pc-bar span { flex: 1; }
 .pc-bar button { border: 0; border-radius: 4px; padding: 2px 9px; background: #c62828; color: #fff; font: inherit; cursor: pointer; }
 .pc-frame .wms-app { flex: 1; }
+.pc-frame:not(.open) { background: none; }
+.pc-cut { display: flex; flex-direction: column; flex: 1; min-height: 0; background: #fff; }
 .pc-frame:not(.open) .wms-app form, .pc-frame:not(.open) .wms-app .note { display: none; }
 `;
 
@@ -49,7 +104,17 @@ export function createPcScreen({ camera, displays, world }: Options) {
   frame.className = 'pc-frame';
   frame.innerHTML = `<div class="pc-bar"><span>Pc · WMS — Esc: verlaten</span><button title="Sluiten (Esc)">✕</button></div>`;
   const app = createAppFrame();
-  frame.appendChild(app.el);
+  // Lagen om de app, elk met één uitsparing voor iets dat de speler voor het scherm houdt (samen: alles wat ervoor zit)
+  const cuts: { el: HTMLDivElement; clip: string }[] = [];
+  let inner: HTMLElement = frame;
+  for (let i = 0; i < MAX_CUTS; i++) {
+    const el = document.createElement('div');
+    el.className = 'pc-cut';
+    inner.appendChild(el);
+    inner = el;
+    cuts.push({ el, clip: '' });
+  }
+  inner.appendChild(app.el);
   document.body.append(backdrop, frame);
 
   let open = false;
@@ -92,6 +157,12 @@ export function createPcScreen({ camera, displays, world }: Options) {
   const center = new THREE.Vector3();
   const normal = new THREE.Vector3();
   const v = new THREE.Vector4();
+  const vtx = new THREE.Vector3();
+  const camInv = new THREE.Matrix4();
+  const toCamera = new THREE.Matrix4();
+  /** Van schermpixels terug naar pixels in het frame (de omgekeerde projectie van het geplaatste beeldvlak). */
+  const unproject = new THREE.Matrix3();
+  const local = new THREE.Vector3();
   const target = new THREE.Vector3();
   const dir = new THREE.Vector3();
   const raycaster = new THREE.Raycaster();
@@ -167,20 +238,97 @@ export function createPcScreen({ camera, displays, world }: Options) {
       px[0], py[0], 0, 1,
     ];
     setTransform(`matrix3d(${m.map((n) => +n.toFixed(7)).join(',')})`);
+    unproject.set(m[0], m[4], m[12], m[1], m[5], m[13], m[3], m[7], 1).invert();
     return true;
+  }
+
+  function setCut(i: number, clip: string) {
+    const c = cuts[i];
+    if (c.clip === clip) return;
+    c.clip = clip;
+    c.el.style.clipPath = clip;
+  }
+
+  /** Omtrek op het scherm van wat de speler voor zich houdt (scanner, tablet, handen: hangt aan de camera), per onderdeel. */
+  function heldOutlines(): Pt[][] {
+    const groups = new Map<THREE.Object3D, Pt[]>();
+    const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+    camera.traverseVisible((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const mat = mesh.material;
+      if (Array.isArray(mat) || mat.transparent) return; // laserstraal
+      const pos = mesh.geometry.getAttribute('position');
+      if (!pos) return;
+      toCamera.multiplyMatrices(camInv, mesh.matrixWorld);
+      let pts = groups.get(mesh.parent!);
+      if (!pts) groups.set(mesh.parent!, (pts = []));
+      for (let i = 0; i < pos.count; i++) {
+        vtx.fromBufferAttribute(pos, i).applyMatrix4(toCamera);
+        if (vtx.z > -0.02) {
+          // achter de camera (een onderarm): ver buiten beeld in die richting
+          pts.push([cx + vtx.x * 1e5, cy - vtx.y * 1e5]);
+          continue;
+        }
+        vtx.applyMatrix4(camera.projectionMatrix);
+        pts.push([(vtx.x * 0.5 + 0.5) * window.innerWidth, (-vtx.y * 0.5 + 0.5) * window.innerHeight]);
+      }
+    });
+    // Onderdelen die samen nauwelijks meer ruimte innemen dan los worden één uitsparing; nooit meer dan er lagen zijn
+    const hulls = [...groups.values()].map(hull).filter((h) => h.length >= 3);
+    const areas = hulls.map((h) => Math.abs(signedArea(h)));
+    for (;;) {
+      let best = Infinity, bi = -1, bj = -1;
+      let bh: Pt[] = [];
+      for (let i = 0; i < hulls.length; i++)
+        for (let j = i + 1; j < hulls.length; j++) {
+          const h = hull(hulls[i].concat(hulls[j]));
+          const cost = Math.abs(signedArea(h)) - areas[i] - areas[j];
+          if (cost < best) [best, bi, bj, bh] = [cost, i, j, h];
+        }
+      if (bi < 0 || (best > 0 && hulls.length <= MAX_CUTS)) break;
+      hulls[bi] = bh;
+      areas[bi] = Math.abs(signedArea(bh));
+      hulls.splice(bj, 1);
+      areas.splice(bj, 1);
+    }
+    return hulls;
+  }
+
+  /** Snijdt uit het scherm wat de speler ervoor houdt: dat zit in de 3D-scène, en de app ligt als HTML-laag óver het canvas. */
+  function cutHeld() {
+    const quad: Pt[] = [0, 1, 2, 3].map((i) => [px[i], py[i]]);
+    let n = 0;
+    for (const outline of heldOutlines()) {
+      const part = clipTo(outline, quad);
+      if (part.length < 3) continue;
+      const d = part
+        .map(([x, y], i) => {
+          local.set(x, y, 1).applyMatrix3(unproject);
+          return `${i ? 'L' : 'M'}${(local.x / local.z).toFixed(1)} ${(local.y / local.z).toFixed(1)}`;
+        })
+        .join('');
+      setCut(n++, `path(evenodd, "M-10 -10H${W + 10}V${H + 10}H-10Z${d}Z")`);
+    }
+    while (n < MAX_CUTS) setCut(n++, '');
   }
 
   /** Legt het frame op de dichtstbijzijnde monitor die in beeld is; false als er geen te zien is. */
   function placeInWorld(dt: number) {
-    camera.updateWorldMatrix(true, false);
+    camera.updateWorldMatrix(true, true); // ook wat de speler vasthoudt, voor de uitsparingen
     camPos.setFromMatrixPosition(camera.matrixWorld);
+    camInv.copy(camera.matrixWorld).invert();
     viewProj.copy(camera.matrixWorld).invert().premultiply(camera.projectionMatrix);
     for (const s of screens) {
       s.object.updateWorldMatrix(true, false);
       s.distance = center.setFromMatrixPosition(s.object.matrixWorld).distanceTo(camPos);
     }
     screens.sort((a, b) => a.distance - b.distance);
-    for (const s of screens) if (place(s, dt)) return true;
+    for (const s of screens)
+      if (place(s, dt)) {
+        cutHeld();
+        return true;
+      }
     return false;
   }
 
@@ -197,6 +345,7 @@ export function createPcScreen({ camera, displays, world }: Options) {
         const x = Math.round((window.innerWidth - W * s) / 2);
         const y = Math.round((window.innerHeight - H * s) / 2);
         setTransform(`translate(${x}px,${y}px) scale(${s.toFixed(4)})`);
+        for (let i = 0; i < MAX_CUTS; i++) setCut(i, ''); // groot geopend ligt hij overal bovenop
         setShown(true);
       } else {
         setShown(placeInWorld(dt));
