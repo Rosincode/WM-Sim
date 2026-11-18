@@ -9,12 +9,15 @@ import type { Hall, Solid } from './scene/warehouse';
 
 // De kantoormedewerkers in beeld: de figuren, hun auto's op het parkeerterrein, de koffiebeker en de lunchtrommel,
 // en de koelkastdeur die voor hen opengaat. Leest alleen de sim (src/sim/staff.ts).
+// In multiplayer laat de host ze lopen (net); de anderen volgen die stand (follow).
 
 /** Hesjes van de vier collega's: elk een eigen kleur, zodat je ze uit elkaar houdt. */
 const VESTS = ['#00897b', '#7b1fa2', '#c2185b', '#546e7a'];
 /** Hoogte van een bureau- of tafelblad (m). */
 const TABLE_TOP = 0.76;
 const UP = new THREE.Vector3(0, 1, 0);
+/** Zo lang (ms) na het laatste bericht van de host volgen we hem nog; daarna laten we ze zelf lopen. */
+const FOLLOW_MS = 3000;
 
 export function mountStaff({
   scene,
@@ -22,6 +25,7 @@ export function mountStaff({
   obstacles,
   playerSeat,
   seatUsed = () => false,
+  othersSeated = () => [],
   skip = 0,
 }: {
   scene: THREE.Scene;
@@ -32,19 +36,29 @@ export function mountStaff({
   playerSeat: () => THREE.Object3D | null;
   /** Zit er al iemand anders (een chauffeur) op deze kantinestoel (index in CANTEEN.seats)? */
   seatUsed?: (i: number) => boolean;
+  /** Waar andere spelers op een stoel zitten. */
+  othersSeated?: () => { x: number; z: number }[];
   /** Handig bij testen: zoveel seconden laat de sim de collega's vooraf al lopen. */
   skip?: number;
 }) {
   const { frontZ, office, canteen, deskSeats } = hall.staff;
+  /** Pas na het opstarten: andere spelers bestaan dan pas. */
+  let started = false;
+  const taken = (seat: THREE.Object3D) =>
+    playerSeat() === seat || (started && othersSeated().some((p) => Math.hypot(p.x - seat.position.x, p.z - seat.position.z) < 0.5));
   const sim = createStaff({
     frontZ,
     office,
     canteen,
-    deskBusy: (i) => playerSeat() === hall.seats[i],
-    seatBusy: (i) => playerSeat() === hall.seats[deskSeats + i] || seatUsed(i),
+    deskBusy: (i) => taken(hall.seats[i]),
+    seatBusy: (i) => taken(hall.seats[deskSeats + i]) || seatUsed(i),
   });
   for (let t = 0; t < Math.min(skip, 3600); t += 0.1) sim.update(0.1);
   sim.setObstacles(obstacles);
+  started = true;
+  /** Wanneer (performance.now) de host voor het laatst de stand stuurde. */
+  let followedAt = -Infinity;
+  let following = false;
 
   const cupGeo = new THREE.CylinderGeometry(0.036, 0.03, 0.09, 16);
   const boxGeo = new THREE.BoxGeometry(0.19, 0.07, 0.13);
@@ -172,10 +186,25 @@ export function mountStaff({
   return {
     update(dt: number) {
       time += dt;
-      sim.update(dt);
+      const now = performance.now() - followedAt < FOLLOW_MS;
+      if (following && !now) sim.adopt(); // de host is weg (of wij zijn het nu): zelf verder vanaf zijn stand
+      following = now;
+      if (following) sim.track(dt);
+      else sim.update(dt);
       const next = THREE.MathUtils.clamp(fridge + (sim.fridgeOpen() ? dt : -dt) / 0.5, 0, 1);
       if (next !== fridge) hall.staff.setFridge((fridge = next));
       for (const v of views) place(v, dt);
+    },
+    /** De stand om naar de andere spelers te sturen (als wij host zijn). */
+    net: () => sim.snapshot(),
+    /** De stand van de host: die volgen we, in plaats van ze zelf te laten lopen. */
+    follow(data: unknown) {
+      sim.follow(data);
+      followedAt = performance.now();
+    },
+    /** Wij zijn host geworden: niet meer volgen maar zelf laten lopen, vanaf de laatst ontvangen stand. */
+    lead() {
+      followedAt = -Infinity;
     },
     /** Waar de speler tegenaan loopt: de collega's en hun auto's. */
     solids(): Solid[] {

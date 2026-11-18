@@ -6,8 +6,8 @@ import { ROAD } from './yard';
 // entree en langs de parkeerplaats van de heftruck naar het kantoor (in de hal, tegen de voorgevel) en gaan achter een bureau zitten. Tussendoor halen ze
 // koffie in de kantine (vaak) of pakken ze hun lunch uit de koelkast en eten die aan tafel op (af en toe). Na een
 // tijd loopt er weer een naar zijn auto en rijdt weg; pas als die van het terrein is, komt de ander terug.
-// Alleen aankleding: ze doen niets in de WMS en worden niet gedeeld met andere spelers (elke speler ziet zijn eigen
-// collega's lopen).
+// Alleen aankleding: ze doen niets in de WMS. In multiplayer laat alleen de host ze lopen; hij stuurt hun stand
+// rond (snapshot) en de andere spelers volgen die (follow). Wordt een ander host, dan neemt die de stand over (adopt).
 
 /** De entree in de zuidgevel: hierdoor komen de kantoormedewerkers de hal in. */
 export const ENTRANCE = { x: FURNITURE.exitDoor.x, z: HALL.d / 2 };
@@ -100,8 +100,10 @@ export type Staff = {
 
 export type StaffObstacle = Point & { rad: number };
 
+/** Soort plek: zo weet een nieuwe host wat iemand daar aan het doen was. */
+type SpotKind = 'desk' | 'coffee' | 'fridge' | 'sink' | 'table' | 'lot';
 /** Een plek waar hij staat, met de route van daar naar de lijn in de hal voor de kamers langs. */
-type Spot = { out: Point[]; r: number };
+type Spot = { out: Point[]; r: number; k: SpotKind; i: number };
 type Step = {
   /** Loopt eerst hierheen. */
   to?: Spot;
@@ -136,6 +138,17 @@ type Member = Staff & {
   pause: number;
 };
 
+/**
+ * De stand van één collega zoals de host hem rondstuurt. seat: 'd3' = bureau 3, 't1' = kantinestoel 1, '' = staat.
+ * Kort gehouden: dit gaat een paar keer per seconde over de lijn.
+ */
+export type StaffNet = {
+  id: number; x: number; z: number; r: number; act: StaffAct; busy: number; seat: string; inCar: boolean;
+  cup: Staff['cup']; lunch: Staff['lunch']; desk: number; ti: number; leaving: boolean; away: number; hungry: number; present: number;
+  car: StaffCar;
+};
+
+const ACTS: readonly StaffAct[] = ['away', 'drive', 'alight', 'board', 'walk', 'work', 'machine', 'fridge', 'eat', 'sink'];
 const WALK = 1.45;
 const TURN = 5;
 /** Zo lang (s) werkt iemand achter elkaar door voor hij koffie haalt of gaat eten. */
@@ -217,13 +230,15 @@ export function createStaff(site: StaffSite) {
   function deskSpot(i: number): Spot {
     const s = office.desks[i];
     const b = behindSeat(s);
-    return { r: s.r, out: [b, { x: office.aisle, z: b.z }, { x: office.aisle, z: office.inZ + 0.3 }, { x: office.door, z: office.inZ }, { x: office.door, z: FRONT }] };
+    return { k: 'desk', i, r: s.r, out: [b, { x: office.aisle, z: b.z }, { x: office.aisle, z: office.inZ + 0.3 }, { x: office.door, z: office.inZ }, { x: office.door, z: FRONT }] };
   }
-  const canteenSpot = (p: Point, r: number): Spot => ({ r, out: [p, { x: canteen.door, z: p.z }, { x: canteen.door, z: FRONT }] });
-  const tableSpot = (i: number) => canteenSpot(behindSeat(canteen.seats[i]), canteen.seats[i].r);
+  const canteenSpot = (p: Point, r: number, k: SpotKind, i = 0): Spot => ({ k, i, r, out: [p, { x: canteen.door, z: p.z }, { x: canteen.door, z: FRONT }] });
+  const tableSpot = (i: number) => canteenSpot(behindSeat(canteen.seats[i]), canteen.seats[i].r, 'table', i);
   /** Naast het portier van zijn auto; van daar tussen de auto's door naar de stoep, de entree in en naar de lijn voor de kamers. */
   function lotSpot(bay: Point): Spot {
     return {
+      k: 'lot',
+      i: 0,
       r: Math.PI / 2,
       out: [
         { x: bay.x - 1.2, z: bay.z + 0.3 }, { x: bay.x - 1.3, z: area.minZ - 1 }, { x: ENTRANCE.x, z: ENTRANCE.z + 2.6 }, { x: ENTRANCE.x, z: ENTRANCE.z - 1.2 },
@@ -317,7 +332,7 @@ export function createStaff(site: StaffSite) {
   function coffee(m: Member): Step[] {
     return [
       {
-        to: canteenSpot(canteen.coffee, canteen.coffee.r), act: 'machine', s: 4.5,
+        to: canteenSpot(canteen.coffee, canteen.coffee.r, 'coffee'), act: 'machine', s: 4.5,
         begin: () => {
           if (m.cup === 'desk') m.cup = 'hand';
         },
@@ -334,16 +349,9 @@ export function createStaff(site: StaffSite) {
     const t = freeSeat(m);
     if (t < 0) return coffee(m);
     m.seatIndex = t;
-    const clear: Step = {
-      to: canteenSpot(canteen.sink, canteen.sink.r), act: 'sink', s: 2.5,
-      end: () => {
-        m.lunch = 'none';
-        m.hungry = between(LUNCH_EVERY);
-        plan(m, toDesk(m));
-      },
-    };
+    const clear = clearUp(m);
     return [
-      { to: canteenSpot(canteen.fridge, canteen.fridge.r), act: 'fridge', s: 3.4, end: () => (m.lunch = 'hand') },
+      { to: canteenSpot(canteen.fridge, canteen.fridge.r, 'fridge'), act: 'fridge', s: 3.4, end: () => (m.lunch = 'hand') },
       {
         to: tableSpot(t), act: 'walk',
         end: () => {
@@ -360,6 +368,17 @@ export function createStaff(site: StaffSite) {
         },
       },
     ];
+  }
+  /** De lunchtrommel omspoelen bij de spoelbak, en terug naar zijn bureau. */
+  function clearUp(m: Member): Step {
+    return {
+      to: canteenSpot(canteen.sink, canteen.sink.r, 'sink'), act: 'sink', s: 2.5,
+      end: () => {
+        m.lunch = 'none';
+        m.hungry = between(LUNCH_EVERY);
+        plan(m, toDesk(m));
+      },
+    };
   }
   function eatAt(m: Member, t: number, clear: Step): Step[] {
     return [
@@ -523,6 +542,158 @@ export function createStaff(site: StaffSite) {
     m.path.shift();
   }
 
+  // ========== Multiplayer: de host stuurt, de anderen volgen ==========
+
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  function seatRef(m: Member) {
+    if (!m.seat) return '';
+    const d = office.desks.indexOf(m.seat);
+    if (d >= 0) return `d${d}`;
+    const t = canteen.seats.indexOf(m.seat);
+    return t >= 0 ? `t${t}` : '';
+  }
+  function seatOf(ref: string): Pose | null {
+    const i = Number(ref.slice(1));
+    if (ref[0] === 'd') return office.desks[i] ?? null;
+    if (ref[0] === 't') return canteen.seats[i] ?? null;
+    return null;
+  }
+
+  /** De stand van alle collega's, om rond te sturen. */
+  function snapshot(): StaffNet[] {
+    return staff.map((m) => ({
+      id: m.id, x: r2(m.x), z: r2(m.z), r: r2(m.r), act: m.act, busy: r2(m.busy), seat: seatRef(m), inCar: m.inCar,
+      cup: m.cup, lunch: m.lunch, desk: m.desk, ti: m.seatIndex, leaving: m.leaving, away: Math.round(m.awayFor), hungry: Math.round(m.hungry),
+      present: Math.round(m.present), car: { here: m.car.here, x: r2(m.car.x), z: r2(m.car.z), r: r2(m.car.r), v: r2(m.car.v) },
+    }));
+  }
+
+  /** Waar de host ze laat staan; hier schuiven ze vloeiend naartoe. */
+  const goal = new Map<number, { x: number; z: number; r: number; car: { x: number; z: number; r: number } }>();
+  const fin = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
+  const index = (v: unknown, length: number) => (Number.isInteger(v) && (v as number) >= 0 && (v as number) < length ? (v as number) : -1);
+  const lerpAngle = (a: number, b: number, t: number) => a + angle(b, a) * t;
+
+  /**
+   * Neemt de stand van de host over (de broker is publiek: alles wordt gecontroleerd). Wie ver weg staat of gaat
+   * zitten, staat er meteen; de rest schuift er in track() naartoe.
+   */
+  function follow(data: unknown) {
+    if (!Array.isArray(data)) return;
+    for (const n of data as Partial<StaffNet>[]) {
+      if (!n || typeof n !== 'object') continue;
+      const m = staff.find((s) => s.id === n.id);
+      if (!m) continue;
+      const car: Partial<StaffCar> = typeof n.car === 'object' && n.car ? n.car : m.car;
+      const g = {
+        x: fin(n.x, m.x), z: fin(n.z, m.z), r: fin(n.r, m.r),
+        car: { x: fin(car.x, m.car.x), z: fin(car.z, m.car.z), r: fin(car.r, m.car.r) },
+      };
+      goal.set(m.id, g);
+      if (n.act && ACTS.includes(n.act)) m.act = n.act;
+      m.busy = fin(n.busy, m.busy);
+      m.seat = typeof n.seat === 'string' ? seatOf(n.seat) : null;
+      m.inCar = n.inCar === true;
+      if (n.cup === 'none' || n.cup === 'hand' || n.cup === 'desk') m.cup = n.cup;
+      if (n.lunch === 'none' || n.lunch === 'hand' || n.lunch === 'table') m.lunch = n.lunch;
+      m.desk = index(n.desk, office.desks.length);
+      m.seatIndex = index(n.ti, canteen.seats.length);
+      m.leaving = n.leaving === true;
+      m.awayFor = fin(n.away, m.awayFor);
+      m.hungry = fin(n.hungry, m.hungry);
+      m.present = fin(n.present, m.present);
+      m.car.here = car.here === true;
+      m.car.v = fin(car.v, 0);
+      if (Math.hypot(g.x - m.x, g.z - m.z) > 3 || m.seat || m.inCar) Object.assign(m, { x: g.x, z: g.z, r: g.r });
+      if (Math.hypot(g.car.x - m.car.x, g.car.z - m.car.z) > 20) Object.assign(m.car, g.car);
+    }
+  }
+
+  /** Per frame zolang we de host volgen: naar de laatst ontvangen stand schuiven, zelf niets beslissen. */
+  function track(dt: number) {
+    const t = Math.min(1, dt * 8);
+    for (const m of staff) {
+      m.busy += dt;
+      const g = goal.get(m.id);
+      if (!g) continue;
+      m.x += (g.x - m.x) * t;
+      m.z += (g.z - m.z) * t;
+      m.r = lerpAngle(m.r, g.r, t);
+      m.car.x += (g.car.x - m.car.x) * t;
+      m.car.z += (g.car.z - m.car.z) * t;
+      m.car.r = lerpAngle(m.car.r, g.car.r, t);
+    }
+  }
+
+  /**
+   * We worden zelf host: verder vanaf de stand die we van de vorige host kregen. Wie onderweg was, gaat verder
+   * vanaf de dichtstbijzijnde plek (een klein sprongetje, alleen op het moment van de wissel).
+   */
+  function adopt() {
+    for (const m of staff) {
+      const g = goal.get(m.id);
+      if (g) {
+        Object.assign(m, { x: g.x, z: g.z, r: g.r });
+        Object.assign(m.car, g.car);
+      }
+      Object.assign(m, { path: [], step: null, queue: [], legs: [], leg: 0, dist: 0, pause: 0, blocked: 0 });
+      m.car.v = 0;
+      const bay = bayOf(m.bay);
+      m.spot = lotSpot(bay);
+      if (m.act === 'away' || !m.car.here || (m.inCar && m.leaving)) {
+        // weg, of al aan het wegrijden: dan is hij nu weg
+        Object.assign(m, { act: 'away', inCar: true, seat: null, desk: -1, seatIndex: -1, cup: 'none', lunch: 'none', leaving: false });
+        m.car.here = false;
+        if (m.awayFor <= 0) m.awayFor = between(AWAY);
+        plan(m, [{ act: 'away', done: () => false }]);
+        continue;
+      }
+      if (m.inCar) {
+        // was aan het aankomen: de auto staat in zijn vak en hij stapt uit
+        Object.assign(m.car, { x: bay.x, z: bay.z, r: Math.PI });
+        plan(m, [{
+          act: 'alight', s: 1.4,
+          begin: () => Object.assign(m, { x: m.spot.out[0].x, z: m.spot.out[0].z, r: m.spot.r, inCar: false }),
+          end: () => plan(m, toDesk(m)),
+        }]);
+        continue;
+      }
+      const desk = m.seat ? office.desks.indexOf(m.seat) : -1;
+      const table = m.seat ? canteen.seats.indexOf(m.seat) : -1;
+      if (desk >= 0) {
+        m.desk = desk;
+        m.spot = deskSpot(desk);
+        plan(m, [{ act: 'work', s: m.leaving ? 1.5 : between(WORK) / 2, end: () => afterWork(m) }]);
+        continue;
+      }
+      if (table >= 0) {
+        m.seatIndex = table;
+        m.spot = tableSpot(table);
+        plan(m, eatAt(m, table, clearUp(m)).slice(1));
+        continue;
+      }
+      // Staat of loopt: naar de dichtstbijzijnde plek en verder met wat daar hoort
+      m.seat = null;
+      const spots = [
+        ...office.desks.map((_, i) => deskSpot(i)),
+        canteenSpot(canteen.coffee, canteen.coffee.r, 'coffee'),
+        canteenSpot(canteen.fridge, canteen.fridge.r, 'fridge'),
+        canteenSpot(canteen.sink, canteen.sink.r, 'sink'),
+        lotSpot(bay),
+      ];
+      const far = (s: Spot) => Math.hypot(s.out[0].x - m.x, s.out[0].z - m.z);
+      const spot = spots.reduce((a, b) => (far(b) < far(a) ? b : a));
+      m.spot = spot;
+      Object.assign(m, { x: spot.out[0].x, z: spot.out[0].z, r: spot.r });
+      if (m.leaving) plan(m, leave(m));
+      else if (spot.k === 'coffee') plan(m, coffee(m));
+      else if (spot.k === 'fridge' && m.lunch === 'none') plan(m, lunch(m));
+      else if (spot.k === 'sink' || m.lunch !== 'none') plan(m, [clearUp(m)]);
+      else plan(m, toDesk(m));
+    }
+    goal.clear();
+  }
+
   // ========== Per frame ==========
 
   function advance(m: Member, dt: number, inWay: StaffObstacle[]) {
@@ -584,6 +755,10 @@ export function createStaff(site: StaffSite) {
     /** De collega's (alleen lezen). */
     staff: staff as readonly Staff[],
     update,
+    snapshot,
+    follow,
+    track,
+    adopt,
     /** Waar ze voor blijven staan: spelers, de heftruck, de pompwagen, losse pallets. */
     setObstacles(source: () => StaffObstacle[]) {
       obstacles = source;

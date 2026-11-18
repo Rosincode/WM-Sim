@@ -23,6 +23,9 @@ import { CARRY_AHEAD, dropLoad } from './warehouseView';
 const TICK_MS = 100;
 const HEARTBEAT_MS = 1000;
 const HOST_RESEND_MS = 10_000;
+/** Zo vaak (ms) stuurt de host de stand van de kantoormedewerkers rond, en hooguit zo lang niet als er niets verandert. */
+const STAFF_MS = 200;
+const STAFF_HEARTBEAT_MS = 1000;
 /** Hoe vaak de host de wereld hooguit op de broker bewaart (ms). */
 const SAVE_MS = 3000;
 const NAME_KEY = 'wm-sim.name';
@@ -99,6 +102,8 @@ interface Options {
   seatHipY: number;
   /** Hoogte van de heupen van iemand die op een stoel zit. */
   chairHipY: number;
+  /** De kantoormedewerkers: de host stuurt hun stand rond, de anderen volgen die. */
+  staff: { net(): unknown; follow(data: unknown): void; lead(): void };
   /** Zit deze speler op een stoel (aan een bureau)? */
   isSitting(): boolean;
   isDriving(): boolean;
@@ -508,6 +513,8 @@ export function mountMultiplayer(o: Options) {
       // Een tabblad op de achtergrond speelt niet mee (de game staat daar stil): geen figuur laten zien.
       if (!document.hidden) sendPose(true);
       if (room.isHost) sendState();
+    } else if (kind === 'st') {
+      if (!room.isHost) o.staff.follow(data); // alleen de host laat ze lopen
     } else if (kind === 'p' && isObj(data)) {
       const a = avatars.get(from.id) ?? addAvatar(from);
       const wasNew = !a.placed;
@@ -723,6 +730,8 @@ export function mountMultiplayer(o: Options) {
 
   let tickAt = 0;
   let chipAt = 0;
+  let staffAt = 0;
+  let lastStaff = '';
 
   return {
     /** Naam van de speler die nu met de heftruck rijdt, of null. */
@@ -734,6 +743,15 @@ export function mountMultiplayer(o: Options) {
         if (!a.placed || a.pose.d === 1 || a.pose.s === 1) continue;
         const p = a.character.group.position;
         out.push({ minX: p.x - 0.28, maxX: p.x + 0.28, minZ: p.z - 0.28, maxZ: p.z + 0.28, minY: p.y, maxY: p.y + 1.8 });
+      }
+      return out;
+    },
+    /** Waar andere spelers op een stoel zitten (daar gaat een collega niet zitten). */
+    seated() {
+      const out: { x: number; z: number }[] = [];
+      for (const a of avatars.values()) {
+        if (!a.placed || a.pose.s !== 1) continue;
+        out.push({ x: a.pose.x, z: a.pose.z });
       }
       return out;
     },
@@ -852,6 +870,17 @@ export function mountMultiplayer(o: Options) {
       onlineSince ||= now;
 
       sendPose();
+
+      // Kantoormedewerkers: de host stuurt hun stand rond, zolang er anderen zijn
+      if (room.isHost) {
+        o.staff.lead();
+        const staffNow = avatars.size ? JSON.stringify(o.staff.net()) : '';
+        if (staffNow && now - staffAt >= STAFF_MS && (staffNow !== lastStaff || now - staffAt > STAFF_HEARTBEAT_MS) && !room.congested) {
+          staffAt = now;
+          lastStaff = staffNow;
+          room.send('st', JSON.parse(staffNow));
+        }
+      }
 
       // Lokale wijziging aan de gedeelde wereld: nieuwe revisie naar iedereen
       const sim = simKey();

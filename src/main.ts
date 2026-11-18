@@ -473,7 +473,7 @@ warehouse.counter.setObstacles(() => [...humanObstacles(), ...drivers.obstacles(
 const drivers = mountDrivers({ scene, hall, exterior, ...warehouse.docks, obstacles: humanObstacles, visitors: walkers });
 // --- Kantoormedewerkers: komen met de auto, werken op het kantoor, halen koffie en eten in de kantine ---
 // Handig bij testen: ?staff=120 laat ze vooraf al 120 seconden hun gang gaan
-const staff = mountStaff({ scene, hall, obstacles: humanObstacles, playerSeat: () => chair, seatUsed: (i) => warehouse.docks.drivers.drivers.some((d) => d.seat === i), skip: Number(params.get('staff')) || 0 });
+const staff = mountStaff({ scene, hall, obstacles: humanObstacles, playerSeat: () => chair, seatUsed: (i) => warehouse.docks.drivers.drivers.some((d) => d.seat === i), othersSeated: () => multiplayer?.seated() ?? [], skip: Number(params.get('staff')) || 0 });
 /** Hoe ver de nooduitgang (entree in de voorgevel) openstaat: 0 = dicht, 1 = open. */
 let exitOpen = 0;
 // --- Geluid van alles wat rijdt: motor, wielen, hydrauliek en piepers (src/ui/sounds.ts) ---
@@ -510,6 +510,7 @@ const multiplayer = params.has('solo')
       },
       seatHipY: forklift.seat.y - 0.56,
       chairHipY: CHAIR_HIP_Y,
+      staff,
       isSitting: () => !!chair,
       isDriving: () => driving,
       look: () => (view.mode === 'first' ? view.look : { yaw: 0, pitch: 0 }),
