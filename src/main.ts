@@ -243,6 +243,7 @@ const rocket = createRocketLauncher({
 });
 
 // De rode knop in de kantine, op de penant tussen de ramen: N laat ver weg (waar je op uitkijkt) een kernbom vallen.
+// Er staat bewust geen aanwijzing bij in beeld: wat de knop doet is een verrassing.
 const strikeButton = new THREE.Group();
 {
   const plate = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.28, 0.05), STYLE.dark);
@@ -810,8 +811,6 @@ renderer.setAnimationLoop((now) => {
       list.push(otherDriver ? { html: `De heftruck is bezet door ${esc(otherDriver)}`, off: true } : { key: 'R', html: 'In de heftruck stappen' });
     }
   }
-  if (nearStrikeButton() && strikeButton.visible)
-    list.push(rocket.striking ? { html: 'Kernbom onderweg: kijk uit het raam', off: true } : { key: 'N', html: 'Kernbom laten vallen (kijk uit het raam)' });
   if (radio.hint) list.push(hintPrompt(radio.hint));
   if (printer.hint) list.push(hintPrompt(printer.hint));
   prompts.set(list);
