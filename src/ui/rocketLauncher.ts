@@ -13,7 +13,8 @@ import type { Solid } from './scene/warehouse';
 //   InstancedMesh krijgt schaal nul, en van een heel grote mesh (de locatielabels samen, de vloerverf) alleen de
 //   driehoeken die er helemaal binnen vallen. Wat er stond wordt onthouden, zodat herstellen alles terugzet;
 // - wat verdwijnt vliegt als los onderdeel weg (dezelfde vorm en hetzelfde materiaal) en blijft als puin liggen;
-// - heel grote onderdelen (vloer, wanden, dak, spanten) blijven staan;
+// - in heel grote onderdelen (wanden, gevels, dak, spanten) slaat de inslag een gat: het materiaal tekent niets
+//   meer binnen de ontploffing (zie holed). Alleen de vloer en het terrein zelf blijven heel, met een schroeiplek;
 // - mensen, robots en voertuigen (userData.blastUnit) gaan in hun geheel: een mens wordt weggeblazen, een machine
 //   valt uit elkaar. De sim rijdt gewoon door; na een paar tellen staan ze er weer, waar de sim ze dan heeft;
 // - tekent de eigenaar zijn exemplaren opnieuw (de voorraad in de stellingen), dan wordt de schade er weer overheen gelegd.
@@ -42,8 +43,10 @@ interface Options {
 
 /** Straal van een ontploffing (m). */
 const BLAST = 4.5;
-/** Onderdelen met een grotere straal dan dit (m) blijven staan: vloer, wanden, dak, spanten. */
+/** Onderdelen met een grotere straal dan dit (m) vliegen niet weg: daar komt een gat in (wanden, gevels, dak, spanten). */
 const MAX_SIZE = 7;
+/** Zoveel inslagen kunnen tegelijk een gat in wanden en dak houden; daarboven groeien de oudste gaten dicht. */
+const MAX_HOLES = 48;
 const SPEED = 60;
 const RANGE = 160;
 const COOLDOWN = 0.7;
@@ -65,7 +68,7 @@ type Zone = { p: THREE.Vector3; r: number };
 type Puff = { mesh: THREE.Mesh; vel: THREE.Vector3; age: number; life: number; size: number; gravity: number };
 /** Een los stuk dat wegvliegt, stuitert en blijft liggen. state: 0 = vliegt, 1 = gaat liggen, 2 = ligt. */
 type Debris = { pivot: THREE.Group; /** Begon binnen de hal: blijft daar. */ indoor: boolean; vel: THREE.Vector3; axis: THREE.Vector3; spin: number; thin: THREE.Vector3; rest: number; state: 0 | 1 | 2; flat: THREE.Quaternion; settle: number };
-type Rocket = { group: THREE.Group; dir: THREE.Vector3; left: number; smoke: number };
+type Rocket = { group: THREE.Group; dir: THREE.Vector3; left: number; smoke: number; /** Stopt het razen van de raket. */ hush: () => void };
 type Piece = { geometry: THREE.BufferGeometry; material: THREE.Material | THREE.Material[]; matrix: THREE.Matrix4; size: number };
 type Ring = { mesh: THREE.Mesh; age: number };
 type Fire = { at: THREE.Vector3; left: number; size: number; flame: number; fume: number };
@@ -165,13 +168,83 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
   const local = new THREE.Vector3();
   const box = new THREE.Box3();
 
+  // ---------- Gaten in grote onderdelen (wanden, gevels, dak) ----------
+  // Zo'n onderdeel krijgt een eigen kopie van zijn materiaal die niets tekent binnen een inslag. De inslagen staan in
+  // één lijst die alle kopieën delen; herstellen zet de eigen materialen terug.
+  const holeZones = { value: Array.from({ length: MAX_HOLES }, () => new THREE.Vector4()) };
+  const holeCount = { value: 0 };
+  const holedMaterials = new Map<THREE.Material, THREE.Material>();
+  /** De onderdelen met een gat erin, met hun eigen materiaal. */
+  const holedMeshes = new Map<THREE.Mesh, THREE.Material | THREE.Material[]>();
+  function holed(material: THREE.Material) {
+    let copy = holedMaterials.get(material);
+    if (copy) return copy;
+    copy = material.clone();
+    const before = material.onBeforeCompile;
+    copy.onBeforeCompile = (shader, renderer) => {
+      before?.call(copy, shader, renderer);
+      shader.uniforms.blastZones = holeZones;
+      shader.uniforms.blastCount = holeCount;
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vBlastPos;')
+        .replace(
+          '#include <project_vertex>',
+          `#include <project_vertex>
+          #ifdef USE_INSTANCING
+            vBlastPos = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;
+          #else
+            vBlastPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+          #endif`,
+        );
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', `#include <common>\nvarying vec3 vBlastPos;\nuniform vec4 blastZones[${MAX_HOLES}];\nuniform int blastCount;`)
+        .replace(
+          '#include <clipping_planes_fragment>',
+          `#include <clipping_planes_fragment>
+          for (int i = 0; i < ${MAX_HOLES}; i++) {
+            if (i >= blastCount) break;
+            vec3 away = vBlastPos - blastZones[i].xyz;
+            if (away.y > 0.0) away.y *= ${ABOVE.toFixed(2)}; // dezelfde regel als reach(): erboven stort het ook in
+            // een rafelige rand
+            float edge = blastZones[i].w * (0.88 + 0.12 * sin(vBlastPos.x * 2.3 + vBlastPos.y * 3.1) * sin(vBlastPos.z * 2.9 + vBlastPos.y * 1.7));
+            if (dot(away, away) < edge * edge) discard;
+          }`,
+        );
+    };
+    copy.customProgramCacheKey = () => `blast-holes:${material.customProgramCacheKey()}`;
+    holedMaterials.set(material, copy);
+    return copy;
+  }
+  /** Geeft een groot onderdeel het materiaal met gaten. De vloer en het terrein (plat, op de grond) blijven heel. */
+  function pierce(mesh: THREE.Mesh) {
+    if (holedMeshes.has(mesh)) return;
+    box.setFromObject(mesh);
+    if (box.max.y < 1 && box.max.y - box.min.y < 0.5) return;
+    holedMeshes.set(mesh, mesh.material);
+    mesh.material = Array.isArray(mesh.material) ? mesh.material.map(holed) : holed(mesh.material);
+  }
+  function refreshHoles() {
+    const list = zones.slice(-MAX_HOLES);
+    list.forEach((z, i) => holeZones.value[i].set(z.p.x, z.p.y, z.p.z, z.r));
+    holeCount.value = list.length;
+  }
+  /** Ligt dit punt in een gat (een eerdere inslag)? */
+  const inHole = (q: THREE.Vector3) => zones.slice(-MAX_HOLES).some((z) => reach(z.p, q.x, q.y, q.z) <= z.r * 0.88);
+
+  /** Zet hit(): het onderdeel raakt de ontploffing maar is te groot om weg te vliegen (er komt een gat in). */
+  let tooBig = false;
   /** Valt een onderdeel (geometrie met wereldmatrix `world`) binnen de ontploffing? Het midden komt in `center`. */
   function hit(geo: THREE.BufferGeometry, p: THREE.Vector3, r: number) {
     if (!geo.boundingSphere) geo.computeBoundingSphere();
     if (!geo.boundingBox) geo.computeBoundingBox();
     const radius = geo.boundingSphere!.radius * world.getMaxScaleOnAxis();
     center.copy(geo.boundingSphere!.center).applyMatrix4(world);
-    if (radius > MAX_SIZE || center.distanceTo(p) > r / ABOVE + radius) return 0;
+    tooBig = false;
+    if (center.distanceTo(p) > r / ABOVE + radius) return 0;
+    if (radius > MAX_SIZE) {
+      tooBig = true;
+      return 0;
+    }
     // precies: het dichtstbijzijnde punt van de doos om het onderdeel
     local.copy(p).applyMatrix4(inv.copy(world).invert());
     geo.boundingBox!.clampPoint(local, near).applyMatrix4(world);
@@ -188,11 +261,13 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     if (!rec) instanced.set(mesh, (rec = { saved: new Map(), version: mesh.instanceMatrix.version }));
     const flies = pieces && solidLook(mesh.material);
     let changed = false;
+    let big = false;
     for (let i = 0; i < mesh.count; i++) {
       mesh.getMatrixAt(i, own);
       if (isGone(own)) continue;
       world.multiplyMatrices(mesh.matrixWorld, own);
       const size = hit(mesh.geometry, p, r);
+      if (tooBig) big = true;
       if (!size) continue;
       rec.saved.set(i, own.clone());
       mesh.setMatrixAt(i, GONE);
@@ -201,6 +276,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     }
     if (changed) mesh.instanceMatrix.needsUpdate = true;
     rec.version = mesh.instanceMatrix.version;
+    if (big) pierce(mesh); // spanten, leidingen: te lang om weg te vliegen
   }
 
   function blastMesh(mesh: THREE.Mesh, p: THREE.Vector3, r: number, pieces: Piece[]) {
@@ -214,8 +290,9 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
       if (solidLook(mesh.material)) pieces.push({ geometry: geo, material: mesh.material, matrix: world.clone(), size });
       return;
     }
-    // Een heel grote mesh blijft staan; alleen kleine vlakken die er helemaal binnen vallen gaan eruit
-    // (een locatielabel, een stukje vloerverf).
+    // In een heel grote mesh komt een gat (wand, gevel, dak); kleine vlakken die er helemaal binnen vallen gaan er
+    // in hun geheel uit (een locatielabel, een stukje vloerverf).
+    if (tooBig) pierce(mesh);
     const index = geo.index;
     const radius = geo.boundingSphere!.radius * world.getMaxScaleOnAxis();
     if (!index || index.count > 600_000 || radius <= MAX_SIZE || center.distanceTo(p) > r / ABOVE + radius) return;
@@ -403,11 +480,16 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     }
     cuts.clear();
     zones.length = 0;
+    refreshHoles();
+    for (const [mesh, material] of holedMeshes) mesh.material = material;
+    holedMeshes.clear();
     for (const [unit, entry] of [...dead]) respawn(unit, entry, true);
     for (const d of [...debris]) if (d !== flight?.body) removeDebris(d); // wie zelf nog vliegt, vliegt door
     for (const s of scorches) fx.remove(s);
     scorches.length = 0;
     fires.length = 0;
+    for (const q of puffs) fx.remove(q.mesh); // ook de rook is weg
+    puffs.length = 0;
     shots = 0;
     passFrom = null;
     refreshPanel();
@@ -494,6 +576,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     seen.add(key);
     shots++;
     zones.push({ p: p.clone(), r: BLAST });
+    refreshHoles();
     if (from?.quiet) {
       destroy(p, BLAST, 'units');
       if (p.y < 2.2) scorch(p);
@@ -552,7 +635,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     if (p.y < 2.2) scorch(p);
     const d = camera.getWorldPosition(center).distanceTo(p);
     shake = Math.max(shake, THREE.MathUtils.clamp(1.5 - d / 35, 0, 1));
-    sound('boom', THREE.MathUtils.clamp(1.15 - d / 90, 0.15, 1));
+    boomSound(p);
     refreshPanel();
   }
 
@@ -608,52 +691,133 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     onKilled?.(by);
   }
 
-  // ---------- Geluid: ter plekke opgewekt, net als de rest van de game ----------
+  // ---------- Geluid: ter plekke opgewekt (Web Audio), net als de rest van de game ----------
+  // - afvuren: een doffe plof uit de buis en het sissen van de motor;
+  // - onderweg: de raket raast, steeds zachter naarmate hij verder weg is;
+  // - inslag: een scherpe knal, een lage dreun die uitrolt, de galm van de hal en puin dat neerklettert.
+  // Verder weg klinkt een inslag zachter en later (het geluid doet er even over), links of rechts volgt de kijkrichting.
+  // Het volume volgt de schuif bij menu › Geluid.
   let audio: AudioContext | null = null;
+  let master: GainNode | null = null;
   let noise: AudioBuffer | null = null;
-  function sound(kind: 'launch' | 'boom', level = 1) {
+  function ready() {
     try {
-      audio ??= new AudioContext();
-      if (audio.state === 'suspended') void audio.resume();
-      if (!noise) {
+      if (!audio) {
+        audio = new AudioContext();
+        const squash = audio.createDynamicsCompressor(); // meerdere knallen tegelijk: niet kraken
+        squash.threshold.value = -6; // pas vlak voor het maximum ingrijpen: het mag echt hard
+        squash.ratio.value = 6;
+        master = audio.createGain();
+        master.connect(squash).connect(audio.destination);
+        // galm van de hal: een paar echo's die steeds doffer worden
+        const echo = audio.createDelay(0.5);
+        echo.delayTime.value = 0.13;
+        const back = audio.createGain();
+        back.gain.value = 0.36;
+        const dull = audio.createBiquadFilter();
+        dull.type = 'lowpass';
+        dull.frequency.value = 1300;
+        master.connect(echo).connect(dull).connect(back).connect(echo);
+        back.connect(squash);
         noise = audio.createBuffer(1, audio.sampleRate * 2, audio.sampleRate);
         const data = noise.getChannelData(0);
         for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
       }
-      const t = audio.currentTime;
-      const src = audio.createBufferSource();
-      src.buffer = noise;
-      const filter = audio.createBiquadFilter();
-      const gain = audio.createGain();
-      src.connect(filter).connect(gain).connect(audio.destination);
-      if (kind === 'launch') {
-        filter.type = 'bandpass';
-        filter.frequency.setValueAtTime(1400, t);
-        filter.frequency.exponentialRampToValueAtTime(260, t + 0.5);
-        gain.gain.setValueAtTime(0.22, t);
-        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.55);
-        src.start(t);
-        src.stop(t + 0.6);
-      } else {
-        filter.type = 'lowpass';
-        filter.frequency.setValueAtTime(1100, t);
-        filter.frequency.exponentialRampToValueAtTime(70, t + 1.2);
-        gain.gain.setValueAtTime(0.55 * level, t);
-        gain.gain.exponentialRampToValueAtTime(0.001, t + 1.5);
-        src.start(t);
-        src.stop(t + 1.6);
-        const thump = audio.createOscillator();
-        const thumpGain = audio.createGain();
-        thump.frequency.setValueAtTime(95, t);
-        thump.frequency.exponentialRampToValueAtTime(28, t + 0.5);
-        thumpGain.gain.setValueAtTime(0.5 * level, t);
-        thumpGain.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
-        thump.connect(thumpGain).connect(audio.destination);
-        thump.start(t);
-        thump.stop(t + 0.65);
+      if (audio.state === 'suspended') void audio.resume();
+      let volume = 0.7;
+      try {
+        const saved = Number(localStorage.getItem('wm-sim.sound.volume') ?? NaN);
+        if (saved >= 0 && saved <= 1) volume = saved;
+      } catch {
+        // geen localStorage: standaardvolume
       }
+      master!.gain.value = volume * 4; // de raketwerper is veruit het hardste geluid in de hal
+      return audio.state === 'running';
     } catch {
-      // geen geluid beschikbaar: stil doorgaan
+      return false; // geen geluid beschikbaar: stil doorgaan
+    }
+  }
+  // De browser laat pas geluid toe na een klik of toets van de speler zelf: daarna hoor je ook de inslagen van anderen.
+  window.addEventListener('pointerdown', ready);
+  window.addEventListener('keydown', ready);
+
+  /** Ruis door een filter, met een verloop in toon en sterkte. Geeft de sterkteregelaar terug. */
+  function hiss(type: BiquadFilterType, from: number, to: number, level: number, at: number, seconds: number, pan = 0, q = 0.8) {
+    const src = audio!.createBufferSource();
+    src.buffer = noise;
+    src.loop = true;
+    const filter = audio!.createBiquadFilter();
+    filter.type = type;
+    filter.Q.value = q;
+    filter.frequency.setValueAtTime(from, at);
+    filter.frequency.exponentialRampToValueAtTime(to, at + seconds);
+    const gain = audio!.createGain();
+    gain.gain.setValueAtTime(level, at);
+    gain.gain.exponentialRampToValueAtTime(0.0008, at + seconds);
+    const side = audio!.createStereoPanner();
+    side.pan.value = pan;
+    src.connect(filter).connect(gain).connect(side).connect(master!);
+    src.start(at, Math.random() * 1.5);
+    src.stop(at + seconds + 0.05);
+    return gain;
+  }
+  /** Een toon die zakt (de dreun). */
+  function thud(wave: OscillatorType, from: number, to: number, level: number, at: number, seconds: number, pan = 0) {
+    const osc = audio!.createOscillator();
+    osc.type = wave;
+    osc.frequency.setValueAtTime(from, at);
+    osc.frequency.exponentialRampToValueAtTime(to, at + seconds);
+    const gain = audio!.createGain();
+    gain.gain.setValueAtTime(level, at);
+    gain.gain.exponentialRampToValueAtTime(0.0008, at + seconds);
+    const side = audio!.createStereoPanner();
+    side.pan.value = pan;
+    osc.connect(gain).connect(side).connect(master!);
+    osc.start(at);
+    osc.stop(at + seconds + 0.05);
+  }
+
+  /** Afvuren: plof uit de buis, dan het sissen van de motor. */
+  function launchSound() {
+    if (!ready()) return;
+    const t = audio!.currentTime;
+    thud('sine', 190, 45, 0.9, t, 0.22);
+    hiss('lowpass', 2600, 300, 0.7, t, 0.16);
+    hiss('bandpass', 2400, 500, 0.55, t + 0.03, 0.7, 0, 1.4);
+  }
+  /** De raket onderweg: raast tot hij inslaat, zachter naarmate hij verder weg is. Geeft terug hoe je hem stopt. */
+  function flightSound(seconds: number) {
+    if (!ready()) return () => {};
+    const t = audio!.currentTime;
+    const len = Math.max(0.15, seconds);
+    const gain = hiss('bandpass', 900, 520, 0.5, t, len + 0.3, 0, 2.2);
+    gain.gain.cancelScheduledValues(t);
+    gain.gain.setValueAtTime(0.5, t);
+    gain.gain.exponentialRampToValueAtTime(0.06, t + len);
+    return () => {
+      const now = audio!.currentTime;
+      gain.gain.cancelScheduledValues(now);
+      gain.gain.setTargetAtTime(0, now, 0.02);
+    };
+  }
+  /** De inslag op punt `p`: hoe verder weg, hoe zachter, doffer en later. */
+  function boomSound(p: THREE.Vector3) {
+    if (!ready()) return;
+    camera.getWorldPosition(camPos);
+    const d = camPos.distanceTo(p);
+    const level = THREE.MathUtils.clamp(1.2 / (1 + d / 22), 0.08, 1);
+    step.setFromMatrixColumn(camera.matrixWorld, 0); // rechts van de camera
+    const pan = d < 1 ? 0 : THREE.MathUtils.clamp(((p.x - camPos.x) * step.x + (p.z - camPos.z) * step.z) / d, -1, 1) * 0.75;
+    const t = audio!.currentTime + Math.min(d / 340, 0.6);
+    const far = THREE.MathUtils.clamp(d / 60, 0, 1); // ver weg hoor je vooral de lage dreun
+    hiss('highpass', 1800, 900, 1.1 * level * (1 - 0.8 * far), t, 0.09, pan); // de knal
+    hiss('lowpass', 2600 - 1700 * far, 55, 1.2 * level, t, 1.9, pan); // de dreun die uitrolt
+    thud('sine', 110, 24, 1.3 * level, t, 1.0, pan);
+    thud('triangle', 62, 30, 0.6 * level, t + 0.02, 0.6, pan);
+    // puin dat neerklettert
+    for (let i = 0; i < 9; i++) {
+      const at = t + 0.35 + Math.random() * 1.5;
+      hiss('bandpass', 1200 + Math.random() * 2600, 500 + Math.random() * 600, 0.16 * level * (1 - 0.6 * far), at, 0.05 + Math.random() * 0.09, THREE.MathUtils.clamp(pan + (Math.random() - 0.5) * 0.6, -1, 1), 3);
     }
   }
 
@@ -700,7 +864,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
       let o: THREE.Object3D | null = h.object;
       let skip = false;
       for (; o; o = o.parent) if (!o.visible || o === camera || o === fx || o.userData.noBlast) skip = true; // eigen handen en lichaam, verborgen dingen, eigen rook en puin
-      if (skip) continue;
+      if (skip || (holedMeshes.has(h.object as THREE.Mesh) && inHole(h.point))) continue; // door een gat schiet je heen
       target.copy(h.point).addScaledVector(camDir, -0.05);
       break;
     }
@@ -712,9 +876,9 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     dir.normalize();
     group.quaternion.setFromUnitVectors(FORWARD, dir);
     fx.add(group);
-    rockets.push({ group, dir, left, smoke: 0 });
+    rockets.push({ group, dir, left, smoke: 0, hush: flightSound(left / SPEED) });
     for (let i = 0; i < 6; i++) puff(smoke, camPos.clone().addScaledVector(camDir, -0.6), scatter(1.2).addScaledVector(camDir, -3), rnd(0.25, 0.5), rnd(0.5, 1));
-    sound('launch');
+    launchSound();
   }
 
   const active = () => equipped && allowed;
@@ -739,7 +903,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
   // ---------- Menu: pakken en herstellen ----------
   const panel = document.createElement('div');
   panel.innerHTML = `<div><b>3</b>: raketwerper pakken of wegleggen (te voet, in first person) · <b>Klik</b>: vuren · <b>1</b>/<b>2</b>: terug naar scanner of tablet</div>
-    <div style="margin-top:6px;color:#9aa0a6">Alles kan kapot: stellingen, voorraad, robots, karren, vrachtwagens en mensen. Robots, voertuigen en mensen komen na een paar tellen vanzelf terug. Iedereen in de kamer ziet dezelfde schade, en de raket van een ander blaast jou op (je begint dan weer op de startplek). Herstellen geldt ook voor iedereen. De schade is alleen beeld: de voorraad en de WMS merken er niets van.</div>
+    <div style="margin-top:6px;color:#9aa0a6">Alles kan kapot: stellingen, voorraad, robots, karren, vrachtwagens en mensen, en in wanden, gevels en dak sla je gaten (ook van buitenaf). Robots, voertuigen en mensen komen na een paar tellen vanzelf terug. Iedereen in de kamer ziet dezelfde schade, en de raket van een ander blaast jou op (je begint dan weer op de startplek). Herstellen geldt ook voor iedereen. De schade is alleen beeld: de voorraad en de WMS merken er niets van.</div>
     <div class="state" style="margin-top:10px"></div>
     <div style="display:flex;gap:8px;margin-top:10px">
       <button class="restore" style="padding:8px 14px;border:0;border-radius:6px;background:#2e7d4f;color:#fff;font:600 14px system-ui,sans-serif;cursor:pointer">Magazijn herstellen</button>
@@ -791,6 +955,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
         puff(fire, r.group.position.clone().addScaledVector(r.dir, -0.5), scatter(0.3), rnd(0.1, 0.16), 0.18);
       }
       if (r.left > 1e-4) continue;
+      r.hush();
       fx.remove(r.group);
       rockets.splice(i, 1);
       explode(r.group.position);

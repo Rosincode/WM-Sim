@@ -3,6 +3,7 @@ import { onTop } from './scene/style';
 
 // Radio in het magazijn: speelt de live stream van een echte zender (internetradio).
 // M (als je erbij staat): uit → PiratenRadio.nl → 100% NL → uit. + en -: harder en zachter. Verder weg klinkt hij zachter.
+// De volumeknop gaat door tot 15: boven de 10 wordt hij nog harder en gaat het geluid oversturen (vervormen).
 // De radio is van iedereen: de zender en het volume die één speler kiest, gelden voor alle spelers (zie src/ui/multiplayer.ts).
 // De voorkant (luidspreker en display) wijst naar de -Z-kant.
 
@@ -12,8 +13,12 @@ const STATIONS = [
 ];
 /** Binnen deze afstand bedien je de radio met M. */
 const NEAR = 2.5;
-/** Volumeknop: stand 0 (stil) t/m 10 (voluit). Het volume loopt kwadratisch op, zodat de lage standen echt zacht zijn. */
-const MAX_LEVEL = 10;
+/**
+ * Volumeknop: stand 0 (stil) t/m 10 (voluit), en door tot 15: dan stuurt de versterker over en vervormt het geluid.
+ * Tot 10 loopt het volume kwadratisch op, zodat de lage standen echt zacht zijn.
+ */
+const CLEAN_LEVEL = 10;
+const MAX_LEVEL = 15;
 const DEFAULT_LEVEL = 8;
 
 export function createRadio() {
@@ -71,7 +76,8 @@ export function createRadio() {
       // Volumebalk: een blokje per stand
       for (let i = 0; i < MAX_LEVEL; i++) {
         ctx.globalAlpha = i < level ? 1 : 0.22;
-        ctx.fillRect(33 + i * 19.4, 80, 15, 8);
+        ctx.fillStyle = i < CLEAN_LEVEL ? s.color : '#ff2a1f'; // boven de 10: in het rood
+        ctx.fillRect(31 + i * 13, 80, 10, 8);
       }
       ctx.globalAlpha = 1;
     }
@@ -79,14 +85,66 @@ export function createRadio() {
   }
   draw();
 
-  // Een gewoon audio-element: de stream is altijd live, er wordt niets gebufferd als de radio uit staat.
-  const audio = new Audio();
-  audio.preload = 'none';
-  audio.addEventListener('error', () => {
-    if (station < 0 || !audio.error) return;
-    failed = true;
-    draw();
-  });
+  // Twee audio-elementen; de stream is altijd live, er wordt niets gebufferd als de radio uit staat.
+  // - `wired` loopt door een versterker (Web Audio): die kan harder dan voluit en kan oversturen. Dat mag van de
+  //   browser alleen als de zender het toestaat (CORS);
+  // - `plain` is het gewone element, voor een zender die dat niet toestaat: die gaat tot voluit en vervormt niet.
+  const plain = new Audio();
+  plain.preload = 'none';
+  const wired = new Audio();
+  wired.preload = 'none';
+  wired.crossOrigin = 'anonymous';
+  let audio = wired;
+  /** Zenders die niet door de versterker mogen. */
+  const unwired = new Set<number>();
+  let amp: { ctx: AudioContext; drive: GainNode; shaper: WaveShaperNode; out: GainNode } | null = null;
+  let ampFailed = false;
+  /** De versterker: voorversterker → vervormer → eindversterker. Pas maken als de radio voor het eerst aangaat. */
+  function wire() {
+    if (amp || ampFailed) return;
+    try {
+      const ctx = new AudioContext();
+      const drive = ctx.createGain();
+      const shaper = ctx.createWaveShaper();
+      shaper.oversample = '4x';
+      const out = ctx.createGain();
+      ctx.createMediaElementSource(wired).connect(drive).connect(shaper).connect(out).connect(ctx.destination);
+      amp = { ctx, drive, shaper, out };
+      tone();
+    } catch {
+      ampFailed = true; // geen Web Audio: alles via het gewone element
+    }
+  }
+  /** Afkapcurve van de vervormer: hoe hoger `amount`, hoe harder de toppen worden platgedrukt. */
+  function clip(amount: number) {
+    const curve = new Float32Array(1024);
+    for (let i = 0; i < curve.length; i++) {
+      const x = (i / (curve.length - 1)) * 2 - 1;
+      curve[i] = Math.tanh(x * amount) / Math.tanh(amount);
+    }
+    return curve;
+  }
+  /** Zet de versterker naar de stand van de volumeknop: tot 10 schoon, daarboven steeds verder overstuurd. */
+  function tone() {
+    if (!amp) return;
+    const over = Math.max(0, level - CLEAN_LEVEL);
+    amp.drive.gain.value = 1 + over * 5;
+    amp.shaper.curve = over ? clip(1.5 + over) : null;
+  }
+  for (const el of [plain, wired])
+    el.addEventListener('error', () => {
+      if (station < 0 || !el.error || el !== audio) return;
+      if (el === wired) {
+        // deze zender mag niet door de versterker: dan gewoon, zonder oversturen
+        unwired.add(station);
+        audio = plain;
+        plain.src = STATIONS[station].url;
+        play();
+        return;
+      }
+      failed = true;
+      draw();
+    });
 
   /** De browser hield het geluid tegen (nog geen klik of toets van deze speler): bij de eerstvolgende opnieuw proberen. */
   let blocked = false;
@@ -95,8 +153,14 @@ export function createRadio() {
   function play() {
     const i = station;
     blocked = false;
-    audio.play().catch((err: unknown) => {
-      if (station !== i || (err instanceof DOMException && err.name === 'AbortError')) return; // intussen doorgeschakeld
+    if (audio === wired) {
+      wire();
+      if (amp && amp.ctx.state === 'suspended') void amp.ctx.resume();
+    }
+    const el = audio;
+    el.play().catch((err: unknown) => {
+      // intussen doorgeschakeld, of deze zender mocht niet door de versterker en speelt nu via het gewone element
+      if (station !== i || el !== audio || (err instanceof DOMException && err.name === 'AbortError')) return;
       if (err instanceof DOMException && err.name === 'NotAllowedError') blocked = true;
       else failed = true;
       draw();
@@ -109,11 +173,13 @@ export function createRadio() {
     failed = false;
     blocked = false;
     noticeUntil = performance.now() + 5000;
-    if (i < 0) {
-      audio.pause();
-      audio.removeAttribute('src');
-      audio.load();
-    } else {
+    for (const el of [plain, wired]) {
+      el.pause();
+      el.removeAttribute('src');
+      el.load();
+    }
+    if (i >= 0) {
+      audio = unwired.has(i) || ampFailed ? plain : wired;
       audio.src = STATIONS[i].url;
       play();
     }
@@ -124,6 +190,7 @@ export function createRadio() {
     const next = THREE.MathUtils.clamp(Math.round(l), 0, MAX_LEVEL);
     if (next === level) return false;
     level = next;
+    tone();
     draw();
     return true;
   }
@@ -145,6 +212,7 @@ export function createRadio() {
   // Een andere speler zette de radio aan voordat deze speler iets had aangeraakt: nu mag het geluid wel.
   const retry = () => {
     if (blocked && station >= 0) play();
+    if (amp && amp.ctx.state === 'suspended' && station >= 0) void amp.ctx.resume();
   };
   window.addEventListener('pointerdown', retry);
   window.addEventListener('keydown', retry);
@@ -160,7 +228,7 @@ export function createRadio() {
     setStation(i: number) {
       tune(Number.isInteger(i) && i >= 0 && i < STATIONS.length ? i : -1);
     },
-    /** De stand van de volumeknop (0 t/m 10); geldt net als de zender voor alle spelers. */
+    /** De stand van de volumeknop (0 t/m 15, boven de 10 overstuurd); geldt net als de zender voor alle spelers. */
     get volume() {
       return level;
     },
@@ -183,13 +251,22 @@ export function createRadio() {
       }
       const next = STATIONS[station + 1];
       if (!s) return `<b>M</b>: radio aanzetten (${STATIONS[0].name})`;
-      return `Radio: <b>${s.name}</b>${failed ? ' (geen verbinding)' : ''} · <b>M</b>: ${next ? next.name : 'uitzetten'} · <b>+</b>/<b>-</b>: volume ${level}/${MAX_LEVEL}`;
+      return `Radio: <b>${s.name}</b>${failed ? ' (geen verbinding)' : ''} · <b>M</b>: ${next ? next.name : 'uitzetten'} · <b>+</b>/<b>-</b>: volume ${level}/${MAX_LEVEL}${level > CLEAN_LEVEL ? (audio === wired && amp ? ' (overstuurd)' : ' (deze zender kan niet oversturen)') : ''}`;
     },
     /** listener: waar de speler staat; hoe verder weg, hoe zachter de radio. */
     update(listener: THREE.Vector3) {
       group.getWorldPosition(world);
       distance = Math.hypot(listener.x - world.x, listener.z - world.z);
-      if (station >= 0) audio.volume = (level / MAX_LEVEL) ** 2 * THREE.MathUtils.clamp(6 / Math.max(distance, 1), 0.35, 1); // in de hele hal goed te horen
+      if (station < 0) return;
+      const near = THREE.MathUtils.clamp(6 / Math.max(distance, 1), 0.35, 1); // in de hele hal goed te horen
+      const clean = (Math.min(level, CLEAN_LEVEL) / CLEAN_LEVEL) ** 2;
+      if (audio === wired && amp) {
+        // boven de 10: nog harder dan voluit (de vervormer drukt de toppen plat)
+        wired.volume = 1;
+        amp.out.gain.value = clean * (1 + Math.max(0, level - CLEAN_LEVEL) * 0.3) * near;
+      } else {
+        audio.volume = clean * near;
+      }
     },
   };
 }
