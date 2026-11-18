@@ -31,7 +31,9 @@ export interface CharacterState {
   /** Kijkrichting van het hoofd t.o.v. het lichaam (rad): yaw + = naar links, pitch + = omhoog. */
   look?: { yaw: number; pitch: number };
   /** Wat de figuur zichtbaar vasthoudt: scanner in de rechterhand of tablet voor de borst. */
-  tool?: 'scanner' | 'tablet';
+  tool?: 'scanner' | 'tablet' | 'rocket';
+  /** Doet de 6-7: onderarmen naar voren, handpalmen omhoog, om de beurt op en neer. */
+  emote?: boolean;
   /** 0..1: is aan het scannen (arm richt, laser aan). */
   scan?: number;
   /**
@@ -464,9 +466,19 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   mesh(box(0.24, 0.002, 0.15), new THREE.MeshBasicMaterial({ color: '#dfe7f1' }), tablet, 0, 0.007, 0).castShadow = false;
   mesh(box(0.24, 0.0022, 0.016), new THREE.MeshBasicMaterial({ color: '#17346b' }), tablet, 0, 0.0072, -0.067).castShadow = false;
   const tabletHands: HandTarget[] = [{ point: new THREE.Vector3() }, { point: new THREE.Vector3() }];
-  scanner.visible = tablet.visible = false;
+  // Raketwerper: een buis op de rechterschouder, de rechterhand aan de greep eronder.
+  const launcher = pivot(torso, -0.2, 0.5, 0.12);
+  const tubeAlong = (top: number, bottom: number, len: number) => new THREE.CylinderGeometry(top, bottom, len, 20).rotateX(Math.PI / 2); // as langs z, `top` voor
+  mesh(tubeAlong(0.055, 0.055, 0.9), device, launcher);
+  mesh(tubeAlong(0.066, 0.066, 0.06), mat('#1b1c1e', 0.7), launcher, 0, 0, 0.45);
+  mesh(tubeAlong(0.055, 0.085, 0.14), mat('#1b1c1e', 0.7), launcher, 0, 0, -0.5);
+  mesh(new THREE.ConeGeometry(0.046, 0.13, 16).rotateX(Math.PI / 2), mat('#c9381c', 0.65), launcher, 0, 0, 0.5);
+  mesh(box(0.034, 0.1, 0.045), mat('#1b1c1e', 0.7), launcher, 0, -0.1, 0.2);
+  const launcherHand: HandTarget = { point: new THREE.Vector3() };
+  scanner.visible = tablet.visible = launcher.visible = false;
   let holdScanner = 0;
   let holdTablet = 0;
+  let emote = 0; // 0..1: hoe ver de armen in de 6-7 staan
 
   const prev = new THREE.Vector3();
   let hasPrev = false;
@@ -607,7 +619,8 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
     });
 
     // Scanner/tablet in de hand (niet terwijl je iets draagt)
-    const tool = state.carrying ? undefined : state.tool;
+    const tool = state.carrying || state.emote ? undefined : state.tool; // voor de 6-7 heb je je handen vrij
+    emote = ease(emote, state.emote && !state.carrying ? 1 : 0, dt, 12);
     const scan = state.scan ?? 0;
     const lookPitch = THREE.MathUtils.clamp(state.look?.pitch ?? 0, -1.1, 1.1);
     const lookYaw = THREE.MathUtils.clamp(state.look?.yaw ?? 0, -1.3, 1.3);
@@ -615,6 +628,8 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
     holdTablet = ease(holdTablet, tool === 'tablet' ? 1 : 0, dt, 10);
     scanner.visible = holdScanner > 0.05;
     tablet.visible = holdTablet > 0.05;
+    launcher.visible = tool === 'rocket';
+    launcher.rotation.x = -lookPitch * 0.75; // richt mee met de blik
     beam.visible = scan > 0 && holdScanner > 0.5;
     laser.opacity = Math.min(1, scan * 3);
     tablet.position.x = -0.2 * seat; // rijdend: in de rechterhand, naast het stuur
@@ -636,6 +651,9 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
         shoulder = THREE.MathUtils.lerp(shoulder, -0.45 - lookPitch * 0.8 - 0.3 * scan, holdScanner);
         elbow = THREE.MathUtils.lerp(elbow, -1.15 + 0.4 * scan, holdScanner);
       }
+      // 6-7: de handen wegen om de beurt, links omhoog als rechts omlaag gaat
+      shoulder = THREE.MathUtils.lerp(shoulder, -0.45 + 0.3 * Math.sin(time * 10 + i * Math.PI), emote);
+      elbow = THREE.MathUtils.lerp(elbow, -1.45 - 0.2 * Math.sin(time * 10 + i * Math.PI), emote);
       a.shoulder.rotation.set(shoulder, 0, a.restZ + a.side * 0.1 * run * gait * (1 - carry) * (1 - seat));
       a.elbow.rotation.x = elbow;
     });
@@ -659,6 +677,13 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
     // Handen met een doel (stuur, scanner/tablet): pas nu, want de romp staat in zijn eindstand
     arms.forEach((a, i) => {
       let target = i ? state.rightHand : state.leftHand;
+      if (emote > 0.5) target = undefined; // de 6-7 doe je met losse handen
+      if (!target && tool === 'rocket' && i) {
+        // rechterhand aan de greep onder de buis
+        launcher.updateWorldMatrix(true, false);
+        target = launcherHand;
+        launcher.localToWorld(target.point.set(0, -0.14, 0.2));
+      }
       if (!target && tool === 'tablet' && tablet.visible && (i || !state.seated)) {
         // handen aan de zijkanten van de tablet (rijdend alleen rechts)
         tablet.updateWorldMatrix(true, false);

@@ -215,15 +215,22 @@ const rocket = createRocketLauncher({
   // blijft erop. Robots en mensen komen terug waar de sim ze op dat moment heeft.
   onExplode: (x, y, z) => multiplayer?.sendBlast(x, y, z),
   onRestore: () => multiplayer?.sendRestore(),
-  self: () => player.position,
-  // Opgeblazen door een andere speler: terug naar de startplek, uit de heftruck of van je stoel
-  onKilled: (by) => {
+  walls: { minX: -HALL.w / 2 + 0.4, maxX: HALL.w / 2 - 0.4, minZ: -HALL.d / 2 + 0.4, maxZ: HALL.d / 2 - 0.4, maxY: HALL.h - 1 },
+  self: player,
+  // Opgeblazen door een andere speler: uit de heftruck of van je stoel, en je vliegt weg (de werper stuurt de
+  // camera zolang rocket.flying). Na de landing begin je weer op de startplek.
+  onLaunched: (by) => {
     if (chair) standUp();
     setDriving(false);
     if (jack.held) holdJack(false);
+    rocket.setAllowed(false);
+    handheld.setActive(false);
+    multiplayer?.sendKilled(by);
+  },
+  onKilled: () => {
     player.position.set(START.player.x, 0, START.player.z);
     player.rotation.y = START.player.r;
-    multiplayer?.sendKilled(by);
+    view.setVehicle(null); // zet het figuur, de camera en wat je vasthoudt weer zoals het hoort
   },
   onRespawn: (unit) => {
     if (unit === forklift.group && !driving && !multiplayer?.forkliftDriver())
@@ -233,6 +240,9 @@ const rocket = createRocketLauncher({
 });
 
 let driving = false;
+/** De 6-7 (toets 6 of 7): je figuur weegt een paar tellen met beide handen; andere spelers zien het ook. */
+let emoteUntil = 0;
+const emoting = () => performance.now() < emoteUntil && !driving && !chair && !pushing && !rocket.flying;
 /** De stoel waar de speler op zit (in het kantoor achter een bureau met de WMS-app, of in de kantine), anders null. */
 let chair: THREE.Object3D | null = null;
 /** Bewerkmodus voor de indeling van de hal (src/ui/editor.ts); werkt alleen in het overzicht. */
@@ -387,6 +397,8 @@ window.addEventListener('keydown', (e) => {
       if (!multiplayer?.jackHolder()) holdJack(true);
     } else if (nearForklift() && !multiplayer?.forkliftDriver()) setDriving(true);
   }
+  const typing = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement;
+  if (!typing && !e.repeat && ['Digit6', 'Digit7', 'Numpad6', 'Numpad7'].includes(e.code)) emoteUntil = performance.now() + 2800;
   if (e.code === 'KeyP' && !e.repeat && !(e.target instanceof HTMLInputElement)) postFx = !postFx;
 });
 
@@ -575,7 +587,8 @@ const multiplayer = params.has('solo')
       isSitting: () => !!chair,
       isDriving: () => driving,
       look: () => (view.mode === 'first' ? view.look : { yaw: 0, pitch: 0 }),
-      tool: () => (view.mode !== 'first' ? 0 : handheld.tool === 'scanner' ? 1 : 2),
+      emote: emoting,
+      tool: () => (view.mode !== 'first' || rocket.flying ? 0 : rocket.active ? 3 : handheld.tool === 'scanner' ? 1 : 2),
       scans: () => handheld.scans,
       beeps: () => ({ count: handheld.beeps, ok: handheld.beepOk }),
       // Scanner van een ander: zachter naarmate hij verder weg staat, links of rechts volgt de kijkrichting
@@ -656,7 +669,7 @@ renderer.setAnimationLoop((now) => {
   last = now;
 
   forklift.update(dt, now / 1000);
-  view.update(dt);
+  if (!rocket.flying) view.update(dt); // opgeblazen: je vliegt, lopen kan even niet
   rocket.update(dt); // na de camera: de klap van een inslag laat hem even schudden
   // In het overzicht staat de camera ver weg en is de dieptebuffer met een voorvlak op 5 cm te grof: onderdelen
   // die een paar cm voor elkaar liggen (grille en ruiten van een vrachtwagen) flikkeren dan door elkaar heen.
@@ -685,7 +698,7 @@ renderer.setAnimationLoop((now) => {
       jack.grip(-1, jackHands[1].point);
       [leftHand, rightHand] = jackHands;
     }
-    character.update(dt, { seated: driving || !!chair, seatHipY: chair ? CHAIR_HIP_Y : forklift.seat.y - 0.56, carrying: warehouse.carrying(), leftHand, rightHand, walk: view.walk, airborne: view.airborne });
+    character.update(dt, { seated: driving || !!chair, seatHipY: chair ? CHAIR_HIP_Y : forklift.seat.y - 0.56, carrying: warehouse.carrying(), emote: emoting(), leftHand, rightHand, walk: view.walk, airborne: view.airborne });
   }
 
   multiplayer?.update(dt);
@@ -714,7 +727,7 @@ renderer.setAnimationLoop((now) => {
 
   // Toetsprompts: wat kun je hier doen, en met welke toets
   const list: Prompt[] = [];
-  if (view.mode !== 'overview') {
+  if (view.mode !== 'overview' && !rocket.flying) {
     if (driving && forklift.hint) list.push(hintPrompt(forklift.hint));
     if (jack.held && jack.hint) list.push(hintPrompt(jack.hint));
     const action = warehouse.action();

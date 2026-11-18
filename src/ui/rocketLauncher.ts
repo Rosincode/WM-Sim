@@ -7,7 +7,7 @@ import type { Solid } from './scene/warehouse';
 // Raketwerper (3): schiet het magazijn kapot. De schade is alleen beeld: de sim, de voorraad en de WMS merken er
 // niets van. Daardoor is herstellen (menu › Raketwerper) altijd veilig. In multiplayer gaat elke inslag (en het
 // herstellen) naar alle spelers (src/ui/multiplayer.ts): iedereen ziet dezelfde schade, en de raket van een ander
-// blaast jou op: je begint dan weer op de startplek.
+// blaast jou op: je vliegt weg (de camera volgt je), en als je geland bent begin je weer op de startplek.
 // Zo werkt de schade:
 // - alles wat binnen de ontploffing valt verdwijnt van zijn plek: een losse mesh wordt verborgen, een exemplaar van een
 //   InstancedMesh krijgt schaal nul, en van een heel grote mesh (de locatielabels samen, de vloerverf) alleen de
@@ -30,9 +30,13 @@ interface Options {
   onExplode?: (x: number, y: number, z: number) => void;
   /** De speler heeft het magazijn hersteld: dat geldt voor iedereen. */
   onRestore?: () => void;
-  /** Waar de speler zelf staat (voeten): de raket van een ander kan hem opblazen. */
-  self?: () => THREE.Vector3;
-  /** De speler is opgeblazen door de raket van `by`: de aanroeper zet hem terug op de startplek. */
+  /** De binnenkant van de hal: puin dat binnen begint ketst tegen de wanden en het dak en blijft dus binnen. */
+  walls?: { minX: number; maxX: number; minZ: number; maxZ: number; maxY: number };
+  /** Het figuur van de speler zelf: de raket van een ander kan hem opblazen. */
+  self?: THREE.Object3D;
+  /** De speler wordt weggeblazen door de raket van `by`: de besturing ligt stil tot hij geland is (zie `flying`). */
+  onLaunched?: (by: string) => void;
+  /** De speler is geland: de aanroeper zet hem terug op de startplek. */
   onKilled?: (by: string) => void;
 }
 
@@ -60,14 +64,14 @@ const reach = (p: THREE.Vector3, x: number, y: number, z: number) => Math.hypot(
 type Zone = { p: THREE.Vector3; r: number };
 type Puff = { mesh: THREE.Mesh; vel: THREE.Vector3; age: number; life: number; size: number; gravity: number };
 /** Een los stuk dat wegvliegt, stuitert en blijft liggen. state: 0 = vliegt, 1 = gaat liggen, 2 = ligt. */
-type Debris = { pivot: THREE.Group; vel: THREE.Vector3; axis: THREE.Vector3; spin: number; thin: THREE.Vector3; rest: number; state: 0 | 1 | 2; flat: THREE.Quaternion; settle: number };
+type Debris = { pivot: THREE.Group; /** Begon binnen de hal: blijft daar. */ indoor: boolean; vel: THREE.Vector3; axis: THREE.Vector3; spin: number; thin: THREE.Vector3; rest: number; state: 0 | 1 | 2; flat: THREE.Quaternion; settle: number };
 type Rocket = { group: THREE.Group; dir: THREE.Vector3; left: number; smoke: number };
 type Piece = { geometry: THREE.BufferGeometry; material: THREE.Material | THREE.Material[]; matrix: THREE.Matrix4; size: number };
 type Ring = { mesh: THREE.Mesh; age: number };
 type Fire = { at: THREE.Vector3; left: number; size: number; flame: number; fume: number };
 type Dead = { scale: THREE.Vector3; until: number; body?: Debris };
 
-export function createRocketLauncher({ scene, camera, canvas, onChange, onRespawn, onExplode, onRestore, self, onKilled }: Options) {
+export function createRocketLauncher({ scene, camera, canvas, onChange, onRespawn, onExplode, onRestore, walls, self, onLaunched, onKilled }: Options) {
   /** Alles wat de werper zelf in de scène zet (raketten, rook, puin, schroeiplekken): dat schiet je niet kapot. */
   const fx = new THREE.Group();
   fx.userData.noBlast = true;
@@ -267,7 +271,8 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     // dichter bij de inslag en lichter = harder weg
     vel.normalize().multiplyScalar((rnd(5, 9) + 9 * Math.max(0, 1 - d / r)) / (1 + size * 0.35));
     vel.y += rnd(2, 6) / (1 + size * 0.2);
-    const piece: Debris = { pivot, vel, axis: scatter(1), spin: rnd(2, 9) / (1 + size), thin: AXES[i].clone().applyQuaternion(dQuat), rest: Math.max(half.getComponent(i), 0.01), state: 0, flat: new THREE.Quaternion(), settle: 0 };
+    const indoor = !!walls && at.x > walls.minX && at.x < walls.maxX && at.z > walls.minZ && at.z < walls.maxZ && at.y < walls.maxY;
+    const piece: Debris = { pivot, indoor, vel, axis: scatter(1), spin: rnd(2, 9) / (1 + size), thin: AXES[i].clone().applyQuaternion(dQuat), rest: Math.max(half.getComponent(i), 0.01), state: 0, flat: new THREE.Quaternion(), settle: 0 };
     debris.push(piece);
     return piece;
   }
@@ -399,8 +404,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     cuts.clear();
     zones.length = 0;
     for (const [unit, entry] of [...dead]) respawn(unit, entry, true);
-    for (const d of debris) fx.remove(d.pivot);
-    debris.length = 0;
+    for (const d of [...debris]) if (d !== flight?.body) removeDebris(d); // wie zelf nog vliegt, vliegt door
     for (const s of scorches) fx.remove(s);
     scorches.length = 0;
     fires.length = 0;
@@ -498,10 +502,10 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
       return;
     }
     if (!from) onExplode?.(+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2));
-    else if (self && onKilled) {
-      // de raket van een ander: sta je erin, dan ben je er geweest
-      const me = self();
-      if (reach(p, me.x, THREE.MathUtils.clamp(p.y, me.y, me.y + 1.8), me.z) <= BLAST * 0.8) killed(from.by ?? 'iemand');
+    else if (self && !flight) {
+      // de raket van een ander: sta je erin, dan vlieg je weg
+      const me = self.position;
+      if (reach(p, me.x, THREE.MathUtils.clamp(p.y, me.y, me.y + 1.8), me.z) <= BLAST * 0.8) killed(from.by ?? 'iemand', p);
     }
     const pieces = destroy(p, BLAST, from?.spare);
     // Puin: de grote stukken (staanders, liggers, pallets) allemaal, van de rest (dozen) een greep
@@ -512,6 +516,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     for (const piece of keep) throwPiece(piece, p, BLAST);
     // te veel puin: de oudste stukken die al liggen gaan weg (een lichaam blijft tot de mens terug is)
     const bodies = new Set([...dead.values()].map((d) => d.body));
+    bodies.add(flight?.body);
     for (let i = 0; debris.length > MAX_DEBRIS && i < debris.length; ) {
       if (bodies.has(debris[i])) i++;
       else removeDebris(debris[i]);
@@ -556,13 +561,50 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
   overlay.style.cssText =
     'position:fixed;inset:0;z-index:55;display:flex;align-items:center;justify-content:center;pointer-events:none;opacity:0;background:radial-gradient(circle,rgba(150,20,10,.35),rgba(90,0,0,.8));color:#fff;font:700 34px system-ui,sans-serif;text-shadow:0 2px 8px #000;text-align:center';
   document.body.appendChild(overlay);
-  function killed(by: string) {
+  /** De speler zelf vliegt weg: zijn lichaam als puin, de camera volgt het tot het ligt. */
+  let flight: { body: Debris; by: string; time: number; down: number } | null = null;
+  const chase = new THREE.Vector3();
+  function killed(by: string, p: THREE.Vector3) {
+    if (!self) return;
     overlay.textContent = `Opgeblazen door ${by}`;
     overlay.style.transition = 'none';
-    overlay.style.opacity = '1';
+    overlay.style.opacity = '0.75';
     void overlay.offsetWidth; // de overgang hieronder begint pas na dit beeld
-    overlay.style.transition = 'opacity 2.2s ease-in 0.6s';
+    overlay.style.transition = 'opacity 1.6s ease-out';
     overlay.style.opacity = '0';
+    onLaunched?.(by); // eerst: uit de heftruck of van de stoel, dan staat het figuur op zijn eigen plek
+    self.updateWorldMatrix(true, true);
+    const body = self.clone(true);
+    body.visible = true; // in first person is het eigen figuur verborgen
+    body.traverse((o) => {
+      if ((o as THREE.Sprite).isSprite) o.visible = false; // tekstwolkje
+    });
+    center.setFromMatrixPosition(self.matrixWorld);
+    center.y += 0.9;
+    const piece = launch(body, self.matrixWorld, center, dSize.set(0.28, 0.9, 0.16), p, BLAST);
+    piece.vel.y += 6; // hoog genoeg om jezelf te zien gaan
+    piece.spin = Math.max(piece.spin, 4);
+    flight = { body: piece, by, time: 0, down: 0 };
+    self.visible = false;
+    camera.getWorldPosition(chase);
+  }
+  /** Tijdens de vlucht: de camera hangt schuin achter je lichaam en kijkt ernaar. */
+  function fly(dt: number) {
+    if (!flight) return;
+    const at = flight.body.pivot.position;
+    flight.time += dt;
+    if (flight.body.state !== 0) flight.down += dt;
+    const v = flight.body.vel;
+    const h = Math.hypot(v.x, v.z) || 1;
+    step.set(at.x - (v.x / h) * 5.5, Math.max(1.2, at.y + 2.2), at.z - (v.z / h) * 5.5);
+    if (flight.body.indoor && walls) step.set(THREE.MathUtils.clamp(step.x, walls.minX, walls.maxX), Math.min(step.y, walls.maxY), THREE.MathUtils.clamp(step.z, walls.minZ, walls.maxZ)); // de camera blijft ook binnen
+    if (flight.body.state === 0) chase.lerp(step, 1 - Math.exp(-dt * 4));
+    camera.position.copy(chase);
+    camera.lookAt(at);
+    if (flight.down < 1.3 && flight.time < 9) return; // even blijven liggen, dan terug
+    const by = flight.by;
+    removeDebris(flight.body);
+    flight = null;
     onKilled?.(by);
   }
 
@@ -815,6 +857,22 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
       d.vel.y -= GRAVITY * dt;
       pivot.position.addScaledVector(d.vel, dt);
       pivot.quaternion.premultiply(qStep.setFromAxisAngle(d.axis, d.spin * dt));
+      if (d.indoor && walls) {
+        // tegen een wand of het dak: terugketsen
+        const q = pivot.position;
+        if (q.x < walls.minX || q.x > walls.maxX) {
+          q.x = THREE.MathUtils.clamp(q.x, walls.minX, walls.maxX);
+          d.vel.x *= -0.4;
+        }
+        if (q.z < walls.minZ || q.z > walls.maxZ) {
+          q.z = THREE.MathUtils.clamp(q.z, walls.minZ, walls.maxZ);
+          d.vel.z *= -0.4;
+        }
+        if (q.y > walls.maxY && d.vel.y > 0) {
+          q.y = walls.maxY;
+          d.vel.y *= -0.3;
+        }
+      }
       if (pivot.position.y > d.rest || d.vel.y > 0) continue;
       pivot.position.y = d.rest;
       if (Math.abs(d.vel.y) < 2.4) {
@@ -829,6 +887,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
       }
     }
 
+    fly(dt);
     for (const [unit, entry] of dead) if (clock >= entry.until) respawn(unit, entry);
     if (zones.length) keepDestroyed();
 
@@ -850,6 +909,10 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     /** Kan de speler hem nu vasthouden: te voet, in first person, met de handen vrij? */
     setAllowed(on: boolean) {
       allowed = on;
+    },
+    /** Vliegt de speler zelf weg (opgeblazen)? Dan ligt de besturing stil en stuurt de werper de camera. */
+    get flying() {
+      return !!flight;
     },
     /** Is er iets kapot? */
     get damaged() {

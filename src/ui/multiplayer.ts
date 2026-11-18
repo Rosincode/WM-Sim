@@ -41,7 +41,8 @@ type Pose = {
   /** Stand van de heftruck, alleen als deze speler rijdt */ f?: ForkliftState;
   /** Kijkrichting: omhoog/omlaag */ p: number;
   /** Kijkrichting opzij t.o.v. het lichaam (vanaf de stoel van de heftruck) */ ly: number;
-  /** In de hand: 0 niets, 1 scanner, 2 tablet */ t: 0 | 1 | 2;
+  /** In de hand: 0 niets, 1 scanner, 2 tablet, 3 raketwerper */ t: 0 | 1 | 2 | 3;
+  /** Doet de 6-7 */ em: 0 | 1;
   /** Aantal keer gescand (teller) */ sc: number;
   /** Aantal piepjes van de scanner (teller) */ b: number;
   /** Laatste piep was een goede scan */ bo: 0 | 1;
@@ -90,8 +91,10 @@ interface Options {
   airborne(): boolean;
   /** Kijkrichting van deze speler (first person), anders nul. */
   look(): { yaw: number; pitch: number };
-  /** Wat deze speler in de hand heeft: 0 niets, 1 scanner, 2 tablet. */
-  tool(): 0 | 1 | 2;
+  /** Wat deze speler in de hand heeft: 0 niets, 1 scanner, 2 tablet, 3 raketwerper. */
+  tool(): 0 | 1 | 2 | 3;
+  /** Doet deze speler nu de 6-7? Andere spelers zien dat. */
+  emote(): boolean;
   /** Aantal keer dat deze speler gescand heeft. */
   scans(): number;
   /** Piepjes van de scanner van deze speler: de teller, en of de laatste een goede scan was. */
@@ -339,7 +342,7 @@ export function mountMultiplayer(o: Options) {
     const avatar: Avatar = {
       character, tag, bubble, load: null, loadKey: '', color,
       target: new THREE.Vector3(),
-      pose: { n: '', x: 0, y: 0, z: 0, r: 0, d: 0, c: '', p: 0, ly: 0, t: 0, sc: 0, b: 0, bo: 1, w: 0, j: 0, k: 0, fv: '' },
+      pose: { n: '', x: 0, y: 0, z: 0, r: 0, d: 0, c: '', p: 0, ly: 0, t: 0, em: 0, sc: 0, b: 0, bo: 1, w: 0, j: 0, k: 0, fv: '' },
       placed: false,
       look: { yaw: 0, pitch: 0 },
       scanT: 0,
@@ -470,6 +473,7 @@ export function mountMultiplayer(o: Options) {
       c: o.carryLabel(),
       p: round(look.pitch), ly: round(look.yaw),
       t: o.tool(),
+      em: o.emote() ? 1 : 0,
       sc: o.scans(),
       b: beeps.count, bo: beeps.ok ? 1 : 0,
       w: o.isDriving() ? round(o.forklift.steer, 10) : 0,
@@ -560,7 +564,8 @@ export function mountMultiplayer(o: Options) {
         c: String(data.c ?? '').slice(0, 20),
         p: THREE.MathUtils.clamp(num(data.p), -1.6, 1.6),
         ly: THREE.MathUtils.clamp(num(data.ly), -2.5, 2.5),
-        t: data.t === 1 || data.t === 2 ? data.t : 0,
+        t: data.t === 1 || data.t === 2 || data.t === 3 ? data.t : 0,
+        em: data.em === 1 ? 1 : 0,
         sc: num(data.sc),
         b: num(data.b), bo: data.bo === 0 ? 0 : 1,
         w: THREE.MathUtils.clamp(num(data.w), -1, 1),
@@ -881,7 +886,8 @@ export function mountMultiplayer(o: Options) {
           seatHipY: driving ? o.seatHipY : o.chairHipY,
           carrying: !!a.pose.c,
           look: a.look,
-          tool: a.pose.t === 1 ? 'scanner' : a.pose.t === 2 ? 'tablet' : undefined,
+          tool: a.pose.t === 1 ? 'scanner' : a.pose.t === 2 ? 'tablet' : a.pose.t === 3 ? 'rocket' : undefined,
+          emote: a.pose.em === 1 && !seated && !pushing,
           scan: a.scanT / 0.4,
           walk,
           airborne: a.pose.j === 1,
