@@ -1,0 +1,333 @@
+{
+  "_toelichting": "Gegenereerde testdata: een rondleidingsvideo (telefoon, rondlopend gefilmd) omgezet naar fragmenten op tijd met spraaktranscriptie (sprekers via diarisatie) en een korte beeldbeschrijving per fragment zoals een beeldanalyse die zou geven. Het magazijn en de bedrijfsnaam zijn verzonnen. Tijden in seconden vanaf het begin van de video.",
+  "video": {
+    "bestand": "rondleiding-dc-noordkade.mp4",
+    "duur_s": 1012.0,
+    "opgenomen": "2026-11-12T21:40:00+01:00",
+    "taal": "nl",
+    "gegenereerd": true
+  },
+  "sprekers": {
+    "SPREKER_1": "rondleider, hoofd logistiek van het DC",
+    "SPREKER_2": "filmer, implementatieconsultant",
+    "SPREKER_3": "orderpicker (alleen in de pickfragmenten)",
+    "SPREKER_4": "reachtruckchauffeur (alleen bij het wegzetten)"
+  },
+  "fragmenten": [
+    {
+      "id": "F01",
+      "start_s": 0.0,
+      "eind_s": 34.5,
+      "onderwerp": "intro buitenkant",
+      "beeld": "Buitenkant van een witte hal met sandwichpanelen in de avond. Logo 'Noordkade Vers'. Aan de voorgevel een rij laaddocks met grijze dockshelters, rechts een raam met een loket. Op het terrein staan drie vrachtwagens met koelopbouw.",
+      "transcriptie": [
+        { "spreker": "SPREKER_2", "start_s": 0.0, "eind_s": 6.2, "tekst": "Oké, hij loopt. Twaalf november, rondleiding DC Noordkade Vers in Drachten." },
+        { "spreker": "SPREKER_1", "start_s": 6.8, "eind_s": 34.5, "tekst": "Ja, welkom. Wij zijn een versdistributiecentrum, we leveren zuivel, kaas, vleeswaren, salades en diepvries aan supermarkten en horeca in het noorden. Dit hele gebouw is gekoeld. Het is tweeënzeventig meter breed en vijftig meter diep, en binnen is het overal zo'n tien meter hoog. Wat je hier ziet is de voorkant, met acht docks." }
+      ]
+    },
+    {
+      "id": "F02",
+      "start_s": 34.5,
+      "eind_s": 71.0,
+      "onderwerp": "docks en indeling buitenkant",
+      "beeld": "Camera loopt langs de dockwand. Boven elke deur een geel bord met een nummer, 1 tot en met 8 van links naar rechts. Deuren 1 tot 3 hebben een groen bordje 'ONTVANGST', deuren 4 tot 8 een blauw bordje 'EXPEDITIE'. Rechts naast dock 8 een loket met een bel.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 34.5, "eind_s": 52.0, "tekst": "Dock één zit aan de linkerkant, ongeveer zes meter uit de hoek, en dan om de vier meter de volgende. Eén tot en met drie is ontvangst, daar komen de leveranciers. Vier tot en met acht is expeditie, daar vertrekken onze eigen ritten." },
+        { "spreker": "SPREKER_2", "start_s": 52.4, "eind_s": 55.1, "tekst": "En waar melden de chauffeurs zich?" },
+        { "spreker": "SPREKER_1", "start_s": 55.5, "eind_s": 71.0, "tekst": "Hier bij het loket, rechts naast dock acht. Daarachter zit het expeditiekantoor. Een leverancier heeft een tijdslot, die meldt zich met het ordernummer van de inkoop, en wij geven een docknummer. Zonder tijdslot kan het, maar dan moet hij wachten tot er een ontvangstdock vrij is." }
+      ]
+    },
+    {
+      "id": "F03",
+      "start_s": 71.0,
+      "eind_s": 112.0,
+      "onderwerp": "dockzone binnen, plattegrond",
+      "beeld": "Binnen, vanaf de loopdeur. Brede open ruimte over de hele breedte, betonvloer met gele en blauwe belijning. Links achteraan een gesloten wand met een deur 'ACCULAADRUIMTE'. Recht vooruit een wand met twee grote snelroldeuren: links 'KOELCEL 2-4 °C', rechts 'VRIESCEL -22 °C'. Rechts tegen de voorgevel een kantoortje met glas.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 71.0, "eind_s": 96.5, "tekst": "Dit is de dockzone. Die loopt over de hele breedte en is twaalf meter diep, en hier is het vier graden. Daarachter heb je, van links naar rechts: een strook van zes meter breed met de acculaadruimte en het leeggoed, dan de koelcel, vierenveertig meter breed, en helemaal rechts de vriescel, tweeëntwintig meter. Die cellen zijn allebei achtendertig meter diep." },
+        { "spreker": "SPREKER_2", "start_s": 96.9, "eind_s": 100.3, "tekst": "Dus de koelcel en de vriescel liggen naast elkaar, achter de docks." },
+        { "spreker": "SPREKER_1", "start_s": 100.6, "eind_s": 112.0, "tekst": "Precies. Je komt in elke cel via één snelroldeur vanuit de dockzone. De koelcel is twee tot vier graden, de vriescel min tweeëntwintig." }
+      ]
+    },
+    {
+      "id": "F04",
+      "start_s": 112.0,
+      "eind_s": 151.5,
+      "onderwerp": "ontvangst: lossen en temperatuurcontrole",
+      "beeld": "Bij dock 2 staat een vrachtwagen aangedockt. Een medewerker lost met een elektrische meeloop-pallettruck een pallet met dozen yoghurt. Een tweede medewerker steekt een prikthermometer tussen twee dozen en leest een handscanner af.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 112.0, "eind_s": 131.8, "tekst": "Hier zie je een ontvangst. Er wordt gelost met een meeloop-pallettruck. Van elke levering meten we de temperatuur, bij koel met de prikthermometer tussen de dozen. Koelproducten mogen maximaal zeven graden zijn, diepvries maximaal min achttien. Is het warmer, dan weigeren we de pallet." },
+        { "spreker": "SPREKER_2", "start_s": 132.2, "eind_s": 135.0, "tekst": "Wordt die temperatuur ook vastgelegd?" },
+        { "spreker": "SPREKER_1", "start_s": 135.3, "eind_s": 151.5, "tekst": "Ja, die tikt hij in op de scanner, per levering één meting, en bij twijfel per pallet. Dat moet voor de HACCP. En als er een pallet geweigerd wordt, maakt hij een foto en gaat die pallet direct terug de wagen in." }
+      ]
+    },
+    {
+      "id": "F05",
+      "start_s": 151.5,
+      "eind_s": 196.0,
+      "onderwerp": "ontvangst: SSCC, THT en batch scannen",
+      "beeld": "Close-up van een palletlabel met drie barcodes en tekst 'SSCC', 'GTIN', 'THT 03-12-2026', 'BATCH L2611A'. De medewerker scant het label; op het scherm van de scanner verschijnt een regel met artikel, aantal colli en THT.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 151.5, "eind_s": 176.0, "tekst": "Dan scant hij het palletlabel. Daar zit het SSCC-nummer in, het artikel als GTIN, de THT-datum en het batchnummer. Het systeem legt dat naast de inkooporder: klopt het artikel, klopt het aantal colli. Een pallet heeft altijd één artikel met één THT. Als het een gemengde pallet is, breken we die hier eerst uit naar losse pallets." },
+        { "spreker": "SPREKER_2", "start_s": 176.4, "eind_s": 180.2, "tekst": "En als er geen label op zit, of het label is onleesbaar?" },
+        { "spreker": "SPREKER_1", "start_s": 180.5, "eind_s": 196.0, "tekst": "Dan voert hij artikel, aantal, THT en batch met de hand in en print hij hier een eigen label, met een nummer dat begint met NK. Daar staat de printer, op de paal tussen dock twee en drie." }
+      ]
+    },
+    {
+      "id": "F06",
+      "start_s": 196.0,
+      "eind_s": 232.0,
+      "onderwerp": "ontvangst: restlooptijd en quarantaine",
+      "beeld": "Camera draait naar links, naar de hoek bij dock 1. Een vak op de vloer met rode belijning en de tekst 'Q' op de vloer, met plek voor acht pallets in twee rijen van vier. Er staan twee pallets in, één met een rood etiket 'GEBLOKKEERD'.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 196.0, "eind_s": 218.5, "tekst": "Belangrijk is de restlooptijd. Bij ontvangst moet er nog minstens twee derde van de houdbaarheid over zijn. Een yoghurt van dertig dagen moet dus nog twintig dagen hebben. Is het minder, dan accepteert het systeem hem niet automatisch en gaat de pallet hierheen, naar de quarantaine. Dat rode vak, daar passen acht pallets in." },
+        { "spreker": "SPREKER_2", "start_s": 218.9, "eind_s": 221.6, "tekst": "Wie beslist er wat er met zo'n pallet gebeurt?" },
+        { "spreker": "SPREKER_1", "start_s": 222.0, "eind_s": 232.0, "tekst": "De inkoop. Die geeft hem alsnog vrij, of hij gaat retour naar de leverancier. Beschadigde pallets komen hier ook, met een foto." }
+      ]
+    },
+    {
+      "id": "F07",
+      "start_s": 232.0,
+      "eind_s": 266.0,
+      "onderwerp": "ontvangstbuffer",
+      "beeld": "Voor docks 1, 2 en 3 groen belijnde rijen op de vloer, haaks op de dockwand. Per dock twee rijen, elk zes palletplaatsen lang. Bordjes op de vloer: 'O1-A', 'O1-B', 'O2-A' enzovoort. Er staan ongeveer tien pallets met gele labels.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 232.0, "eind_s": 251.0, "tekst": "Als een pallet goedgekeurd is, zet de losser hem in de ontvangstbuffer. Per ontvangstdock zijn er twee baantjes van zes pallets, groen belijnd. Dus twaalf per dock, zesendertig in totaal. Dat is O1-A, O1-B, O2-A, en zo verder." },
+        { "spreker": "SPREKER_2", "start_s": 251.4, "eind_s": 254.0, "tekst": "En dan is de levering klaar in het systeem?" },
+        { "spreker": "SPREKER_1", "start_s": 254.3, "eind_s": 266.0, "tekst": "Als alle pallets gescand zijn, sluit hij de ontvangst af op de scanner. Dan gaat de voorraad op 'ontvangen' en wordt er per pallet een wegzetopdracht gemaakt voor de reachtrucks." }
+      ]
+    },
+    {
+      "id": "F08",
+      "start_s": 266.0,
+      "eind_s": 306.0,
+      "onderwerp": "koelcel: stellingen en paden",
+      "beeld": "Door de snelroldeur de koelcel in. Lange stellingrijen met oranje liggers en blauwe staanders, haaks op de dockwand, van voor naar achter. Een breed dwarspad vooraan. Op de kopse kant van elke rij een bord met letters: 'A', 'B | C', 'D | E', enzovoort. Adem van de filmer is licht zichtbaar.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 266.0, "eind_s": 293.0, "tekst": "Dit is de koelcel. De stellingen lopen van voor naar achter, haaks op de docks. Vooraan heb je een hoofdpad van vier meter breed. Links langs de muur staat rij A, dat is een enkele rij. Daarna steeds dubbele rijen, rug aan rug: B en C, D en E, F en G, H en J, K en L, M en N. En tegen de rechtermuur weer een enkele, rij O." },
+        { "spreker": "SPREKER_2", "start_s": 293.4, "eind_s": 296.0, "tekst": "H en J? Waar is de I?" },
+        { "spreker": "SPREKER_1", "start_s": 296.3, "eind_s": 306.0, "tekst": "De I slaan we over, die lijkt te veel op een één op een label. Dus veertien rijen, en daartussen zeven gangpaden van drie meter twintig, voor de reachtrucks." }
+      ]
+    },
+    {
+      "id": "F09",
+      "start_s": 306.0,
+      "eind_s": 348.5,
+      "onderwerp": "koelcel: vakken, niveaus en locatiecode",
+      "beeld": "In gangpad 2 tussen rij C en rij D. Op elke ligger een geel locatielabel met barcode en grote tekst, bijvoorbeeld 'D-07-3-2' en een klein cijfer '47' in een cirkel. De stelling is vijf liggers hoog; op de vloer staan pallets met losse dozen, daarboven volle pallets met folie.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 306.0, "eind_s": 330.0, "tekst": "Elke rij heeft twaalf vakken, genummerd van voor naar achter, één tot en met twaalf. Een vak is twee meter zeventig breed, daar staan drie pallets naast elkaar. En je hebt vijf niveaus: nul is de vloer, dat is de picklocatie, en één tot en met vier zijn bulk, op ongeveer twee, drie tachtig, vijf zestig en zeven veertig meter." },
+        { "spreker": "SPREKER_2", "start_s": 330.4, "eind_s": 333.0, "tekst": "En hoe lees ik zo'n label?" },
+        { "spreker": "SPREKER_1", "start_s": 333.3, "eind_s": 348.5, "tekst": "Rij, vak, niveau, plaats. Dus D zeven drie twee is rij D, vak zeven, derde niveau, middelste pallet. Plaats één is links als je ervoor staat. En dat cijfer in het rondje is het controlecijfer, dat heb je nodig bij het picken." }
+      ]
+    },
+    {
+      "id": "F10",
+      "start_s": 348.5,
+      "eind_s": 382.0,
+      "onderwerp": "koelcel: picklocaties en artikelen",
+      "beeld": "Close-up van de vloerlocaties. Elke vloerplaats heeft een eigen artikel: dozen kaas, bakjes salade, trays met melk. Op de ligger boven de vloer hangen artikelkaartjes met naam en artikelnummer.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 348.5, "eind_s": 370.0, "tekst": "Elke vloerplaats is een vaste picklocatie voor één artikel. Dat zijn er dus veertien rijen maal twaalf vakken maal drie, vijfhonderdvier picklocaties. We hebben ongeveer achttienhonderd koelartikelen, dus de snellopers staan hier op een vaste plek en de langzame artikelen picken we uit legbordstelling achterin, vak elf en twaalf van rij A en O." },
+        { "spreker": "SPREKER_2", "start_s": 370.4, "eind_s": 373.0, "tekst": "Wat zit er in zo'n legbordstelling?" },
+        { "spreker": "SPREKER_1", "start_s": 373.3, "eind_s": 382.0, "tekst": "Losse dozen, op vijf planken. Eh, nee, vier planken. Dat zijn per vak twaalf kleine locaties, die eindigen op een letter, dus A-11-0-A tot en met L." }
+      ]
+    },
+    {
+      "id": "F11",
+      "start_s": 382.0,
+      "eind_s": 425.0,
+      "onderwerp": "wegzetten met de reachtruck",
+      "beeld": "Een reachtruck komt het gangpad in met een volle pallet. De chauffeur scant met een ringscanner het palletlabel, kijkt op een terminal op de truck, heft de pallet naar het derde niveau en scant daarna het label op de ligger.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 382.0, "eind_s": 389.5, "tekst": "Hier komt een wegzetter. Leg jij even uit wat je doet?" },
+        { "spreker": "SPREKER_4", "start_s": 390.0, "eind_s": 412.0, "tekst": "Ik pak een pallet uit de ontvangstbuffer en scan het label. Dan geeft het systeem een locatie, nu F zes drie één. Ik rij erheen, zet hem erin, en dan scan ik het label op de ligger. Pas dan staat hij op die plek. Scan ik een andere plek, dan vraagt hij of ik zeker weet dat ik daar wil afwijken." },
+        { "spreker": "SPREKER_2", "start_s": 412.4, "eind_s": 415.0, "tekst": "Hoe kiest het systeem die plek?" },
+        { "spreker": "SPREKER_1", "start_s": 415.3, "eind_s": 425.0, "tekst": "Zo dicht mogelijk boven de picklocatie van dat artikel. Is daar niks vrij, dan het dichtstbijzijnde lege bulkvak in dezelfde rij of het rijtje ernaast." }
+      ]
+    },
+    {
+      "id": "F12",
+      "start_s": 425.0,
+      "eind_s": 466.0,
+      "onderwerp": "aanvullen picklocaties (FEFO)",
+      "beeld": "Een reachtruck laat een volle pallet zakken naar een vloerplaats waar nog een paar dozen staan. De chauffeur zet de restdozen bovenop de nieuwe pallet. Op de terminal staat 'AANVULLEN D-03-0-1'.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 425.0, "eind_s": 449.0, "tekst": "En dit is aanvullen. Elke picklocatie heeft een minimum, bijvoorbeeld vijftien dozen. Zakt het daaronder, dan maakt het systeem een aanvulopdracht: een pallet van boven naar de vloer. En dan altijd de pallet met de kortste THT eerst, first expired first out. Niet de pallet die er het langst staat." },
+        { "spreker": "SPREKER_2", "start_s": 449.4, "eind_s": 452.5, "tekst": "En wat doet hij met de dozen die er nog stonden?" },
+        { "spreker": "SPREKER_1", "start_s": 452.8, "eind_s": 466.0, "tekst": "Die moeten bovenop, want die hebben de oudste THT. Overdag vullen we aan wat er al tekort is, en om negen uur 's avonds draait er een ronde voor alles wat de nachtorders nodig hebben, zodat de pickers niet hoeven te wachten." }
+      ]
+    },
+    {
+      "id": "F13",
+      "start_s": 466.0,
+      "eind_s": 504.0,
+      "onderwerp": "vriescel: indeling en drive-in",
+      "beeld": "Door de snelroldeur van de vriescel; even beslagen lens. Daarna: twee blokken drive-in stelling met smalle banen waar een truck in kan rijden, banen genummerd V01 tot en met V24. Tussen de twee blokken een dwarspad. Langs de rechtermuur een gewone palletstelling met bord 'Z'.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 466.0, "eind_s": 494.0, "tekst": "Dit is de vriescel, min tweeëntwintig. Vooraan zes meter vrije ruimte. Dan het eerste blok drive-in, banen V-nul-één tot en met twaalf, acht pallets diep en vier hoog. Dan een dwarspad van vier meter, en dan het tweede blok, V-dertien tot en met vierentwintig. Achterin is nog acht meter vloer, daar stapelen we in de zomer het ijs in blokken op de vloer, zone VB." },
+        { "spreker": "SPREKER_2", "start_s": 494.4, "eind_s": 497.2, "tekst": "En die stelling langs de muur?" }
+      ]
+    },
+    {
+      "id": "F14",
+      "start_s": 504.0,
+      "eind_s": 540.5,
+      "onderwerp": "vriescel: rij Z en drive-in regels",
+      "beeld": "Rij Z langs de rechtermuur van de vriescel: tien vakken, vier niveaus, vloerplaatsen met losse dozen diepvriesproducten. Daarnaast een baan in de drive-in waar alleen dezelfde dozen ijs in staan.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 504.0, "eind_s": 525.5, "tekst": "Dat is rij Z, de picklocaties voor vries. Tien vakken, niveau nul is pick, één tot en met drie is bulk. Ongeveer driehonderdvijftig vriesartikelen, de rest pick je uit legbord in het eerste blok. En in de drive-in geldt: per baan één artikel en één THT. Want wat je er als laatste inzet, haal je er als eerste uit." },
+        { "spreker": "SPREKER_2", "start_s": 525.9, "eind_s": 528.5, "tekst": "Dus een baan is eigenlijk één locatie?" },
+        { "spreker": "SPREKER_1", "start_s": 528.8, "eind_s": 540.5, "tekst": "Per niveau ja. V-nul-drie niveau twee is één locatie met plek voor acht pallets. Pas als hij helemaal leeg is mag er een ander artikel of een andere THT in." }
+      ]
+    },
+    {
+      "id": "F15",
+      "start_s": 540.5,
+      "eind_s": 566.0,
+      "onderwerp": "vriescel: werktijd en materieel",
+      "beeld": "Een reachtruck met een gesloten, verwarmde cabine rijdt een drive-in baan in. Op de deur van de vriescel hangt een bord 'MAX 20 MIN AANEEN – DAN 10 MIN OPWARMEN'.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 540.5, "eind_s": 566.0, "tekst": "In de vries rijden twee reachtrucks in vriesuitvoering, met een verwarmde cabine. In de koelcel hebben we er vier. En pickers mogen hier maximaal twintig minuten aaneen werken, dan tien minuten eruit. Dus vriesorders worden in korte blokken gepickt, dat moet het systeem wel weten." }
+      ]
+    },
+    {
+      "id": "F16",
+      "start_s": 566.0,
+      "eind_s": 604.0,
+      "onderwerp": "orders, ritten en golven",
+      "beeld": "In het expeditiekantoor. Een groot scherm met een planning: rijen per rit, 'RIT 01' tot 'RIT 12', met kolommen 'STOPS', 'ROLCO', 'START PICK', 'VERTREK', 'DOCK'.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 566.0, "eind_s": 591.5, "tekst": "Klanten kunnen bestellen tot tien uur 's avonds. Elke klant hoort bij een rit, en een rit heeft een vaste volgorde van stops. We hebben twaalf ritten per nacht, gemiddeld acht stops. Het picken gaat in golven: om half tien de ritten die als eerste vertrekken, en zo verder. Alles moet om vijf uur gepickt zijn, de eerste wagen vertrekt half zes." },
+        { "spreker": "SPREKER_2", "start_s": 592.0, "eind_s": 595.0, "tekst": "Krijgt een rit altijd hetzelfde dock?" },
+        { "spreker": "SPREKER_1", "start_s": 595.3, "eind_s": 604.0, "tekst": "Nee, dat plant het kantoor per nacht, maar wel steeds één van vier tot en met acht." }
+      ]
+    },
+    {
+      "id": "F17",
+      "start_s": 604.0,
+      "eind_s": 643.0,
+      "onderwerp": "picken: rolcontainers en pick-by-voice",
+      "beeld": "In de koelcel. Een orderpicker met headset op een elektrische pallettruck met lange vorken, met twee lege rolcontainers achter elkaar op de vorken. Op elke rolcontainer een label met een klantnaam, stopnummer en een barcode.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 604.0, "eind_s": 620.5, "tekst": "Dit is een picker. Die rijdt met twee rolcontainers op de vorken, en elke rolcontainer is voor één klant. Je kunt dus twee klanten tegelijk picken. Ze werken met pick-by-voice. Wil jij het even laten zien?" },
+        { "spreker": "SPREKER_3", "start_s": 621.0, "eind_s": 643.0, "tekst": "Ja. Eerst scan ik de twee rolcontainers, dan weet hij welke klanten. Dan zegt hij in mijn oor: gang vier, D zeven nul twee. Ik rij erheen en zeg het controlecijfer, dat is vierenvijftig. Als dat klopt zegt hij: zes colli, rolcontainer één. Ik pak er zes en zeg: zes. Dan gaat hij naar de volgende." }
+      ]
+    },
+    {
+      "id": "F18",
+      "start_s": 643.0,
+      "eind_s": 681.0,
+      "onderwerp": "picken: route, tekort en vol",
+      "beeld": "De picker rijdt door het gangpad, pakt dozen van een vloerplaats en stapelt ze in een rolcontainer. Op een andere vloerplaats staan maar twee dozen.",
+      "transcriptie": [
+        { "spreker": "SPREKER_2", "start_s": 643.4, "eind_s": 646.5, "tekst": "En in welke volgorde loop je de locaties af?" },
+        { "spreker": "SPREKER_3", "start_s": 646.8, "eind_s": 663.0, "tekst": "Gewoon de gangen op volgorde, gang één, twee, drie. In de gang van voor naar achter, en de volgende gang van achter naar voor. Zware dingen eerst, zoals melk, die krijg je als eerste, anders plet je de rest." },
+        { "spreker": "SPREKER_3", "start_s": 663.5, "eind_s": 681.0, "tekst": "En als er te weinig ligt, zeg ik wat ik gepakt heb, bijvoorbeeld twee. Dan zegt hij tekort en maakt hij een aanvulopdracht. Als de rolcontainer vol is, zeg ik 'vol', dan print hij een nieuw label en krijg ik een nieuwe rolcontainer voor dezelfde klant." }
+      ]
+    },
+    {
+      "id": "F19",
+      "start_s": 681.0,
+      "eind_s": 716.0,
+      "onderwerp": "picken: THT-regels bij uitlevering",
+      "beeld": "Close-up van een doos met THT-stempel. Op de terminal van de pallettruck een melding 'THT < 5 DGN – NIET PICKEN – MELD TL'.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 681.0, "eind_s": 702.5, "tekst": "Bij uitlevering hebben we ook een regel. Een supermarkt wil minstens vijf dagen THT als het binnenkomt, horeca minstens drie. Dus het systeem kiest bij het picken alleen voorraad die lang genoeg houdbaar is. En wat te kort is, wordt geblokkeerd en gaat naar de quarantaine, en dat krijgt de teamleider als melding." },
+        { "spreker": "SPREKER_2", "start_s": 702.9, "eind_s": 705.5, "tekst": "Moet de picker de THT dan ook scannen?" },
+        { "spreker": "SPREKER_1", "start_s": 705.8, "eind_s": 716.0, "tekst": "Nee, die zit al aan de pallet vast vanaf de ontvangst. Alleen bij de legbordlocaties zeggen we de THT in, omdat daar dozen van verschillende pallets bij elkaar staan." }
+      ]
+    },
+    {
+      "id": "F20",
+      "start_s": 716.0,
+      "eind_s": 748.0,
+      "onderwerp": "vries picken in thermohoes",
+      "beeld": "Bij de vriescel een rij rolcontainers met een grijze isolerende hoes. Een picker trekt de hoes over een volle rolcontainer en ritst hem dicht.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 716.0, "eind_s": 748.0, "tekst": "Vries pick je in een aparte rolcontainer, nooit gemengd met koel. Die krijgt een thermohoes eroverheen zodra hij vol is. Een klant met koel en vries heeft dus minstens twee rolcontainers. En vries wordt als laatste gepickt van een rit, zodat hij zo kort mogelijk buiten de vriescel staat. Hij wacht dan in de vriescel, vooraan, tot de wagen gaat laden." }
+      ]
+    },
+    {
+      "id": "F21",
+      "start_s": 748.0,
+      "eind_s": 785.0,
+      "onderwerp": "controle en wikkelen",
+      "beeld": "In de dockzone, tussen de koelceldeur en de expeditiebanen: twee werkplekken met een weegschaal in de vloer en een wikkelmachine voor rolcontainers. Een medewerker scant een rolcontainer en kijkt op een scherm.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 748.0, "eind_s": 770.0, "tekst": "Als de picker klaar is brengt hij de rolcontainers hier naartoe, naar de afmeldplek. Er zijn er twee. Hij scant het label, de rolcontainer wordt gewogen, en als het gewicht meer dan vijf procent afwijkt van wat het systeem verwacht, gaat hij naar controle. Dan telt een tweede persoon alles na." },
+        { "spreker": "SPREKER_2", "start_s": 770.4, "eind_s": 772.6, "tekst": "En anders?" },
+        { "spreker": "SPREKER_1", "start_s": 773.0, "eind_s": 785.0, "tekst": "Anders wordt hij gewikkeld en zet de picker hem zelf in de expeditiebaan. Welke baan staat op het scherm." }
+      ]
+    },
+    {
+      "id": "F22",
+      "start_s": 785.0,
+      "eind_s": 826.0,
+      "onderwerp": "expeditiebanen en laadvolgorde",
+      "beeld": "Voor docks 4 tot en met 8 blauw belijnde banen op de vloer, haaks op de dockwand, per dock drie banen. Op de vloer codes als 'E5-1', 'E5-2', 'E5-3'. In een baan staan gewikkelde rolcontainers, met op de labels stopnummers die oplopen naar de deur toe.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 785.0, "eind_s": 812.0, "tekst": "Dit zijn de expeditiebanen. Per expeditiedock drie banen, en in een baan passen twaalf rolcontainers. Dus E vijf één, E vijf twee, E vijf drie voor dock vijf. Een rit krijgt één dock, dus maximaal zesendertig rolcontainers, en anders twee docks. En ze staan in omgekeerde stopvolgorde: de laatste stop moet als eerste de wagen in, dus die staat vooraan bij de deur." },
+        { "spreker": "SPREKER_2", "start_s": 812.4, "eind_s": 815.0, "tekst": "Wie bewaakt dat die volgorde klopt?" },
+        { "spreker": "SPREKER_1", "start_s": 815.3, "eind_s": 826.0, "tekst": "Het systeem wijst de baan en de plek aan. Maar echt gecontroleerd wordt het bij het laden, want dan scant de chauffeur elke rolcontainer." }
+      ]
+    },
+    {
+      "id": "F23",
+      "start_s": 826.0,
+      "eind_s": 866.0,
+      "onderwerp": "laden en vertrek",
+      "beeld": "Bij dock 6 staat een vrachtwagen met een tussenschot in de laadruimte en twee temperatuurdisplays: '3 °C' en '-21 °C'. Een chauffeur rijdt met een pallettruck een rolcontainer de wagen in en scant het label met een handscanner.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 826.0, "eind_s": 852.0, "tekst": "Om half vier begint het laden. De wagens hebben twee temperaturen, voorin vries, achterin koel, met een schot ertussen. Dus eerst gaan de vriescontainers voorin, dan het koel, in stopvolgorde. De chauffeur scant elke rolcontainer. Scant hij een container van een andere rit, dan piept het en mag hij niet verder." },
+        { "spreker": "SPREKER_2", "start_s": 852.4, "eind_s": 855.0, "tekst": "En als alles erin zit?" },
+        { "spreker": "SPREKER_1", "start_s": 855.3, "eind_s": 866.0, "tekst": "Dan meldt hij de rit af. Het systeem zet de orders op geleverd onderweg, en de vrachtbrieven komen op zijn tablet. De deur gaat dicht, en het dock is vrij voor de volgende rit." }
+      ]
+    },
+    {
+      "id": "F24",
+      "start_s": 866.0,
+      "eind_s": 906.0,
+      "onderwerp": "retour leeggoed",
+      "beeld": "De strook links naast de koelcel: lege rolcontainers in lange rijen, stapels blauwe en grijze kratten op dollies, en een bord 'LEEGGOED / EMBALLAGE'. Een medewerker telt kratten en tikt een aantal in op een scanner.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 866.0, "eind_s": 893.5, "tekst": "En dit is het leeggoed. Als de wagens 's ochtends terugkomen nemen ze lege rolcontainers en kratten mee van de klanten. Die lossen ze aan een expeditiedock, en hier tellen we ze per klant: zoveel rolcontainers, zoveel kratten. Dat gaat op het emballage-saldo van de klant, want daar zit statiegeld op." },
+        { "spreker": "SPREKER_2", "start_s": 893.9, "eind_s": 897.0, "tekst": "Zit daar ook retourvoorraad bij, producten?" },
+        { "spreker": "SPREKER_1", "start_s": 897.3, "eind_s": 906.0, "tekst": "Soms, en dat gaat altijd eerst naar de quarantaine. Retour vers gaat nooit zomaar terug de voorraad in." }
+      ]
+    },
+    {
+      "id": "F25",
+      "start_s": 906.0,
+      "eind_s": 938.0,
+      "onderwerp": "acculaadruimte en materieel",
+      "beeld": "In de acculaadruimte: een rij laadpunten aan de muur, genummerd 1 tot 16, met elektrische pallettrucks en twee meeloop-pallettrucks aan de lader.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 906.0, "eind_s": 938.0, "tekst": "De acculaadruimte, links achter de dockzone, zes bij twaalf meter. Zestien laadpunten. Hier staan de tien orderpicktrucks, de twee meeloop-pallettrucks van de ontvangst, en de reachtrucks laden in de cel zelf, aan het eind van gangpad één. Elke truck heeft een nummer, en je meldt je aan op de truck met je pas. Dan weet het systeem wie wat doet." }
+      ]
+    },
+    {
+      "id": "F26",
+      "start_s": 938.0,
+      "eind_s": 976.0,
+      "onderwerp": "voorraadtelling",
+      "beeld": "Terug in de koelcel. Een medewerker met een handscanner staat bij een vloerplaats en telt dozen. Op de scanner: 'TELLING RIJ F – 14 VAN 36'.",
+      "transcriptie": [
+        { "spreker": "SPREKER_1", "start_s": 938.0, "eind_s": 962.5, "tekst": "Dan nog het tellen. We tellen elke week een paar rijen, zodat elke locatie één keer per maand geteld is. Blind tellen: de teller ziet niet wat er zou moeten liggen. Wijkt het af, dan telt een tweede persoon. Pas als die hetzelfde telt wordt de voorraad aangepast." },
+        { "spreker": "SPREKER_2", "start_s": 962.9, "eind_s": 965.8, "tekst": "En als een picklocatie op nul staat?" },
+        { "spreker": "SPREKER_1", "start_s": 966.1, "eind_s": 976.0, "tekst": "Dan moet de picker bevestigen dat hij echt leeg is. Dat is meteen ook een telling." }
+      ]
+    },
+    {
+      "id": "F27",
+      "start_s": 976.0,
+      "eind_s": 1012.0,
+      "onderwerp": "afsluiting en kerngetallen",
+      "beeld": "Terug in de dockzone, overzicht over de expeditiebanen die vollopen met rolcontainers. De rondleider kijkt in de camera.",
+      "transcriptie": [
+        { "spreker": "SPREKER_2", "start_s": 976.0, "eind_s": 980.0, "tekst": "Nog even de getallen op een rij, voor de volledigheid?" },
+        { "spreker": "SPREKER_1", "start_s": 980.4, "eind_s": 1012.0, "tekst": "Ongeveer vijfentwintig leveranciers per dag op de ontvangst, tussen zes en twee. Twaalf ritten per nacht, rond de achtennegentig stops, zo'n driehonderd rolcontainers. Achttienhonderd koelartikelen, driehonderdvijftig vries. Ontvangst werkt overdag, picken 's nachts van half tien tot vijf, laden van half vier tot zes. Dat is het zo'n beetje." }
+      ]
+    }
+  ]
+}
