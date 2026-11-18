@@ -113,7 +113,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   };
   const jetHint = '<br><b>Shift</b> (kort tikken): jetpack om';
   const jetText =
-    '<b>WM-Sim — Jetpack</b><br><b>Spatie</b> ingedrukt: omhoog · loslaten: langzaam omlaag<br>W/S: vooruit/achteruit · A/D: opzij · ←/→ of muis (klik: muis vastzetten): draaien<br><b>V</b>: first person om bovenin de stelling te scannen (<b>1</b>: scanner) · <b>Shift</b> (tikken): jetpack af · <b>C</b>: overzicht';
+    '<b>WM-Sim — Jetpack</b><br><b>Spatie</b> ingedrukt: omhoog · loslaten: langzaam omlaag<br>W/S: vooruit/achteruit · A/D: opzij · ←/→ of muis (klik: muis vastzetten): draaien<br><b>1</b>: scanner · <b>2</b>: tablet · <b>3</b>: raketwerper (je gaat vanzelf naar first person, de jetpack blijft aan) · <b>V</b>: first/third person · <b>Shift</b> (tikken): jetpack af · <b>C</b>: overzicht';
 
   const drivingText =
     '<b>WM-Sim — Heftruck</b><br>W/S: rijden · A/D: sturen · <b>↑/↓</b>: vorken heffen/zakken · <b>H</b>: toeteren · Muis: rondkijken<br><b>1</b>: scanner · <b>2</b>: tablet (F: dichtbij) in je rechterhand<br>Oppakken: vorken onder de pallet en heffen · Neerzetten: zakken<br><b>R</b>: uitstappen · <b>V</b>: first/third person · <b>C</b>: overzicht';

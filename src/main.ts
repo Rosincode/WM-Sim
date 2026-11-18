@@ -313,6 +313,19 @@ const view = createPlayerView({
 });
 
 wms.onChange(() => view.refreshJetpack()); // in- of uitloggen: jetpack mag (niet meer), uitleg in het menu bijwerken
+// Met de jetpack in third person: 1/2/3 pakt scanner, tablet of raketwerper en zet je in first person, want die
+// houd je vast voor de camera. In de capture-fase, zodat handheld en raketwerper de toets daarna gewoon verwerken.
+window.addEventListener(
+  'keydown',
+  (e) => {
+    const t = e.target;
+    if (e.repeat || t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return;
+    if (!/^(Digit|Numpad)[123]$/.test(e.code) || !view.jetpack.on || view.mode !== 'third') return;
+    view.setMode('first');
+    if (e.code.endsWith('3') && rocket.equipped) rocket.setEquipped(false); // de raketwerper-toets pakt hem straks weer op
+  },
+  true,
+);
 
 editor = createEditor({ scene, camera, canvas: renderer.domElement, controls, toOverview: () => view.setMode('overview') });
 if (params.has('edit') || editor.resume) editor.open(); // ?edit, of de bewerkmodus stond open voor het herladen
