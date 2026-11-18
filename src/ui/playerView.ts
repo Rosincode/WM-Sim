@@ -54,7 +54,6 @@ const STEP = 0.35; // zo hoog stap je zonder springen ergens op (pallet, vorken)
 const FOOT = 0.2; // zo ver mogen je voeten over een rand steken
 const JET_UP = 3.2; // m/s omhoog met spatie ingedrukt
 const JET_FALL = 0.9; // m/s omlaag als je spatie loslaat: langzaam zakken, tijd om te scannen
-const JET_TAP = 0.3; // s: Shift korter dan dit indrukken (zonder andere toets) zet de jetpack om/af; langer = rennen
 
 export function createPlayerView({ camera, canvas, controls, player, hud, bounds, walkable = [], solids = [], probes, probeSolids, initialMode = 'overview', onModeChange, jetpackAllowed = () => false, ceiling = Infinity }: Options) {
   const zones = [bounds, ...walkable];
@@ -74,7 +73,6 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   let jet = false;
   let thrust = 0;
   let modeBefore: Exclude<ViewMode, 'overview'> = 'first';
-  let shiftDown: { at: number; clean: boolean } | null = null;
   const seatWorld = new THREE.Vector3();
   /** Waar de speler op staat als dat kan bewegen (heftruck): plek in het assenstelsel daarvan. */
   let ride: { pose: NonNullable<Solid['pose']>; x: number; z: number; r: number; lift: boolean } | null = null;
@@ -107,13 +105,13 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     overview:
       '<b>WM-Sim — Overzicht</b><br>Slepen: draaien · Scroll: zoom · Rechts slepen: schuiven<br><b>C</b>: dichtbij (first person)',
     first:
-      '<b>WM-Sim — First person</b><br>Klik: muis vastzetten · Muis: rondkijken · Esc: muis los<br>W/S: lopen · A/D: zijwaarts · ←/→: draaien · Shift: rennen · Spatie: springen<br>Naar buiten: door een chauffeursdeur (dockwand) of de nooduitgang; ze gaan vanzelf open<br><b>1</b>: scanner (klik op een label = scannen naar de WMS) · <b>2</b>: tablet met WMS (F: dichtbij en bedienen) · <b>3</b>: raketwerper (klik: vuren; herstellen: menu › Raketwerper) · <b>6</b> of <b>7</b>: de 6-7 doen (jezelf zie je in third person)<br><b>R</b>: in de heftruck stappen of de pompwagen pakken (als je ernaast staat) · op de vorken staan: een ander tilt je op · <b>M</b>: radio (op het bureau bij de pc; <b>+</b>/<b>-</b>: harder en zachter) · <b>B</b>: picklijst afdrukken en pakken (printer naast de pc) · <b>V</b>: third person · <b>C</b>: overzicht',
+      '<b>WM-Sim — First person</b><br>Klik: muis vastzetten · Muis: rondkijken · Esc: muis los<br>W/S: lopen · A/D: zijwaarts · ←/→: draaien · Shift: rennen · Spatie: springen<br>Naar buiten: door een chauffeursdeur (dockwand) of de nooduitgang; ze gaan vanzelf open<br><b>1</b>: scanner (klik op een label = scannen naar de WMS) · <b>2</b>: tablet met WMS (F: dichtbij en bedienen) · <b>3</b>: raketwerper (klik: vuren; herstellen: menu › Raketwerper) · <b>6</b> of <b>7</b>: de 6-7 doen (jezelf zie je in third person)<br>Boeven: menu › Boeven start de waves; loop een boef omver om hem te pakken<br><b>R</b>: in de heftruck stappen of de pompwagen pakken (als je ernaast staat) · op de vorken staan: een ander tilt je op · <b>M</b>: radio (op het bureau bij de pc; <b>+</b>/<b>-</b>: harder en zachter) · <b>B</b>: picklijst afdrukken en pakken (printer naast de pc) · <b>V</b>: third person · <b>C</b>: overzicht',
     third:
       '<b>WM-Sim — Third person</b><br>W/S: lopen · A/D: draaien · Shift: rennen · Spatie: springen<br><b>V</b>: first person · <b>C</b>: overzicht',
   };
-  const jetHint = '<br><b>Shift</b> (kort tikken): jetpack om';
+  const jetHint = '<br><b>4</b>: jetpack om';
   const jetText =
-    '<b>WM-Sim — Jetpack</b><br><b>Spatie</b> ingedrukt: omhoog · loslaten: langzaam omlaag<br>W/S: vooruit/achteruit · A/D: opzij · ←/→ of muis (klik: muis vastzetten): draaien<br><b>1</b>: scanner · <b>2</b>: tablet · <b>3</b>: raketwerper (je gaat vanzelf naar first person, de jetpack blijft aan) · <b>V</b>: first/third person · <b>Shift</b> (tikken): jetpack af · <b>C</b>: overzicht';
+    '<b>WM-Sim — Jetpack</b><br><b>Spatie</b> ingedrukt: omhoog · loslaten: langzaam omlaag<br>W/S: vooruit/achteruit · A/D: opzij · ←/→ of muis (klik: muis vastzetten): draaien<br><b>1</b>: scanner · <b>2</b>: tablet · <b>3</b>: raketwerper (je gaat vanzelf naar first person, de jetpack blijft aan) · <b>V</b>: first/third person · <b>4</b>: jetpack af · <b>C</b>: overzicht';
 
   const drivingText =
     '<b>WM-Sim — Heftruck</b><br>W/S: rijden · A/D: sturen · <b>↑/↓</b>: vorken heffen/zakken · <b>H</b>: toeteren · Muis: rondkijken<br><b>1</b>: scanner · <b>2</b>: tablet (F: dichtbij) in je rechterhand<br>Oppakken: vorken onder de pallet en heffen · Neerzetten: zakken<br><b>R</b>: uitstappen · <b>V</b>: first/third person · <b>C</b>: overzicht';
@@ -165,10 +163,8 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   window.addEventListener('keydown', (e) => {
     if (isTyping(e)) return; // typen in formulier ≠ besturing
     if (e.code === 'Space') e.preventDefault(); // niet scrollen / knoppen activeren
-    // Shift kort tikken (zonder iets anders in te drukken) = jetpack om/af; Shift vasthouden blijft rennen.
-    if (shiftDown && e.code !== 'ShiftLeft' && e.code !== 'ShiftRight') shiftDown.clean = false;
     if (!e.repeat) {
-      if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && !shiftDown) shiftDown = { at: performance.now(), clean: !keys.size };
+      if (e.code === 'Digit4' || e.code === 'Numpad4') setJet(!jet); // 4 = jetpack om/af
       if (e.code === 'KeyC') setMode(mode === 'overview' ? closeMode : 'overview');
       if (e.code === 'KeyV' && mode !== 'overview') setMode(mode === 'first' ? 'third' : 'first');
       if (e.code === 'Space' && mode !== 'overview' && grounded && !vehicle && !jet) {
@@ -180,15 +176,9 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   });
   window.addEventListener('keyup', (e) => {
     keys.delete(e.code);
-    if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && shiftDown) {
-      const tap = shiftDown.clean && performance.now() - shiftDown.at < JET_TAP * 1000;
-      shiftDown = null;
-      if (tap && !isTyping(e)) setJet(!jet);
-    }
   });
   window.addEventListener('blur', () => {
     keys.clear();
-    shiftDown = null;
   });
 
   // Muis vastzetten in first person; Esc laat los (browserstandaard).
