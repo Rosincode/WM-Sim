@@ -1,4 +1,4 @@
-import { wms, type WmsItem } from '../integrations/wms';
+import { wms, WmsError, type WmsItem } from '../integrations/wms';
 import { drawRobot } from './scene/robotArt';
 
 // Het blok in het WMS-paneel (K) dat de artikelen in de WMS een afbeelding geeft: de tekening van de robot die
@@ -61,6 +61,15 @@ export function mountWmsImages(parent: HTMLElement) {
         await client.uploadItemImage({ sku: item.sku, fileName: `${item.sku}.png`, data: await articleImage(item.sku) });
         done++;
       } catch (err) {
+        // Komt de upload niet eens bij de WMS aan terwijl het ophalen wel lukt, dan weigert de browser hem:
+        // de WMS staat de header X-File-Name niet toe in CORS (docs/wms/16, 2.1).
+        if (err instanceof WmsError && err.status === undefined) {
+          failed.push(
+            'de browser houdt de upload tegen: de WMS moet de header X-File-Name toestaan in CORS ' +
+              '(Access-Control-Allow-Headers, zie docs/wms/16)',
+          );
+          break;
+        }
         failed.push(`${item.sku}: ${err instanceof Error ? err.message : String(err)}`);
         // Is de WMS niet bereikbaar of mag het niet, dan geldt dat ook voor de rest
         if (failed.length >= 2 && done === 0) break;
