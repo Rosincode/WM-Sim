@@ -4,8 +4,10 @@ import { STYLE, onTop } from './scene/style';
 import { canvasTexture } from './scene/textures';
 import type { Solid } from './scene/warehouse';
 
-// Raketwerper (3): schiet het magazijn kapot. De schade is alleen beeld, in deze browser: de sim, de voorraad en de
-// WMS merken er niets van, en andere spelers zien het niet. Daardoor is herstellen (menu › Raketwerper) altijd veilig.
+// Raketwerper (3): schiet het magazijn kapot. De schade is alleen beeld: de sim, de voorraad en de WMS merken er
+// niets van. Daardoor is herstellen (menu › Raketwerper) altijd veilig. In multiplayer gaat elke inslag (en het
+// herstellen) naar alle spelers (src/ui/multiplayer.ts): iedereen ziet dezelfde schade, en de raket van een ander
+// blaast jou op: je begint dan weer op de startplek.
 // Zo werkt de schade:
 // - alles wat binnen de ontploffing valt verdwijnt van zijn plek: een losse mesh wordt verborgen, een exemplaar van een
 //   InstancedMesh krijgt schaal nul, en van een heel grote mesh (de locatielabels samen, de vloerverf) alleen de
@@ -24,6 +26,14 @@ interface Options {
   onChange: (tool: 'scanner' | 'tablet' | null) => void;
   /** Iets wat kapot was (robot, voertuig, mens) is er weer: de aanroeper mag het op een andere plek neerzetten. */
   onRespawn?: (unit: THREE.Object3D) => void;
+  /** Een eigen raket is ingeslagen: de andere spelers moeten dezelfde inslag zien. */
+  onExplode?: (x: number, y: number, z: number) => void;
+  /** De speler heeft het magazijn hersteld: dat geldt voor iedereen. */
+  onRestore?: () => void;
+  /** Waar de speler zelf staat (voeten): de raket van een ander kan hem opblazen. */
+  self?: () => THREE.Vector3;
+  /** De speler is opgeblazen door de raket van `by`: de aanroeper zet hem terug op de startplek. */
+  onKilled?: (by: string) => void;
 }
 
 /** Straal van een ontploffing (m). */
@@ -40,6 +50,8 @@ const DEBRIS_PER_BLAST = 190;
 const PARTS_PER_MACHINE = 45;
 /** Na zoveel seconden is een mens, robot of voertuig er weer. */
 const RESPAWN = 7;
+/** Een mens is er sneller weer: een opgeblazen speler loopt intussen al rond vanaf de startplek. */
+const PERSON_RESPAWN = 3;
 /** Wat bóven de inslag hangt telt zijn hoogte maar half mee: van een geraakte stelling stort ook de rest erboven in. */
 const ABOVE = 0.5;
 /** Afstand van de inslag tot een punt, met die regel. */
@@ -55,7 +67,7 @@ type Ring = { mesh: THREE.Mesh; age: number };
 type Fire = { at: THREE.Vector3; left: number; size: number; flame: number; fume: number };
 type Dead = { scale: THREE.Vector3; until: number; body?: Debris };
 
-export function createRocketLauncher({ scene, camera, canvas, onChange, onRespawn }: Options) {
+export function createRocketLauncher({ scene, camera, canvas, onChange, onRespawn, onExplode, onRestore, self, onKilled }: Options) {
   /** Alles wat de werper zelf in de scène zet (raketten, rook, puin, schroeiplekken): dat schiet je niet kapot. */
   const fx = new THREE.Group();
   fx.userData.noBlast = true;
@@ -284,7 +296,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     if (box.isEmpty()) return;
     box.clampPoint(p, near);
     if (reach(p, near.x, near.y, near.z) > r) return;
-    const entry: Dead = { scale: unit.scale.clone(), until: clock + RESPAWN };
+    const entry: Dead = { scale: unit.scale.clone(), until: clock + (kind === 'person' ? PERSON_RESPAWN : RESPAWN) };
     if (kind === 'person') {
       // Een mens vliegt in zijn geheel weg en blijft liggen tot hij terugkomt
       const body = unit.clone(true);
@@ -333,11 +345,12 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     }
   }
 
-  function destroy(p: THREE.Vector3, r: number) {
+  /** @param spare dit blijft heel (de schutter zelf), of 'units': mensen, robots en voertuigen blijven allemaal heel */
+  function destroy(p: THREE.Vector3, r: number, spare?: THREE.Object3D | 'units') {
     const pieces: Piece[] = [];
     const walk = (o: THREE.Object3D) => {
       if (!o.visible || o.userData.noBlast || o === camera) return;
-      if (o.userData.blastUnit) return blastUnit(o, o.userData.blastUnit, p, r);
+      if (o.userData.blastUnit) return spare === 'units' || o === spare ? undefined : blastUnit(o, o.userData.blastUnit, p, r);
       const mesh = o as THREE.InstancedMesh;
       if (mesh.isInstancedMesh) blastInstances(mesh, p, r, pieces);
       else if (mesh.isMesh) blastMesh(mesh, p, r, pieces);
@@ -360,7 +373,10 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     }
   }
 
-  function restore() {
+  /** @param remote een andere speler herstelde: niet nog eens rondsturen */
+  function restore(remote = false) {
+    if (!remote && shots) onRestore?.();
+    seen.clear();
     for (const [mesh, rec] of instanced) {
       for (const [i, m] of rec.saved) {
         if (i >= mesh.instanceMatrix.count) continue;
@@ -452,10 +468,42 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
   );
   const scorchGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
 
-  function explode(p: THREE.Vector3) {
+  /** Inslagen die al verwerkt zijn (op 10 cm): dezelfde inslag komt soms twee keer binnen. */
+  const seen = new Set<string>();
+  function scorch(p: THREE.Vector3) {
+    const mark = new THREE.Mesh(scorchGeo, scorchMat);
+    mark.position.set(p.x, 0.005, p.z);
+    mark.rotation.y = rnd(0, 6);
+    mark.scale.setScalar(BLAST * rnd(1.6, 2.1));
+    mark.receiveShadow = true;
+    fx.add(mark);
+    scorches.push(mark);
+  }
+  /**
+   * Een inslag. Zonder `from` is het een eigen raket; die gaat ook naar de andere spelers.
+   * @param from by = naam van de speler die schoot, spare = zijn figuur (zijn eigen raket doet hem niets);
+   *             quiet = schade van eerder (voor wie later binnenkomt): alleen het gat, zonder knal en puin.
+   */
+  function explode(p: THREE.Vector3, from?: { by?: string; spare?: THREE.Object3D; quiet?: boolean }) {
+    const key = `${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
     shots++;
     zones.push({ p: p.clone(), r: BLAST });
-    const pieces = destroy(p, BLAST);
+    if (from?.quiet) {
+      destroy(p, BLAST, 'units');
+      if (p.y < 2.2) scorch(p);
+      passFrom = null;
+      refreshPanel();
+      return;
+    }
+    if (!from) onExplode?.(+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2));
+    else if (self && onKilled) {
+      // de raket van een ander: sta je erin, dan ben je er geweest
+      const me = self();
+      if (reach(p, me.x, THREE.MathUtils.clamp(p.y, me.y, me.y + 1.8), me.z) <= BLAST * 0.8) killed(from.by ?? 'iemand');
+    }
+    const pieces = destroy(p, BLAST, from?.spare);
     // Puin: de grote stukken (staanders, liggers, pallets) allemaal, van de rest (dozen) een greep
     pieces.sort((a, b) => b.size - a.size);
     const big = pieces.findIndex((piece) => piece.size < 0.55);
@@ -496,19 +544,26 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     burn(new THREE.Vector3(p.x, ground, p.z), rnd(6, 9), 1.2);
     for (let i = 0; i < 3; i++) burn(new THREE.Vector3(p.x + rnd(-3, 3), 0.1, p.z + rnd(-3, 3)), rnd(4, 10), rnd(0.5, 0.9));
 
-    if (p.y < 2.2) {
-      const mark = new THREE.Mesh(scorchGeo, scorchMat);
-      mark.position.set(p.x, 0.005, p.z);
-      mark.rotation.y = rnd(0, 6);
-      mark.scale.setScalar(BLAST * rnd(1.6, 2.1));
-      mark.receiveShadow = true;
-      fx.add(mark);
-      scorches.push(mark);
-    }
+    if (p.y < 2.2) scorch(p);
     const d = camera.getWorldPosition(center).distanceTo(p);
     shake = Math.max(shake, THREE.MathUtils.clamp(1.5 - d / 35, 0, 1));
     sound('boom', THREE.MathUtils.clamp(1.15 - d / 90, 0.15, 1));
     refreshPanel();
+  }
+
+  // ---------- Opgeblazen: even een rood scherm, en terug naar de startplek ----------
+  const overlay = document.createElement('div');
+  overlay.style.cssText =
+    'position:fixed;inset:0;z-index:55;display:flex;align-items:center;justify-content:center;pointer-events:none;opacity:0;background:radial-gradient(circle,rgba(150,20,10,.35),rgba(90,0,0,.8));color:#fff;font:700 34px system-ui,sans-serif;text-shadow:0 2px 8px #000;text-align:center';
+  document.body.appendChild(overlay);
+  function killed(by: string) {
+    overlay.textContent = `Opgeblazen door ${by}`;
+    overlay.style.transition = 'none';
+    overlay.style.opacity = '1';
+    void overlay.offsetWidth; // de overgang hieronder begint pas na dit beeld
+    overlay.style.transition = 'opacity 2.2s ease-in 0.6s';
+    overlay.style.opacity = '0';
+    onKilled?.(by);
   }
 
   // ---------- Geluid: ter plekke opgewekt, net als de rest van de game ----------
@@ -642,7 +697,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
   // ---------- Menu: pakken en herstellen ----------
   const panel = document.createElement('div');
   panel.innerHTML = `<div><b>3</b>: raketwerper pakken of wegleggen (te voet, in first person) · <b>Klik</b>: vuren · <b>1</b>/<b>2</b>: terug naar scanner of tablet</div>
-    <div style="margin-top:6px;color:#9aa0a6">Alles kan kapot: stellingen, voorraad, robots, karren, vrachtwagens en mensen. Robots, voertuigen en mensen komen na een paar tellen vanzelf terug. De schade is alleen beeld in jouw browser: de voorraad, de WMS en de andere spelers merken er niets van.</div>
+    <div style="margin-top:6px;color:#9aa0a6">Alles kan kapot: stellingen, voorraad, robots, karren, vrachtwagens en mensen. Robots, voertuigen en mensen komen na een paar tellen vanzelf terug. Iedereen in de kamer ziet dezelfde schade, en de raket van een ander blaast jou op (je begint dan weer op de startplek). Herstellen geldt ook voor iedereen. De schade is alleen beeld: de voorraad en de WMS merken er niets van.</div>
     <div class="state" style="margin-top:10px"></div>
     <div style="display:flex;gap:8px;margin-top:10px">
       <button class="restore" style="padding:8px 14px;border:0;border-radius:6px;background:#2e7d4f;color:#fff;font:600 14px system-ui,sans-serif;cursor:pointer">Magazijn herstellen</button>
@@ -659,7 +714,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     equipBtn.textContent = equipped ? 'Raketwerper wegleggen' : 'Raketwerper pakken';
   }
   restoreBtn.addEventListener('click', () => {
-    restore();
+    restore(); // geldt voor iedereen in de kamer
     restoreBtn.blur();
   });
   equipBtn.addEventListener('click', () => {
@@ -806,8 +861,16 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     },
     /** De blokken waar de speler tegenaan loopt, zonder wat er is weggeschoten. */
     passable,
-    /** Zet alles terug zoals het was. */
+    /** Zet alles terug zoals het was. remote: een andere speler deed dat (niet nog eens rondsturen). */
     restore,
+    /** De inslag van de raket van een andere speler (by = zijn naam, spare = zijn figuur: dat blijft heel). */
+    remoteBlast: (x: number, y: number, z: number, by: string, spare?: THREE.Object3D) => explode(new THREE.Vector3(x, y, z), { by, spare }),
+    /** Alle inslagen tot nu toe, voor een speler die later binnenkomt. */
+    zones: () => zones.map((z) => [+z.p.x.toFixed(2), +z.p.y.toFixed(2), +z.p.z.toFixed(2)]),
+    /** Schade van voor je binnenkwam overnemen: alleen de gaten, zonder knal. */
+    applyZones(list: number[][]) {
+      for (const [x, y, z] of list) explode(new THREE.Vector3(x, y, z), { quiet: true });
+    },
     /** Vuurt (voor testen: zonder vastgezette muis). */
     shoot,
     /** Voor testen: een inslag op deze plek. */

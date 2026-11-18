@@ -209,6 +209,18 @@ const rocket = createRocketLauncher({
   },
   // De heftruck en de pompwagen staan na een voltreffer weer in hun vak (als niemand ze gebruikt); wat erop stond
   // blijft erop. Robots en mensen komen terug waar de sim ze op dat moment heeft.
+  onExplode: (x, y, z) => multiplayer?.sendBlast(x, y, z),
+  onRestore: () => multiplayer?.sendRestore(),
+  self: () => player.position,
+  // Opgeblazen door een andere speler: terug naar de startplek, uit de heftruck of van je stoel
+  onKilled: (by) => {
+    if (chair) standUp();
+    setDriving(false);
+    if (jack.held) holdJack(false);
+    player.position.set(START.player.x, 0, START.player.z);
+    player.rotation.y = START.player.r;
+    multiplayer?.sendKilled(by);
+  },
   onRespawn: (unit) => {
     if (unit === forklift.group && !driving && !multiplayer?.forkliftDriver())
       forklift.applyState({ ...forklift.getState(), x: forkliftHome.x, z: forkliftHome.z, r: forkliftHome.r, h: forkliftHome.h }, false);
@@ -527,6 +539,7 @@ const multiplayer = params.has('solo')
       forklift,
       jack: { getState: jack.getState, applyState: jack.applyState, grip: jack.grip, held: () => jack.held, release: () => holdJack(false) },
       radio,
+      rocket,
       airborne: () => view.airborne,
       rider: () => {
         const on = view.standingOn;

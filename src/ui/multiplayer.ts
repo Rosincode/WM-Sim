@@ -104,6 +104,13 @@ interface Options {
   chairHipY: number;
   /** De kantoormedewerkers: de host stuurt hun stand rond, de anderen volgen die. */
   staff: { net(): unknown; follow(data: unknown): void; lead(): void };
+  /** De raketwerper: inslagen en herstellen gelden voor alle spelers (src/ui/rocketLauncher.ts). */
+  rocket: {
+    remoteBlast(x: number, y: number, z: number, by: string, spare?: THREE.Object3D): void;
+    restore(remote: boolean): void;
+    zones(): number[][];
+    applyZones(list: number[][]): void;
+  };
   /** Zit deze speler op een stoel (aan een bureau)? */
   isSitting(): boolean;
   isDriving(): boolean;
@@ -495,6 +502,16 @@ export function mountMultiplayer(o: Options) {
     sendRadio();
   });
 
+  // ---------- Raketwerper: inslagen gelden voor iedereen ----------
+  const MAX_ZONES = 80;
+  const lastBlastAt = new Map<string, number>();
+  /** Een punt uit een bericht, als het een zinnige plek is (de brokers zijn publiek). */
+  const blastPoint = (v: unknown): number[] | null => {
+    if (!Array.isArray(v) || v.length < 3) return null;
+    const [x, y, z] = v.map(Number);
+    return [x, y, z].every(Number.isFinite) && Math.abs(x) < 400 && Math.abs(z) < 400 && y > -5 && y < 80 ? [x, y, z] : null;
+  };
+
   room.on((kind, from, data) => {
     if (kind === 'r' && isObj(data) && typeof data.rev === 'number' && typeof data.w === 'string') {
       if (data.rev > radioRev || (data.rev === radioRev && data.w > radioWriter)) {
@@ -513,6 +530,22 @@ export function mountMultiplayer(o: Options) {
       // Een tabblad op de achtergrond speelt niet mee (de game staat daar stil): geen figuur laten zien.
       if (!document.hidden) sendPose(true);
       if (room.isHost) sendState();
+      if (room.isHost && o.rocket.zones().length) room.send('xz', o.rocket.zones().slice(-MAX_ZONES)); // wat er al kapot is
+    } else if (kind === 'x' && isObj(data)) {
+      // De raket van een andere speler is ingeslagen: hier dezelfde inslag (wie erin staat is er geweest)
+      const p = blastPoint([data.x, data.y, data.z]);
+      const now = performance.now();
+      if (!p || now - (lastBlastAt.get(from.id) ?? 0) < 250) return; // sneller dan de werper kan vuren: onzin
+      lastBlastAt.set(from.id, now);
+      const a = avatars.get(from.id);
+      o.rocket.remoteBlast(p[0], p[1], p[2], a?.pose.n ?? 'iemand', a?.character.group);
+    } else if (kind === 'xz' && Array.isArray(data)) {
+      o.rocket.applyZones(data.slice(-MAX_ZONES).map(blastPoint).filter((p) => p !== null));
+    } else if (kind === 'xr') {
+      o.rocket.restore(true);
+      chat.system(`${avatars.get(from.id)?.pose.n ?? 'Iemand'} heeft het magazijn hersteld.`);
+    } else if (kind === 'xk' && isObj(data)) {
+      chat.system(`${cleanChat(String(data.by ?? '')).slice(0, 24) || 'Iemand'} heeft ${avatars.get(from.id)?.pose.n ?? 'iemand'} opgeblazen.`);
     } else if (kind === 'st') {
       if (!room.isHost) o.staff.follow(data); // alleen de host laat ze lopen
     } else if (kind === 'p' && isObj(data)) {
@@ -767,6 +800,19 @@ export function mountMultiplayer(o: Options) {
     },
     /** Naam van de speler die nu de pompwagen vasthoudt, of null. */
     jackHolder: () => remoteHolder()?.pose.n ?? null,
+    /** Een eigen raket is ingeslagen: iedereen ziet dezelfde inslag. */
+    sendBlast(x: number, y: number, z: number) {
+      if (room.status === 'online') room.send('x', { x, y, z });
+    },
+    /** Deze speler heeft het magazijn hersteld: dat geldt voor iedereen. */
+    sendRestore() {
+      if (room.status === 'online') room.send('xr', null);
+    },
+    /** Deze speler is opgeblazen door `by`: dat komt bij iedereen in de chat. */
+    sendKilled(by: string) {
+      chat.system(`${by} heeft jou opgeblazen.`);
+      if (room.status === 'online') room.send('xk', { by });
+    },
     update(dt: number) {
       room.start(); // pas verbinden als de eerste beelden lopen
       room.update();
