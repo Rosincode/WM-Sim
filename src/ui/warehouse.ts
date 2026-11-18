@@ -20,7 +20,8 @@ import { compareStock, mountWmsReconcile } from './wmsReconcile';
 // Koppelt de magazijn-sim aan de WMS (poort + stand ophalen), de 3D-scène, de HUD en het toetsenbord.
 // De hal heeft zijn eigen voorraad, voor alle spelers dezelfde. De WMS hoort wat er gebeurt via scans en kan
 // dus afwijken; alleen open orders komen doorlopend uit de WMS. De voorraad van de WMS komt alleen in de hal
-// bij de allereerste start (als er nog geen bewaarde wereld is) en met de knop 'Hal resetten' (menu, WMS-API).
+// bij de allereerste start (als er nog geen bewaarde wereld is) en met de knop 'Hal resetten' (menu, WMS-API;
+// alleen als je bent ingelogd bij de echte WMS).
 // Toetsen: E = scannen / actie (bij de pc: de WMS-app bedienen). In het menu rechtsboven: L = API-log,
 // I = voorraad & orders, K = aanmelden bij de WMS-API.
 
@@ -107,17 +108,31 @@ export function mountWarehouse({
   const resetBox = document.createElement('div');
   resetBox.style.cssText = 'margin-top:12px;padding-top:10px;border-top:1px solid #3a4047';
   resetBox.innerHTML =
-    '<div style="margin-bottom:6px">De hal heeft zijn eigen voorraad, voor alle spelers dezelfde. De WMS hoort alleen via scans wat er ' +
-    'verandert en kan dus afwijken van wat er echt staat.</div>' +
+    '<div style="margin-bottom:6px">De WMS is leidend. Deze knop zet de hal, voor alle spelers, gelijk aan de voorraad en open orders ' +
+    'in de WMS: een schoon startpunt.</div>' +
     '<button style="padding:6px 10px;border:0;border-radius:5px;background:#8a3b2e;color:#fff;font:inherit;cursor:pointer"></button>' +
     '<div class="note" style="margin-top:6px;color:#9aa0a6"></div>';
   const resetButton = resetBox.querySelector('button')!;
   const resetNote = resetBox.querySelector<HTMLDivElement>('.note')!;
   const RESET_LABEL = 'Hal resetten naar de WMS-voorraad';
   resetButton.textContent = RESET_LABEL;
+  // Alleen met de echte WMS: de mock heeft maar een handvol losse voorraadregels, en een reset geldt voor alle
+  // spelers. Een reset zonder login zou de hal van iedereen dus vrijwel leeg maken.
+  const NO_LOGIN = 'Log eerst hierboven in bij de WMS. Zonder login draait de game op de oefen-WMS (mock), met maar een handvol voorraad.';
+  function refreshReset() {
+    const live = wms.client.mode === 'live';
+    resetButton.disabled = !live;
+    resetButton.style.opacity = live ? '1' : '.5';
+    resetButton.style.cursor = live ? 'pointer' : 'not-allowed';
+    if (!live) resetNote.textContent = NO_LOGIN;
+    else if (resetNote.textContent === NO_LOGIN) resetNote.textContent = '';
+  }
+  refreshReset();
+  wms.onChange(refreshReset);
   let resetArmed = 0;
   resetButton.addEventListener('click', () => {
     resetButton.blur();
+    if (wms.client.mode !== 'live') return refreshReset();
     // Twee keer klikken: de reset geldt voor iedereen en gooit weg wat fysiek afweek.
     if (performance.now() - resetArmed > 5000) {
       resetArmed = performance.now();
@@ -163,6 +178,7 @@ export function mountWarehouse({
   /** Zet de hal gelijk met de voorraad en open orders in de WMS; geeft het aantal voorraadregels terug. */
   async function resetToWms() {
     const client = wms.client;
+    if (client.mode !== 'live') throw new Error(NO_LOGIN);
     const [stock, orders, pallets, outbound] = await Promise.all([client.getStock(), client.getOpenOrders(), readPallets(client), readOutbound(client)]);
     resetListeners.forEach((l) => l()); // eerst: wat op vorken of los op de vloer staat verdwijnt
     sim.loadSnapshot(stock, orders, client.mode === 'live' ? 'de WMS' : 'de mock-WMS', pallets, outbound.staged);
