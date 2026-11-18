@@ -7,6 +7,8 @@ import { drawRobot } from './scene/robotArt';
 
 /** Zijde (px) van de afbeelding die naar de WMS gaat. */
 const SIZE = 512;
+/** Zo lang wachten we per artikel op de WMS. */
+const UPLOAD_TIMEOUT_MS = 60_000;
 
 /** De tekening van een artikel als png. */
 export function articleImage(sku: string): Promise<Blob> {
@@ -58,9 +60,27 @@ export function mountWmsImages(parent: HTMLElement) {
     render();
     for (const item of todo) {
       try {
-        await client.uploadItemImage({ sku: item.sku, fileName: `${item.sku}.png`, data: await articleImage(item.sku) });
+        const data = await articleImage(item.sku);
+        // De upload wacht achter de andere boekingen van de hal, en die wachten bij 'te veel aanroepen' (429) op
+        // de WMS. Duurt het te lang, dan stoppen in plaats van eindeloos 'Bezig…' te tonen.
+        let timer = 0;
+        const slow = new Promise<never>((_, reject) => {
+          timer = window.setTimeout(() => reject(new Error('slow')), UPLOAD_TIMEOUT_MS);
+        });
+        try {
+          await Promise.race([client.uploadItemImage({ sku: item.sku, fileName: `${item.sku}.png`, data }), slow]);
+        } finally {
+          clearTimeout(timer);
+        }
         done++;
       } catch (err) {
+        if (err instanceof Error && err.message === 'slow') {
+          failed.push(
+            `geen antwoord van de WMS binnen ${UPLOAD_TIMEOUT_MS / 1000} s: de WMS krijgt te veel aanroepen ` +
+              '(hooguit 120 per minuut) of de hal heeft nog veel boekingen in de rij. Probeer het zo opnieuw.',
+          );
+          break;
+        }
         // Komt de upload niet eens bij de WMS aan terwijl het ophalen wel lukt, dan weigert de browser hem:
         // de WMS staat de header X-File-Name niet toe in CORS (docs/wms/16, 2.1).
         if (err instanceof WmsError && err.status === undefined) {
