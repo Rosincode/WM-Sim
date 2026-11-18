@@ -27,6 +27,7 @@ import { mountMultiplayer } from './ui/multiplayer';
 import { mountRobots } from './ui/robots';
 import { mountDrivers } from './ui/drivers';
 import { mountStaff } from './ui/staff';
+import { mountThieves } from './ui/thieves';
 import { SceneRenderPass } from './ui/sceneRenderPass';
 import { menu } from './ui/menu';
 import { createPrompts, esc, type Prompt } from './ui/prompts';
@@ -285,7 +286,7 @@ const outdoorSolids = [() => warehouse.truckSolids(), () => exterior.solids];
 /** Iedereen die te voet is (jij en de andere spelers): voor hen gaan de deuren naar buiten open. */
 const walkers = () => [player.position, ...(multiplayer?.obstacles() ?? [])];
 /** Voor de entree ook de kantoormedewerkers: zij komen daar van het parkeerterrein de hal in. */
-const entrants = () => [...walkers(), ...staff.walkers()];
+const entrants = () => [...walkers(), ...staff.walkers(), ...thieves.walkers()];
 /** Waar robots en chauffeurs voor blijven staan: spelers, de heftruck, de pompwagen en pallets die los op de vloer staan. */
 function humanObstacles() {
   const along = (o: THREE.Object3D, offsets: number[], rad: number) =>
@@ -542,7 +543,7 @@ const robots = mountRobots({
 warehouse.counter.setObstacles(() => [...humanObstacles(), ...drivers.obstacles(), ...staff.obstacles(), ...robots.obstacles()]);
 
 // --- Chauffeurs: lossen en laden hun vrachtwagen zelf, met de elektrische pompwagen die bij elk dock staat ---
-const drivers = mountDrivers({ scene, hall, exterior, ...warehouse.docks, obstacles: humanObstacles, visitors: walkers });
+const drivers = mountDrivers({ scene, hall, exterior, ...warehouse.docks, obstacles: humanObstacles, visitors: () => [...walkers(), ...thieves.walkers()] });
 // --- Kantoormedewerkers: komen met de auto, werken op het kantoor, halen koffie en eten in de kantine ---
 // Handig bij testen: ?staff=120 laat ze vooraf al 120 seconden hun gang gaan
 const staff = mountStaff({ scene, hall, obstacles: humanObstacles, playerSeat: () => chair, seatUsed: (i) => warehouse.docks.drivers.drivers.some((d) => d.seat === i), othersSeated: () => multiplayer?.seated() ?? [], skip: Number(params.get('staff')) || 0 });
@@ -559,6 +560,15 @@ const earRight = new THREE.Vector3();
 const jackDistance = () => Math.hypot(player.position.x - jack.group.position.x, player.position.z - jack.group.position.z);
 const nearJack = () => jackDistance() < 2.2 && player.position.y < 1;
 if (import.meta.env.DEV) Object.assign((window as unknown as { wmDebug: object }).wmDebug, { jack, player });
+
+// --- Boeven (menu › Boeven): waves die de voorraad komen stelen; pak ze door ertegenaan te lopen ---
+const thieves = mountThieves({
+  scene,
+  pallets: warehouse.pallets,
+  // jij (niet vanuit de heftruck of een stoel) en de andere spelers in de kamer
+  catchers: () => [...(driving || chair ? [] : [{ x: player.position.x, z: player.position.z, y: player.position.y }]), ...(multiplayer?.obstacles() ?? [])],
+});
+if (import.meta.env.DEV) Object.assign((window as unknown as { wmDebug: object }).wmDebug, { thieves });
 
 // --- Multiplayer: iedereen speelt samen in één magazijn (?room=naam voor een eigen kamer, ?solo om alleen te spelen) ---
 const multiplayer = params.has('solo')
@@ -584,6 +594,7 @@ const multiplayer = params.has('solo')
       seatHipY: forklift.seat.y - 0.56,
       chairHipY: CHAIR_HIP_Y,
       staff,
+      thieves,
       isSitting: () => !!chair,
       isDriving: () => driving,
       look: () => (view.mode === 'first' ? view.look : { yaw: 0, pitch: 0 }),
@@ -710,6 +721,7 @@ renderer.setAnimationLoop((now) => {
   robots.update(dt);
   drivers.update(dt);
   staff.update(dt);
+  thieves.update(dt);
   // De nooduitgang gaat open voor wie ervoor staat, binnen of buiten
   const atExit = entrants().some((w) => Math.hypot(w.x - EXIT_X, w.z - HALL.d / 2) < 2.2);
   const nextExit = THREE.MathUtils.clamp(exitOpen + (atExit ? dt : -dt) / 0.6, 0, 1);

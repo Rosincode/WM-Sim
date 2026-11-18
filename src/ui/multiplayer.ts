@@ -107,6 +107,15 @@ interface Options {
   chairHipY: number;
   /** De kantoormedewerkers: de host stuurt hun stand rond, de anderen volgen die. */
   staff: { net(): unknown; follow(data: unknown): void; lead(): void };
+  /** De boeven (src/ui/thieves.ts): de host laat ze lopen en stuurt de stand rond; de anderen sturen verzoeken (tq). */
+  thieves: {
+    net(): unknown;
+    follow(data: unknown): void;
+    lead(): void;
+    request(data: unknown): void;
+    connect(send: (data: unknown) => void): void;
+    readonly busy: boolean;
+  };
   /** De raketwerper: inslagen en herstellen gelden voor alle spelers (src/ui/rocketLauncher.ts). */
   rocket: {
     remoteBlast(x: number, y: number, z: number, by: string, spare?: THREE.Object3D): void;
@@ -552,6 +561,10 @@ export function mountMultiplayer(o: Options) {
       chat.system(`${cleanChat(String(data.by ?? '')).slice(0, 24) || 'Iemand'} heeft ${avatars.get(from.id)?.pose.n ?? 'iemand'} opgeblazen.`);
     } else if (kind === 'st') {
       if (!room.isHost) o.staff.follow(data); // alleen de host laat ze lopen
+    } else if (kind === 'th') {
+      if (!room.isHost) o.thieves.follow(data);
+    } else if (kind === 'tq') {
+      if (room.isHost) o.thieves.request(data);
     } else if (kind === 'p' && isObj(data)) {
       const a = avatars.get(from.id) ?? addAvatar(from);
       const wasNew = !a.placed;
@@ -770,6 +783,8 @@ export function mountMultiplayer(o: Options) {
   let chipAt = 0;
   let staffAt = 0;
   let lastStaff = '';
+  let thievesAt = 0;
+  o.thieves.connect((d) => room.send('tq', d));
 
   return {
     /** Naam van de speler die nu met de heftruck rijdt, of null. */
@@ -931,6 +946,12 @@ export function mountMultiplayer(o: Options) {
           staffAt = now;
           lastStaff = staffNow;
           room.send('st', JSON.parse(staffNow));
+        }
+        // Boeven: tijdens een wave vaak, anders af en toe (zodat iedereen weet bij welke wave we zijn)
+        o.thieves.lead();
+        if (avatars.size && now - thievesAt >= (o.thieves.busy ? STAFF_MS : STAFF_HEARTBEAT_MS) && !room.congested) {
+          thievesAt = now;
+          room.send('th', o.thieves.net());
         }
       }
 

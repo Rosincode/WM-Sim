@@ -54,16 +54,26 @@ export interface HandTarget {
   hideHand?: boolean;
 }
 
-export function createCharacter(group: THREE.Group = new THREE.Group(), colors: { /** Kleur van het hesje (andere spelers krijgen een eigen kleur). */ vest?: string } = {}) {
+export function createCharacter(
+  group: THREE.Group = new THREE.Group(),
+  colors: {
+    /** Kleur van het hesje (andere spelers krijgen een eigen kleur). */ vest?: string;
+    /** 'thief': een boef (src/ui/thieves.ts) in een zwart-wit gestreept boevenpak met een bivakmuts, zonder helm of hesje. */
+    outfit?: 'thief';
+  } = {},
+) {
+  const thief = colors.outfit === 'thief';
   group.userData.blastUnit = 'person'; // één geheel voor de raketwerper (src/ui/rocketLauncher.ts): wordt weggeblazen en komt terug
   const mat = (color: string, roughness = 0.85, metalness = 0) => new THREE.MeshStandardMaterial({ color, roughness, metalness });
-  const vest = mat(colors.vest ?? '#f0590f', 0.8);
+  const vest = thief ? mat('#1b1c1f', 0.9) : mat(colors.vest ?? '#f0590f', 0.8);
+  /** De witte strepen van het boevenpak. */
+  const prison = mat('#e6e3da', 0.9);
   const stripe = new THREE.MeshStandardMaterial({ color: '#e4e7e2', roughness: 0.3, metalness: 0.35, side: THREE.DoubleSide });
   const dark = mat('#17181a', 0.6);
-  const shirt = mat('#243349');
-  const trousers = mat('#2c313b', 0.9);
+  const shirt = thief ? vest : mat('#243349');
+  const trousers = thief ? vest : mat('#2c313b', 0.9);
   const sole = mat('#0e0e0f', 0.9);
-  const glove = mat('#4a4d52', 0.9);
+  const glove = thief ? mat('#232427', 0.9) : mat('#4a4d52', 0.9);
   const skin = mat('#d6a07c', 0.65);
   const helmet = mat('#f2c200', 0.35);
 
@@ -213,13 +223,18 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
     geo.computeVertexNormals();
     return mesh(geo, m, shell);
   }
-  // Reflecterende banden: één rond de taille, twee over de schouders; rits midden voor.
-  mesh(loft(VEST, 0.003, 0, 0.045, false).geo, stripe, shell);
-  for (const side of [1, -1]) band(side * 0.086, 0.036, 0.045, 0.59, true, stripe);
-  band(0, 0.009, -0.053, 0.575, false, dark);
+  if (thief) {
+    // Boevenpak: brede witte banden rondom, 3 mm boven het zwart
+    for (let y = -0.05; y < 0.53; y += 0.09) mesh(loft(VEST, 0.003, y, y + 0.045, false).geo, prison, shell);
+  } else {
+    // Reflecterende banden: één rond de taille, twee over de schouders; rits midden voor.
+    mesh(loft(VEST, 0.003, 0, 0.045, false).geo, stripe, shell);
+    for (const side of [1, -1]) band(side * 0.086, 0.036, 0.045, 0.59, true, stripe);
+    band(0, 0.009, -0.053, 0.575, false, dark);
+  }
   // Kraag van het shirt en de nek
   mesh(new THREE.CylinderGeometry(0.058, 0.072, 0.03, 20), shirt, torso, 0, 0.59, 0.002);
-  const neck = lathe([[0.062, -0.075], [0.054, -0.035], [0.049, 0.01], [0.049, 0.065]], skin, torso);
+  const neck = lathe([[0.062, -0.075], [0.054, -0.035], [0.049, 0.01], [0.049, 0.065]], thief ? vest : skin, torso); // de bivakmuts loopt over de hals
   neck.position.set(0, 0.63, 0.002);
   neck.rotation.x = 0.1;
   neck.scale.z = 1.08;
@@ -252,12 +267,13 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
     headGeo.computeBoundingSphere();
   }
   const skinColor = skin.color.clone();
-  const headMat = new THREE.MeshStandardMaterial({ color: skinColor, roughness: 0.65 });
+  // Een boef draagt een bivakmuts: het hoofd en de oren zijn van zwarte stof, alleen rond de ogen zie je huid.
+  const headMat = thief ? mat('#161719', 0.95) : new THREE.MeshStandardMaterial({ color: skinColor, roughness: 0.65 });
   mesh(headGeo, headMat, skull);
 
   // Oren
   [1, -1].forEach((side) => {
-    const ear = ball(1, skin, skull, side * halfWidth(-0.012) * 0.98, -0.012, -0.012);
+    const ear = ball(1, thief ? headMat : skin, skull, side * halfWidth(-0.012) * 0.98, -0.012, -0.012);
     ear.scale.set(0.011, 0.031, 0.019);
     ear.rotation.set(0.12, side * 0.4, 0);
   });
@@ -267,21 +283,27 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   const eyeY = headY(EYES.v);
   for (const side of [1, -1]) {
     const e = headFront(side * 0.031, eyeY);
-    const eye = ball(0.0115, white, skull, e.x, e.y, e.z - 0.004);
+    // bivakmuts: een gat per oog waar de huid door te zien is; de ogen steken er 3 mm voor uit
+    const out = thief ? 0.003 : 0;
+    if (thief) ball(1, skin, skull, e.x, e.y, e.z - 0.003).scale.set(0.024, 0.016, 0.006);
+    const eye = ball(0.0115, white, skull, e.x, e.y, e.z - 0.004 + out);
     eye.scale.set(1.15, 0.72, 0.6);
-    features.push(eye, ball(0.005, dark, skull, e.x, e.y, e.z + 0.0018));
+    features.push(eye, ball(0.005, dark, skull, e.x, e.y, e.z + 0.0018 + out));
     const b = headFront(side * 0.033, eyeY + 0.021);
     const brow = mesh(new THREE.CapsuleGeometry(0.0038, 0.022, 4, 8), dark, skull, b.x, b.y, b.z);
     brow.rotation.set(0, side * 0.35, Math.PI / 2 - side * 0.12);
+    brow.visible = !thief;
     features.push(brow);
   }
   const lips = headFront(0, headY(MOUTH_V));
   const mouth = mesh(new THREE.CapsuleGeometry(0.0035, 0.03, 4, 8), mat('#9a5c4c', 0.7), skull, lips.x, lips.y, lips.z);
   mouth.rotation.z = Math.PI / 2;
+  mouth.visible = !thief;
   features.push(mouth);
   // Veiligheidshelm, op elk hoofd: een volle schaal met een opstaande rand rondom, een klep voor, een kam over
   // het midden met een lagere ribbel aan weerszijden, en binnenin de draagband die achter onder de rand uitkomt.
   const helm = pivot(skull, 0, 0.05, -0.004);
+  helm.visible = !thief;
   const HELM = { w: 0.089, d: 0.107, h: 0.09 }; // halve breedte, halve diepte en hoogte van de schaal
   const dome: [number, number][] = [[0.95, 0.001], [1.02, -0.003], [1.045, 0.002], [1.035, 0.008], [1, 0.013]];
   for (let k = 1; k <= 14; k++) {
@@ -316,15 +338,40 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
     o.scale.set(sx, 1, sz);
     return o;
   };
+  /**
+   * Boevenpak: witte ringen om een ledemaat (zelfde draaiprofiel, 3 mm dikker), om de `pitch` m een halve pitch breed,
+   * van `from` tot `to` (y, naar beneden).
+   */
+  const stripes = (pts: [number, number][], parent: THREE.Object3D, sx: number, sz: number, from: number, to: number, pitch = 0.08) => {
+    if (!thief) return;
+    const radius = (y: number) => {
+      for (let i = 0; i < pts.length - 1; i++) {
+        const [r0, y0] = pts[i];
+        const [r1, y1] = pts[i + 1];
+        if (y <= y0 && y >= y1) return r0 + ((r1 - r0) * (y0 - y)) / (y0 - y1 || 1);
+      }
+      return pts[pts.length - 1][0];
+    };
+    for (let y = from; y - pitch / 2 >= to; y -= pitch) {
+      const ys = [y - pitch / 2, y - pitch / 4, y];
+      const o = lathe(ys.map((v) => [radius(v) + 0.003, v] as [number, number]), prison, parent);
+      o.scale.set(sx, 1, sz);
+    }
+  };
 
   const palmGeo = new RoundedBoxGeometry(0.03, 0.09, 0.084, 3, 0.013);
   function arm(side: number) {
     const shoulder = pivot(torso, side * 0.203, 0.495, 0);
     shoulder.rotation.z = side * 0.04;
     // Mouw tot de elleboog: schouderkop, bovenarm en een zoom
-    limb([[0.057, 0], [0.056, -0.07], [0.05, -0.18], [0.047, -0.262], [0.049, -0.27], [0.049, -0.286], [0.03, -0.29]], shirt, shoulder, 1, 1.05);
+    const sleeve: [number, number][] = [[0.057, 0], [0.056, -0.07], [0.05, -0.18], [0.047, -0.262], [0.049, -0.27], [0.049, -0.286], [0.03, -0.29]];
+    limb(sleeve, shirt, shoulder, 1, 1.05);
+    stripes(sleeve, shoulder, 1, 1.05, -0.04, -0.27);
     const elbow = pivot(shoulder, 0, -UPPER_ARM, 0);
-    limb([[0.041, 0], [0.043, -0.05], [0.039, -0.12], [0.031, -0.2], [0.028, -FOREARM]], skin, elbow, 0.92, 1);
+    // een boef heeft lange mouwen
+    const forearm: [number, number][] = [[0.041, 0], [0.043, -0.05], [0.039, -0.12], [0.031, -0.2], [0.028, -FOREARM]];
+    limb(forearm, thief ? shirt : skin, elbow, 0.92, 1);
+    stripes(forearm, elbow, 0.92, 1, -0.02, -0.24);
     // Hand in een werkhandschoen aan een pols, zodat hij plat op het stuur kan liggen. Vingers wijzen langs -y,
     // de handpalm naar het lichaam; elke vinger heeft twee kootjes en is licht gekromd.
     const wrist = pivot(elbow, 0, -FOREARM, 0);
@@ -430,9 +477,13 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
   function leg(side: number) {
     const hip = pivot(rig, side * 0.094, -HIP_DROP, 0);
     // Werkbroek: bovenbeen, knie, kuit (iets naar achteren) en een zoom op de schoen
-    limb([[0.084, 0], [0.088, -0.07], [0.085, -0.18], [0.075, -0.31], [0.068, -THIGH]], trousers, hip);
+    const thigh: [number, number][] = [[0.084, 0], [0.088, -0.07], [0.085, -0.18], [0.075, -0.31], [0.068, -THIGH]];
+    limb(thigh, trousers, hip);
+    stripes(thigh, hip, 1, 1, -0.02, -THIGH);
     const knee = pivot(hip, 0, -THIGH, 0);
-    limb([[0.068, 0], [0.069, -0.09], [0.064, -0.2], [0.056, -0.32], [0.054, -0.385], [0.056, -0.392], [0.056, -0.405], [0.03, -SHIN]], trousers, knee, 0.96, 1.06);
+    const shin: [number, number][] = [[0.068, 0], [0.069, -0.09], [0.064, -0.2], [0.056, -0.32], [0.054, -0.385], [0.056, -0.392], [0.056, -0.405], [0.03, -SHIN]];
+    limb(shin, trousers, knee, 0.96, 1.06);
+    stripes(shin, knee, 0.96, 1.06, -0.02, -0.38);
     const foot = pivot(knee, 0, -SHIN, 0);
     // Veiligheidsschoen: hoge hiel en wreef, lage ronde neus, zool eronder
     mesh(shoeGeo, dark, foot);
