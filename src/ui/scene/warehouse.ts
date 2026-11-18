@@ -89,7 +89,7 @@ function glow(r: number, g: number, b: number) {
   return m;
 }
 
-function palletGeometry() {
+export function palletGeometry() {
   const parts: THREE.BufferGeometry[] = [];
   const b = (w: number, h: number, d: number, x: number, y: number, z: number) =>
     parts.push(new THREE.BoxGeometry(w, h, d).translate(x, y, z));

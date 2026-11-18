@@ -38,6 +38,10 @@ export const STYLE = {
   carpet: mat('#566270', 0.95, 0),
   /** Vloer van de kantine. */
   vinyl: mat('#cbc5b8', 0.8, 0),
+  /** Grijs kunststof: kratten, palletboxen. */
+  plastic: mat('#7f868d', 0.8, 0),
+  /** Isolerende hoes over een rolcontainer met diepvries. */
+  cover: mat('#a7adb3', 0.92, 0),
   /** Donker glas: ruiten van voertuigen (je kijkt er niet doorheen). */
   tinted: mat('#20262d', 0.35, 0.1),
   /** Glas in ramen: doorzichtig. */

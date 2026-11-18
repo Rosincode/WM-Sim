@@ -37,6 +37,13 @@ import { createSounds, objectSource } from './ui/sounds';
 
 const params = new URLSearchParams(location.search);
 
+// ?videoscan: alleen het koelhuis uit de videoscan-test renderen (src/ui/videoscan), niet het spel starten.
+if (params.has('videoscan')) {
+  const { startVideoscan } = await import('./ui/videoscan/render');
+  startVideoscan(params);
+  await new Promise(() => {}); // de rest van het spel nooit opstarten
+}
+
 // --- Renderer, scène, camera ---
 // Renderschaal (pixels per CSS-pixel): past zich tijdens het spelen aan de framerate aan, zie tuneScale().
 // Testen: ?scale=1 zet hem vast, ?msaa=0..4, ?ao=0 (uit) of 1 (volle resolutie), ?nobloom, ?nofx.
