@@ -26,6 +26,8 @@ interface Options {
   probeSolids?: (() => Solid[])[];
   initialMode?: ViewMode;
   onModeChange?: (mode: ViewMode) => void;
+  /** Op dit punt mag de speler buiten het loopbare gebied komen (een gat in de wand): daar loopt hij door de rand heen. */
+  free?: (x: number, z: number) => boolean;
   /** Mag de speler de jetpack gebruiken (alleen ingelogd bij de WMS)? */
   jetpackAllowed?: () => boolean;
   /** Hoogste punt van je voeten met de jetpack (onder het dak). */
@@ -55,7 +57,7 @@ const FOOT = 0.2; // zo ver mogen je voeten over een rand steken
 const JET_UP = 3.2; // m/s omhoog met spatie ingedrukt
 const JET_FALL = 0.9; // m/s omlaag als je spatie loslaat: langzaam zakken, tijd om te scannen
 
-export function createPlayerView({ camera, canvas, controls, player, hud, bounds, walkable = [], solids = [], probes, probeSolids, initialMode = 'overview', onModeChange, jetpackAllowed = () => false, ceiling = Infinity }: Options) {
+export function createPlayerView({ camera, canvas, controls, player, hud, bounds, walkable = [], solids = [], probes, probeSolids, initialMode = 'overview', onModeChange, free, jetpackAllowed = () => false, ceiling = Infinity }: Options) {
   const zones = [bounds, ...walkable];
   let mode: ViewMode = 'overview';
   let closeMode: Exclude<ViewMode, 'overview'> = 'first'; // laatst gebruikte dichtbij-modus
@@ -264,7 +266,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     // Binnen het loopbare gebied blijven: de hal, of een gebied erbuiten (aanbouw). Loop je overal uit, dan houdt
     // het gebied waar je vandaan kwam je tegen.
     const within = (z: Zone, x: number, zz: number) => x >= z.minX && x <= z.maxX && zz >= z.minZ && zz <= z.maxZ;
-    if (!zones.some((z) => within(z, p.x, p.z))) {
+    if (!zones.some((z) => within(z, p.x, p.z)) && !free?.(p.x, p.z)) {
       const home = zones.find((z) => within(z, startX, startZ)) ?? bounds;
       p.x = THREE.MathUtils.clamp(p.x, home.minX, home.maxX);
       p.z = THREE.MathUtils.clamp(p.z, home.minZ, home.maxZ);

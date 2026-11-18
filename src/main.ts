@@ -306,8 +306,6 @@ function applyMode(mode: ViewMode) {
  * staan: het bureau, de pallets op de banen, de telrobot, de robots, de chauffeurs met hun pompwagens en de andere spelers.
  */
 const otherSolids = [() => warehouse.solids(), () => robots.solids(), () => drivers.solids(), () => staff.solids(), () => multiplayer?.solids() ?? []];
-/** Waar alleen de speler te voet tegenaan loopt, buiten op het terrein: vrachtwagens, auto's, opleggers, palen en bomen. */
-const outdoorSolids = [() => warehouse.truckSolids(), () => exterior.solids];
 /** Iedereen die te voet is (jij en de andere spelers): voor hen gaan de deuren naar buiten open. */
 const walkers = () => [player.position, ...(multiplayer?.obstacles() ?? [])];
 /** Voor de entree ook de kantoormedewerkers: zij komen daar van het parkeerterrein de hal in. */
@@ -327,6 +325,19 @@ function humanObstacles() {
 
 /** Met de jetpack blijft je hoofd zo ver onder het dak. */
 const PLAYER_TOP = 2.1;
+/**
+ * Hetzelfde voor de speler te voet, zonder wat de raketwerper heeft opgeruimd: wat is weggeblazen (pallets op de banen,
+ * bomen, palen) is weg, en een robot, voertuig of mens die kapot is houdt je niet tegen tot hij terug is.
+ */
+const walkSolids = [
+  () => rocket.passable(warehouse.solids()),
+  () => rocket.alive(robots.solids()),
+  () => rocket.alive(drivers.solids()),
+  () => rocket.alive(staff.solids()),
+  () => rocket.alive(multiplayer?.solids() ?? []),
+  () => rocket.alive(warehouse.truckSolids()),
+  () => rocket.passable(exterior.solids),
+];
 const BOUNDS = { minX: -HALL.w / 2 + 0.6, maxX: HALL.w / 2 - 0.6, minZ: -HALL.d / 2 + 0.6, maxZ: HALL.d / 2 - 0.6 };
 const view = createPlayerView({
   camera,
@@ -338,10 +349,12 @@ const view = createPlayerView({
   // Ook buiten: het terrein rond het gebouw, via de chauffeursdeuren en de nooduitgang
   walkable: exterior.walkable,
   // wat met de raketwerper is weggeschoten houdt je niet meer tegen
-  solids: [() => rocket.passable(hall.solids()), () => forklift.solids(), () => jack.solids(), ...otherSolids, ...outdoorSolids],
+  solids: [() => rocket.passable(hall.solids()), () => rocket.alive(forklift.solids()), () => rocket.alive(jack.solids()), ...walkSolids],
+  // en door een gat in de wand loop je naar buiten
+  free: rocket.free,
   // Wat je voor je uit hebt botst ook: de pallet die je draagt, of de pompwagen met wat erop staat
   probes: () => (jack.held ? jack.probes() : warehouse.carrying() ? [{ ahead: CARRY_AHEAD, radius: CARRY_RADIUS }] : []),
-  probeSolids: [() => rocket.passable(hall.solids()), () => forklift.solids(), ...otherSolids, ...outdoorSolids],
+  probeSolids: [() => rocket.passable(hall.solids()), () => rocket.alive(forklift.solids()), ...walkSolids],
   jetpackAllowed: () => wms.client.mode === 'live',
   ceiling: HALL.h - PLAYER_TOP,
   initialMode: params.get('view') === 'overview' ? 'overview' : params.get('view') === 'third' ? 'third' : 'first',

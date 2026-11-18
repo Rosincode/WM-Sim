@@ -519,7 +519,8 @@ export function mountMultiplayer(o: Options) {
   // ---------- Raketwerper: inslagen gelden voor iedereen ----------
   const MAX_ZONES = 80;
   const lastBlastAt = new Map<string, number>();
-  const lastNukeAt = new Map<string, number>();
+  const nukesAt = new Map<string, number[]>();
+  const lastStrikeAt = new Map<string, number>();
   /** Een punt uit een bericht, als het een zinnige plek is (de brokers zijn publiek). */
   const blastPoint = (v: unknown): number[] | null => {
     if (!Array.isArray(v) || v.length < 3) return null;
@@ -552,8 +553,12 @@ export function mountMultiplayer(o: Options) {
       const p = blastPoint([data.x, data.y, data.z, data.n]);
       const now = performance.now();
       if (!p || now - (lastBlastAt.get(from.id) ?? 0) < 250) return; // sneller dan de werper kan vuren: onzin
-      if (p[3] && now - (lastNukeAt.get(from.id) ?? -1e9) < 10_000) return; // en een kernbom kan maar eens in de zoveel tijd
-      if (p[3]) lastNukeAt.set(from.id, now);
+      if (p[3]) {
+        // een kernbom kan maar af en toe: hooguit drie in een kwartier van een minuut (de bom uit de lucht geeft er twee)
+        const recent = (nukesAt.get(from.id) ?? []).filter((t) => now - t < 15_000);
+        if (recent.length >= 3) return;
+        nukesAt.set(from.id, [...recent, now]);
+      }
       lastBlastAt.set(from.id, now);
       const a = avatars.get(from.id);
       o.rocket.remoteBlast(p[0], p[1], p[2], a?.pose.n ?? 'iemand', a?.character.group, p[3] === 1);
@@ -561,8 +566,8 @@ export function mountMultiplayer(o: Options) {
       // Iemand drukte op de knop in de kantine: ook hier valt de bom in de verte (de inslagen om hem heen komen los binnen)
       const p = blastPoint([data.x, 0, data.z]);
       const now = performance.now();
-      if (!p || now - (lastNukeAt.get(from.id) ?? -1e9) < 10_000) return;
-      lastNukeAt.set(from.id, now);
+      if (!p || now - (lastStrikeAt.get(from.id) ?? -1e9) < 10_000) return;
+      lastStrikeAt.set(from.id, now);
       if (o.rocket.airstrike(p[0], p[2], false)) chat.system(`${avatars.get(from.id)?.pose.n ?? 'Iemand'} heeft een kernbom laten vallen.`);
     } else if (kind === 'xz' && Array.isArray(data)) {
       o.rocket.applyZones(data.slice(-MAX_ZONES).map(blastPoint).filter((p) => p !== null));

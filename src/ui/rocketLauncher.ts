@@ -53,10 +53,12 @@ const COOLDOWN = 0.7;
 /** Kernbom (4): één raket met een veel grotere ontploffing (straal in m); daarna duurt het even voor de volgende klaar is. */
 const NUKE = 32;
 const NUKE_COOLDOWN = 20;
-const NUKE_DEBRIS = 420;
+const NUKE_DEBRIS = 560;
+/** Zoveel stukken puin van een kernbom vliegen brandend weg (en branden na waar ze neerkomen). */
+const MAX_BURNING = 110;
 const GRAVITY = 18;
 /** Zoveel losse stukken puin liggen er hooguit; de oudste verdwijnen. */
-const MAX_DEBRIS = 600;
+const MAX_DEBRIS = 950;
 const DEBRIS_PER_BLAST = 190;
 const PARTS_PER_MACHINE = 45;
 /** Na zoveel seconden is een mens, robot of voertuig er weer. */
@@ -71,7 +73,7 @@ const reach = (p: THREE.Vector3, x: number, y: number, z: number) => Math.hypot(
 type Zone = { p: THREE.Vector3; r: number };
 type Puff = { mesh: THREE.Mesh; vel: THREE.Vector3; age: number; life: number; size: number; gravity: number; /** Hoe snel hij afremt (per s). */ drag: number };
 /** Een los stuk dat wegvliegt, stuitert en blijft liggen. state: 0 = vliegt, 1 = gaat liggen, 2 = ligt. */
-type Debris = { pivot: THREE.Group; /** Begon binnen de hal: blijft daar. */ indoor: boolean; vel: THREE.Vector3; axis: THREE.Vector3; spin: number; thin: THREE.Vector3; rest: number; state: 0 | 1 | 2; flat: THREE.Quaternion; settle: number };
+type Debris = { /** Seconden dat het stuk nog brandt. */ burn: number; flame: number; pivot: THREE.Group; /** Begon binnen de hal: blijft daar. */ indoor: boolean; vel: THREE.Vector3; axis: THREE.Vector3; spin: number; thin: THREE.Vector3; rest: number; state: 0 | 1 | 2; flat: THREE.Quaternion; settle: number };
 type Rocket = { group: THREE.Group; dir: THREE.Vector3; left: number; smoke: number; nuke: boolean; /** Stopt het razen van de raket. */ hush: () => void };
 type Piece = { geometry: THREE.BufferGeometry; material: THREE.Material | THREE.Material[]; matrix: THREE.Matrix4; size: number };
 type Ring = { mesh: THREE.Mesh; age: number; r: number };
@@ -354,7 +356,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     vel.normalize().multiplyScalar(((rnd(5, 9) + 9 * Math.max(0, 1 - d / r)) * force) / (1 + size * 0.35));
     vel.y += (rnd(2, 6) * force) / (1 + size * 0.2);
     const indoor = !!walls && at.x > walls.minX && at.x < walls.maxX && at.z > walls.minZ && at.z < walls.maxZ && at.y < walls.maxY;
-    const piece: Debris = { pivot, indoor, vel, axis: scatter(1), spin: rnd(2, 9) / (1 + size), thin: AXES[i].clone().applyQuaternion(dQuat), rest: Math.max(half.getComponent(i), 0.01), state: 0, flat: new THREE.Quaternion(), settle: 0 };
+    const piece: Debris = { burn: 0, flame: 0, pivot, indoor, vel, axis: scatter(1), spin: rnd(2, 9) / (1 + size), thin: AXES[i].clone().applyQuaternion(dQuat), rest: Math.max(half.getComponent(i), 0.01), state: 0, flat: new THREE.Quaternion(), settle: 0 };
     debris.push(piece);
     return piece;
   }
@@ -373,7 +375,9 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     geo.boundingBox!.getSize(dSize).multiply(dScale).multiplyScalar(0.5);
     dSize.set(Math.abs(dSize.x), Math.abs(dSize.y), Math.abs(dSize.z));
     geo.boundingBox!.getCenter(center).applyMatrix4(piece.matrix);
-    launch(mesh, piece.matrix, center, dSize, p, r);
+    const thrown = launch(mesh, piece.matrix, center, dSize, p, r);
+    // een kernbom zet de boel in de fik: een deel van het puin vliegt brandend weg
+    if (r > BLAST && Math.random() < 0.34 && debris.reduce((n, d) => n + (d.burn > 0 ? 1 : 0), 0) < MAX_BURNING) thrown.burn = rnd(6, 16);
   }
 
   // ---------- Mensen, robots en voertuigen ----------
@@ -496,27 +500,67 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     for (const q of puffs) fx.remove(q.mesh); // ook de rook is weg
     puffs.length = 0;
     shots = 0;
-    passFrom = null;
+    passCache = new WeakMap();
     refreshPanel();
   }
 
   // ---------- Waar je doorheen loopt: wat weg is houdt je niet meer tegen ----------
-  let passFrom: Solid[] | null = null;
-  let passZones = 0;
-  let passOut: Solid[] = [];
+  // - wat is weggeblazen (stelling, pallet, meubel, boom) is er voor de speler niet meer: passable();
+  // - een wand, gevel of ander groot onderdeel blijft staan met een gat erin: sta je in dat gat, dan houdt het je
+  //   niet tegen, en de rand van de hal ook niet (free());
+  // - een robot, voertuig of mens die kapot is, is er niet tot hij terugkomt: alive().
+  let passCache = new WeakMap<Solid[], { n: number; out: Solid[]; big: Solid[] }>();
+  const isBig = (s: Solid) => s.maxX - s.minX > MAX_SIZE || s.maxZ - s.minZ > MAX_SIZE;
+  /** Een punt in het eigen assenstelsel van een blok (dat kan gedraaid staan, zoals de heftruck). Resultaat in `local`. */
+  function toSolid(s: Solid, x: number, z: number) {
+    if (!s.pose) return local.set(x, 0, z);
+    const dx = x - s.pose.x;
+    const dz = z - s.pose.z;
+    const c = Math.cos(s.pose.r);
+    const n = Math.sin(s.pose.r);
+    return local.set(dx * c - dz * n, 0, dx * n + dz * c);
+  }
+  /** Raakt dit blok de inslag? */
+  function touches(z: Zone, s: Solid, scale = 1) {
+    toSolid(s, z.p.x, z.p.z);
+    const nx = THREE.MathUtils.clamp(local.x, s.minX, s.maxX) - local.x;
+    const nz = THREE.MathUtils.clamp(local.z, s.minZ, s.maxZ) - local.z;
+    const ny = THREE.MathUtils.clamp(z.p.y, s.minY, s.maxY) - z.p.y;
+    return Math.hypot(nx, ny * (ny > 0 ? ABOVE : 1), nz) <= z.r * scale;
+  }
+  /** De gaten waar de speler nu in staat. */
+  function standingIn() {
+    const me = self?.position;
+    return me ? zones.filter((z) => reach(z.p, me.x, THREE.MathUtils.clamp(z.p.y, me.y, me.y + 1.8), me.z) <= z.r * 0.88) : [];
+  }
+  /** De blokken waar de speler tegenaan loopt, zonder wat er is weggeblazen (en zonder de wand waar hij in het gat staat). */
   function passable(list: Solid[]) {
     if (!zones.length) return list;
-    if (list === passFrom && passZones === zones.length) return passOut;
-    passFrom = list;
-    passZones = zones.length;
-    passOut = list.filter((s) => {
-      if (s.pose || s.maxX - s.minX > MAX_SIZE || s.maxZ - s.minZ > MAX_SIZE) return true;
-      return !zones.some(
-        (z) => reach(z.p, THREE.MathUtils.clamp(z.p.x, s.minX, s.maxX), THREE.MathUtils.clamp(z.p.y, s.minY, s.maxY), THREE.MathUtils.clamp(z.p.z, s.minZ, s.maxZ)) <= z.r,
-      );
-    });
-    return passOut;
+    let c = passCache.get(list);
+    if (!c || c.n !== zones.length) {
+      const out = list.filter((s) => isBig(s) || !zones.some((z) => touches(z, s)));
+      c = { n: zones.length, out, big: out.filter((s) => isBig(s) && zones.some((z) => touches(z, s, 0.88))) };
+      passCache.set(list, c);
+    }
+    if (!c.big.length) return c.out;
+    const here = standingIn();
+    return here.length ? c.out.filter((s) => !(isBig(s) && here.some((z) => touches(z, s, 0.88)))) : c.out;
   }
+  /** Dezelfde blokken zonder die van een robot, voertuig of mens die nu kapot is. */
+  function alive(list: Solid[]) {
+    if (!dead.size || !list.length) return list;
+    const spots = [...dead.keys()].map((unit) => unit.getWorldPosition(new THREE.Vector3()));
+    return list.filter(
+      (s) =>
+        !spots.some((q) => {
+          if (s.pose) return Math.hypot(q.x - s.pose.x, q.z - s.pose.z) < 0.8; // een voertuig: al zijn blokken horen bij die ene plek
+          toSolid(s, q.x, q.z);
+          return local.x > s.minX - 0.9 && local.x < s.maxX + 0.9 && local.z > s.minZ - 0.9 && local.z < s.maxZ + 0.9;
+        }),
+    );
+  }
+  /** Staat dit punt in een gat op de grond? Daar mag de speler door de rand van de hal heen (door de wand naar buiten). */
+  const free = (x: number, z: number) => zones.some((q) => q.p.y < q.r && Math.hypot(x - q.p.x, z - q.p.z) <= q.r * 0.85);
 
   // ---------- Rook, vuur en vonken ----------
   /** @param gravity valt (vonken) of stijgt op eigen snelheid (0) */
@@ -531,7 +575,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
   /** Een brandje dat een tijd nasmeult: vlammen en een rookpluim. */
   function burn(at: THREE.Vector3, seconds: number, size: number) {
     fires.push({ at, left: seconds, size, flame: 0, fume: 0 });
-    if (fires.length > 30) fires.shift();
+    if (fires.length > 70) fires.shift();
   }
 
   const scorchMat = onTop(
@@ -575,8 +619,9 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
    * @param from by = naam van de speler die schoot, spare = zijn figuur (zijn eigen raket doet hem niets);
    *             quiet = schade van eerder (voor wie later binnenkomt): alleen het gat, zonder knal en puin.
    * @param nuke een kernbom: een veel grotere ontploffing, die ook de schutter zelf niet spaart.
+   * @param safe de speler zelf blijft staan (de drukgolf van de bom uit de lucht: hij kijkt toe hoe alles wegvliegt).
    */
-  function explode(p: THREE.Vector3, from?: { by?: string; spare?: THREE.Object3D; quiet?: boolean }, nuke = false) {
+  function explode(p: THREE.Vector3, from?: { by?: string; spare?: THREE.Object3D; quiet?: boolean }, nuke = false, safe = false) {
     const r = nuke ? NUKE : BLAST;
     const key = `${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)}`;
     if (seen.has(key)) return;
@@ -587,12 +632,12 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     if (from?.quiet) {
       destroy(p, r, 'units');
       if (p.y < 2.2) scorch(p, r);
-      passFrom = null;
+      passCache = new WeakMap();
       refreshPanel();
       return;
     }
     if (!from) onExplode?.(+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2), nuke);
-    if ((from || nuke) && self && !flight) {
+    if ((from || nuke) && self && !flight && !safe) {
       // de raket van een ander (of je eigen kernbom): sta je erin, dan vlieg je weg
       const me = self.position;
       if (reach(p, me.x, THREE.MathUtils.clamp(p.y, me.y, me.y + 1.8), me.z) <= r * 0.8) killed(from?.by ?? 'je eigen kernbom', p, r);
@@ -641,7 +686,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     const ground = p.y < 2.5 ? 0.1 : p.y;
     burn(new THREE.Vector3(p.x, ground, p.z), rnd(6, 9), 1.2);
     for (let i = 0; i < 3; i++) burn(new THREE.Vector3(p.x + rnd(-3, 3), 0.1, p.z + rnd(-3, 3)), rnd(4, 10), rnd(0.5, 0.9));
-    if (nuke) for (let i = 0; i < 14; i++) burn(new THREE.Vector3(p.x + rnd(-0.7, 0.7) * r, 0.1, p.z + rnd(-0.7, 0.7) * r), rnd(8, 18), rnd(0.9, 1.8));
+    if (nuke) for (let i = 0; i < 30; i++) burn(new THREE.Vector3(p.x + rnd(-0.85, 0.85) * r, 0.1, p.z + rnd(-0.85, 0.85) * r), rnd(10, 26), rnd(0.9, 2.2));
 
     if (p.y < 2.2 || nuke) scorch(p, r);
     const d = camera.getWorldPosition(center).distanceTo(p);
@@ -870,7 +915,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
   // de hal: dan ontploft alles om je heen. Wat ver weg staat tekent zonder nevel (fog: false), anders zie je het niet.
   const FALL = 4.5; // zo lang valt de bom (s)
   const SHOCK = 3.4; // zo lang doet de drukgolf erover van de inslag naar de hal (s)
-  const WAVE = 12; // zoveel ontploffingen om je heen als hij aankomt
+  const WAVE = 16; // zoveel ontploffingen om je heen als hij aankomt; de eerste twee zijn zo groot als een kernbom
   const far = (r: number, g: number, b: number, opacity = 1) => {
     const m = new THREE.MeshBasicMaterial({ fog: false, transparent: opacity < 1, opacity, depthWrite: opacity >= 1 });
     m.color.setRGB(r, g, b);
@@ -973,13 +1018,15 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     if (s.own && s.wave < WAVE && after >= SHOCK + s.next) {
       const me = self?.position ?? camPos;
       const a = rnd(0, Math.PI * 2);
-      const out = s.wave === 0 ? 3.5 : rnd(4, 15);
-      const toBomb = local.copy(s.at).sub(me).setY(0).normalize();
-      // de eerste slaat de ramen eruit, aan de kant van de bom
-      const at = s.wave === 0 ? new THREE.Vector3(me.x + toBomb.x * out, 1.6, me.z + toBomb.z * out) : new THREE.Vector3(me.x + Math.cos(a) * out, rnd(0.3, 2.5), me.z + Math.sin(a) * out);
-      explode(at);
+      const out = rnd(5, 26);
+      const toBomb = new THREE.Vector3().copy(s.at).sub(me).setY(0).normalize();
+      // Eerst de klap zelf, zo groot als een kernbom: aan de kant van de bom (de gevel en alles om je heen vliegt
+      // de hal in), en meteen daarna dieper in de hal. Jij blijft staan. Daarna overal losse ontploffingen.
+      if (s.wave === 0) explode(new THREE.Vector3(me.x + toBomb.x * 7, 1.5, me.z + toBomb.z * 7), undefined, true, true);
+      else if (s.wave === 1) explode(new THREE.Vector3(me.x - toBomb.x * 34 + rnd(-8, 8), 1.5, me.z - toBomb.z * 34), undefined, true, true);
+      else explode(new THREE.Vector3(me.x + Math.cos(a) * out, rnd(0.3, 2.5), me.z + Math.sin(a) * out));
       s.wave++;
-      s.next += rnd(0.08, 0.2);
+      s.next += s.wave <= 2 ? 0.55 : rnd(0.1, 0.28);
     }
     if (after < SHOCK + 4) return;
     fx.remove(s.ring!, s.wall!);
@@ -1167,9 +1214,10 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
         continue;
       }
       const fade = Math.min(1, f.left / 2); // dooft langzaam uit
-      for (f.flame += dt * 13; f.flame >= 1; f.flame--)
+      const thin = Math.min(1, 22 / fires.length); // staat alles in brand, dan per brandje wat minder vlammen
+      for (f.flame += dt * 13 * thin; f.flame >= 1; f.flame--)
         puff(Math.random() < 0.25 ? hot : fire, step.set(f.at.x + rnd(-0.4, 0.4) * f.size, f.at.y, f.at.z + rnd(-0.4, 0.4) * f.size).clone(), new THREE.Vector3(rnd(-0.3, 0.3), rnd(1.6, 3.2) * f.size, rnd(-0.3, 0.3)), rnd(0.22, 0.5) * f.size * fade, rnd(0.35, 0.6));
-      for (f.fume += dt * 3.5; f.fume >= 1; f.fume--)
+      for (f.fume += dt * 3.5 * thin; f.fume >= 1; f.fume--)
         puff(soot, step.set(f.at.x, f.at.y + f.size, f.at.z).clone(), new THREE.Vector3(rnd(-0.4, 0.4), rnd(1.6, 2.6), rnd(-0.4, 0.4)), rnd(0.5, 1.1) * f.size, rnd(2, 3.5));
     }
 
@@ -1203,6 +1251,11 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     }
 
     for (const d of debris) {
+      if (d.burn > 0) {
+        d.burn -= dt;
+        for (d.flame += dt * 4.5; d.flame >= 1; d.flame--)
+          puff(Math.random() < 0.2 ? hot : Math.random() < 0.15 ? soot : fire, d.pivot.position.clone(), new THREE.Vector3(rnd(-0.3, 0.3), rnd(1, 2.4), rnd(-0.3, 0.3)), rnd(0.25, 0.6), rnd(0.3, 0.55));
+      }
       if (d.state === 2) continue;
       const pivot = d.pivot;
       if (d.state === 1) {
@@ -1286,8 +1339,12 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     get stats() {
       return { debris: debris.length, dead: dead.size, puffs: puffs.length, fires: fires.length };
     },
-    /** De blokken waar de speler tegenaan loopt, zonder wat er is weggeschoten. */
+    /** De blokken waar de speler tegenaan loopt, zonder wat er is weggeblazen. */
     passable,
+    /** Blokken van robots, voertuigen en mensen, zonder wie nu kapot is. */
+    alive,
+    /** Staat dit punt in een gat? Daar houdt de rand van de hal de speler niet tegen. */
+    free,
     /** Zet alles terug zoals het was. remote: een andere speler deed dat (niet nog eens rondsturen). */
     restore,
     /** De inslag van de raket van een andere speler (by = zijn naam, spare = zijn figuur: dat blijft heel). */
