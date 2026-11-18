@@ -26,6 +26,10 @@ interface Options {
   probeSolids?: (() => Solid[])[];
   initialMode?: ViewMode;
   onModeChange?: (mode: ViewMode) => void;
+  /** Mag de speler de jetpack gebruiken (alleen ingelogd bij de WMS)? */
+  jetpackAllowed?: () => boolean;
+  /** Hoogste punt van je voeten met de jetpack (onder het dak). */
+  ceiling?: number;
 }
 
 type Zone = { minX: number; maxX: number; minZ: number; maxZ: number };
@@ -48,8 +52,11 @@ const PLAYER_RADIUS = 0.42;
 const PLAYER_HEIGHT = 1.8;
 const STEP = 0.35; // zo hoog stap je zonder springen ergens op (pallet, vorken)
 const FOOT = 0.2; // zo ver mogen je voeten over een rand steken
+const JET_UP = 3.2; // m/s omhoog met spatie ingedrukt
+const JET_FALL = 0.9; // m/s omlaag als je spatie loslaat: langzaam zakken, tijd om te scannen
+const JET_TAP = 0.3; // s: Shift korter dan dit indrukken (zonder andere toets) zet de jetpack om/af; langer = rennen
 
-export function createPlayerView({ camera, canvas, controls, player, hud, bounds, walkable = [], solids = [], probes, probeSolids, initialMode = 'overview', onModeChange }: Options) {
+export function createPlayerView({ camera, canvas, controls, player, hud, bounds, walkable = [], solids = [], probes, probeSolids, initialMode = 'overview', onModeChange, jetpackAllowed = () => false, ceiling = Infinity }: Options) {
   const zones = [bounds, ...walkable];
   let mode: ViewMode = 'overview';
   let closeMode: Exclude<ViewMode, 'overview'> = 'first'; // laatst gebruikte dichtbij-modus
@@ -63,6 +70,11 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   let lookYaw = 0; // rondkijken vanaf de stoel
   /** Eigen lichaam ook lopend in first person tekenen (met de pompwagen: je ziet je handen op de greep). */
   let body = false;
+  /** Jetpack om: spatie = omhoog, loslaten = langzaam omlaag. modeBefore = camera vóór het omdoen. */
+  let jet = false;
+  let thrust = 0;
+  let modeBefore: Exclude<ViewMode, 'overview'> = 'first';
+  let shiftDown: { at: number; clean: boolean } | null = null;
   const seatWorld = new THREE.Vector3();
   /** Waar de speler op staat als dat kan bewegen (heftruck): plek in het assenstelsel daarvan. */
   let ride: { pose: NonNullable<Solid['pose']>; x: number; z: number; r: number; lift: boolean } | null = null;
@@ -99,10 +111,19 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     third:
       '<b>WM-Sim — Third person</b><br>W/S: lopen · A/D: draaien · Shift: rennen · Spatie: springen<br><b>V</b>: first person · <b>C</b>: overzicht',
   };
+  const jetHint = '<br><b>Shift</b> (kort tikken): jetpack om';
+  const jetText =
+    '<b>WM-Sim — Jetpack</b><br><b>Spatie</b> ingedrukt: omhoog · loslaten: langzaam omlaag<br>W/S: vooruit/achteruit · A/D: opzij · ←/→ of muis (klik: muis vastzetten): draaien<br><b>V</b>: first person om bovenin de stelling te scannen (<b>1</b>: scanner) · <b>Shift</b> (tikken): jetpack af · <b>C</b>: overzicht';
 
   const drivingText =
     '<b>WM-Sim — Heftruck</b><br>W/S: rijden · A/D: sturen · <b>↑/↓</b>: vorken heffen/zakken · <b>H</b>: toeteren · Muis: rondkijken<br><b>1</b>: scanner · <b>2</b>: tablet (F: dichtbij) in je rechterhand<br>Oppakken: vorken onder de pallet en heffen · Neerzetten: zakken<br><b>R</b>: uitstappen · <b>V</b>: first/third person · <b>C</b>: overzicht';
-  const refreshHud = () => (hud.innerHTML = (vehicle && mode !== 'overview' ? (vehicle.hud ?? drivingText) : hudText[mode]) + processKeys);
+  const refreshHud = () =>
+    (hud.innerHTML =
+      (vehicle && mode !== 'overview'
+        ? (vehicle.hud ?? drivingText)
+        : jet && mode !== 'overview'
+          ? jetText
+          : hudText[mode] + (mode !== 'overview' && jetpackAllowed() ? jetHint : '')) + processKeys);
 
   function setMode(m: ViewMode) {
     mode = m;
@@ -121,6 +142,21 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   }
   setMode(initialMode);
 
+  /** Jetpack om of af. Om: vanzelf third person; af: terug naar de camera van daarvoor. */
+  function setJet(on: boolean) {
+    if (on === jet || (on && (vehicle || mode === 'overview' || !jetpackAllowed()))) return;
+    jet = on;
+    if (on) {
+      modeBefore = closeMode;
+      setMode('third');
+    } else {
+      thrust = 0;
+      if (!grounded) velY = Math.min(velY, 0); // zonder jetpack: gewoon vallen
+      if (mode !== 'overview') setMode(modeBefore);
+    }
+    refreshHud();
+  }
+
   function isTyping(e: KeyboardEvent) {
     const t = e.target;
     return t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement;
@@ -129,24 +165,41 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
   window.addEventListener('keydown', (e) => {
     if (isTyping(e)) return; // typen in formulier ≠ besturing
     if (e.code === 'Space') e.preventDefault(); // niet scrollen / knoppen activeren
+    // Shift kort tikken (zonder iets anders in te drukken) = jetpack om/af; Shift vasthouden blijft rennen.
+    if (shiftDown && e.code !== 'ShiftLeft' && e.code !== 'ShiftRight') shiftDown.clean = false;
     if (!e.repeat) {
+      if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && !shiftDown) shiftDown = { at: performance.now(), clean: !keys.size };
       if (e.code === 'KeyC') setMode(mode === 'overview' ? closeMode : 'overview');
       if (e.code === 'KeyV' && mode !== 'overview') setMode(mode === 'first' ? 'third' : 'first');
-      if (e.code === 'Space' && mode !== 'overview' && grounded && !vehicle) {
+      if (e.code === 'Space' && mode !== 'overview' && grounded && !vehicle && !jet) {
         velY = JUMP_SPEED;
         grounded = false;
       }
     }
     keys.add(e.code);
   });
-  window.addEventListener('keyup', (e) => keys.delete(e.code));
-  window.addEventListener('blur', () => keys.clear());
+  window.addEventListener('keyup', (e) => {
+    keys.delete(e.code);
+    if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && shiftDown) {
+      const tap = shiftDown.clean && performance.now() - shiftDown.at < JET_TAP * 1000;
+      shiftDown = null;
+      if (tap && !isTyping(e)) setJet(!jet);
+    }
+  });
+  window.addEventListener('blur', () => {
+    keys.clear();
+    shiftDown = null;
+  });
 
   // Muis vastzetten in first person; Esc laat los (browserstandaard).
   canvas.addEventListener('click', () => {
-    if (mode === 'first' && document.pointerLockElement !== canvas) canvas.requestPointerLock();
+    if ((mode === 'first' || (mode === 'third' && jet)) && document.pointerLockElement !== canvas) canvas.requestPointerLock();
   });
   document.addEventListener('mousemove', (e) => {
+    if (mode === 'third' && jet && document.pointerLockElement === canvas) {
+      player.rotation.y -= e.movementX * MOUSE_SENS; // met de jetpack ook in third person met de muis draaien
+      return;
+    }
     if (mode !== 'first' || document.pointerLockElement !== canvas) return;
     if (vehicle) lookYaw = THREE.MathUtils.clamp(lookYaw - e.movementX * MOUSE_SENS, -2.5, 2.5);
     else player.rotation.y -= e.movementX * MOUSE_SENS;
@@ -181,6 +234,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
       return;
     }
 
+    if (jet && !jetpackAllowed()) setJet(false); // uitgelogd: jetpack af
     if (mode === 'overview') {
       controls.update();
       moving = 0;
@@ -204,15 +258,16 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     const startZ = p.z;
 
     const speed = down('ShiftLeft', 'ShiftRight') ? 9 : 5;
-    const turn = mode === 'first' ? down('ArrowLeft') : down('KeyA', 'ArrowLeft');
-    const turnR = mode === 'first' ? down('ArrowRight') : down('KeyD', 'ArrowRight');
+    const strafing = mode === 'first' || jet; // met de jetpack: A/D opzij, ook in third person
+    const turn = strafing ? down('ArrowLeft') : down('KeyA', 'ArrowLeft');
+    const turnR = strafing ? down('ArrowRight') : down('KeyD', 'ArrowRight');
     if (turn) player.rotation.y += 2.5 * dt;
     if (turnR) player.rotation.y -= 2.5 * dt;
 
     forward.set(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y));
     right.set(-forward.z, 0, forward.x);
     const move = (down('KeyW', 'ArrowUp') ? 1 : 0) - (down('KeyS', 'ArrowDown') ? 1 : 0);
-    const strafe = mode === 'first' ? (down('KeyD') ? 1 : 0) - (down('KeyA') ? 1 : 0) : 0;
+    const strafe = strafing ? (down('KeyD') ? 1 : 0) - (down('KeyA') ? 1 : 0) : 0;
     const len = Math.hypot(move, strafe) || 1; // diagonaal niet sneller
     player.position.addScaledVector(forward, (move / len) * speed * dt);
     player.position.addScaledVector(right, (strafe / len) * speed * dt);
@@ -228,7 +283,23 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
     // Hoogte: zwaartekracht, je hoofd stoten, en de ondergrond (vloer, pallet, vorken, stellingniveau)
     const prevFeet = p.y;
     let feet = prevFeet;
-    if (!grounded) {
+    if (jet) {
+      // Spatie: opstijgen naar JET_UP; los: afremmen tot langzaam zakken. Geen zwaartekracht.
+      const up = down('Space');
+      if (up && grounded) {
+        grounded = false;
+        velY = Math.max(velY, 0.5);
+      }
+      if (!grounded) {
+        velY += ((up ? JET_UP : -JET_FALL) - velY) * (1 - Math.exp(-dt * (up ? 3 : 4))); // loslaten: snel afremmen, niet ver doorschieten
+        feet += velY * dt;
+        if (feet > ceiling) {
+          feet = ceiling;
+          velY = Math.min(velY, 0);
+        }
+      }
+      thrust += ((up ? 1 : grounded ? 0 : 0.35) - thrust) * (1 - Math.exp(-dt * 10));
+    } else if (!grounded) {
       velY -= GRAVITY * dt;
       feet += velY * dt;
     }
@@ -329,7 +400,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
       camera.rotation.set(pitch, player.rotation.y + Math.PI, 0, 'YXZ'); // camera kijkt langs -Z
     } else {
       // Achter en boven de speler, soepel volgend
-      camTarget.copy(player.position).addScaledVector(forward, -6).setY(3.5 + player.position.y);
+      camTarget.copy(player.position).addScaledVector(forward, -6).setY(Math.min(3.5 + player.position.y, ceiling + 2.2)); // niet door het dak
       camera.position.lerp(camTarget, 1 - Math.exp(-dt * 6));
       camera.lookAt(player.position.x, player.position.y + 1.5, player.position.z);
     }
@@ -337,6 +408,7 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
 
   /** Stap in (voertuig) of uit (null); bij uitstappen zet de aanroeper de speler neer. */
   function setVehicle(v: Vehicle | null) {
+    if (v) setJet(false);
     vehicle = v;
     lookYaw = 0;
     pitch = v ? (v.pitch ?? SEAT_PITCH) : 0;
@@ -360,6 +432,13 @@ export function createPlayerView({ camera, canvas, controls, player, hud, bounds
       onModeChange?.(mode);
     },
     get mode() { return mode; },
+    /** Jetpack om, en hoeveel stuwkracht (0..1, voor de vlammen). */
+    get jetpack() { return { on: jet, thrust }; },
+    /** Opnieuw kijken of de jetpack mag (na in- of uitloggen), ook voor de uitleg in het menu. */
+    refreshJetpack() {
+      if (jet && !jetpackAllowed()) setJet(false);
+      refreshHud();
+    },
     get moving() { return moving; },
     /** Eigen loopsnelheid (m/s, negatief = achteruit): staat de speler stil op rijdende of stijgende vorken, dan is dit nul. */
     get walk() { return walk; },

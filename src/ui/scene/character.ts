@@ -698,6 +698,8 @@ export function createCharacter(group: THREE.Group = new THREE.Group(), colors: 
     update,
     setFirstPerson,
     setFace,
+    /** De romp (heupen = 0, voorkant +Z): hang hier iets aan dat op de rug zit en meebuigt (jetpack). */
+    back: torso as THREE.Object3D,
     /** De rechterpols: hang hier iets aan dat de figuur in zijn hand houdt (met de onderarm naar voren is +z omhoog en +x naar binnen). */
     rightHand: arms[1].wrist as THREE.Object3D,
   };

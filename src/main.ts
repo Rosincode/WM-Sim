@@ -19,6 +19,7 @@ import { DESK, START } from './sim/layout';
 import { createExterior } from './ui/scene/exterior';
 import { CHAIR_EYE_Y, CHAIR_HEAD_Y, CHAIR_HIP_Y } from './ui/scene/rooms';
 import { createCharacter, type HandTarget } from './ui/scene/character';
+import { createJetpack } from './ui/scene/jetpack';
 import { wms } from './integrations/wms';
 import { mountWarehouse } from './ui/warehouse';
 import { CARRY_AHEAD, CARRY_RADIUS } from './ui/warehouseView';
@@ -88,6 +89,9 @@ player.position.set(START.player.x, 0, START.player.z); // startplekken komen ui
 player.rotation.y = START.player.r;
 player.userData.noBlast = true; // je eigen raketten doen jezelf niets
 scene.add(player);
+// Jetpack op de rug: alleen voor wie bij de WMS is ingelogd (om bovenin de stellingen te scannen)
+const jetpack = createJetpack();
+character.back.add(jetpack.group);
 
 // --- Nabewerking: omgevingsschaduw (GTAO), gloed rond lampen, tonemapping ---
 // Dit is het duurste deel van een frame, daarom zuinig ingesteld: de omgevingsschaduw rekent op halve
@@ -285,6 +289,8 @@ function humanObstacles() {
   ];
 }
 
+/** Met de jetpack blijft je hoofd zo ver onder het dak. */
+const PLAYER_TOP = 2.1;
 const BOUNDS = { minX: -HALL.w / 2 + 0.6, maxX: HALL.w / 2 - 0.6, minZ: -HALL.d / 2 + 0.6, maxZ: HALL.d / 2 - 0.6 };
 const view = createPlayerView({
   camera,
@@ -300,9 +306,13 @@ const view = createPlayerView({
   // Wat je voor je uit hebt botst ook: de pallet die je draagt, of de pompwagen met wat erop staat
   probes: () => (jack.held ? jack.probes() : warehouse.carrying() ? [{ ahead: CARRY_AHEAD, radius: CARRY_RADIUS }] : []),
   probeSolids: [() => rocket.passable(hall.solids()), () => forklift.solids(), ...otherSolids, ...outdoorSolids],
+  jetpackAllowed: () => wms.client.mode === 'live',
+  ceiling: HALL.h - PLAYER_TOP,
   initialMode: params.get('view') === 'overview' ? 'overview' : params.get('view') === 'third' ? 'third' : 'first',
   onModeChange: applyMode,
 });
+
+wms.onChange(() => view.refreshJetpack()); // in- of uitloggen: jetpack mag (niet meer), uitleg in het menu bijwerken
 
 editor = createEditor({ scene, camera, canvas: renderer.domElement, controls, toOverview: () => view.setMode('overview') });
 if (params.has('edit') || editor.resume) editor.open(); // ?edit, of de bewerkmodus stond open voor het herladen
@@ -646,6 +656,8 @@ renderer.setAnimationLoop((now) => {
   jack.update(dt, player);
   // heupen net boven de zitting; forklift.seat is de plek van het hoofd
   handheld.update(dt, view.moving, driving ? view.look : undefined);
+  jetpack.group.visible = view.jetpack.on;
+  jetpack.update(dt, view.jetpack.thrust);
   if (player.visible) {
     // Rijdend: linkerhand plat op het stuur; in first person houdt de rechterhand de scanner of tablet vast
     let leftHand: HandTarget | undefined;
