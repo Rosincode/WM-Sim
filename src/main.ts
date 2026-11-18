@@ -16,7 +16,8 @@ import { createForklift } from './ui/scene/forklift';
 import { createPalletJack } from './ui/scene/palletJack';
 import { createRadio } from './ui/radio';
 import { createPrinter } from './ui/printer';
-import { DESK, START } from './sim/layout';
+import { DESK, ROOMS, START } from './sim/layout';
+import { STYLE } from './ui/scene/style';
 import { createExterior } from './ui/scene/exterior';
 import { CHAIR_EYE_Y, CHAIR_HEAD_Y, CHAIR_HIP_Y } from './ui/scene/rooms';
 import { createCharacter, type HandTarget } from './ui/scene/character';
@@ -215,7 +216,7 @@ const rocket = createRocketLauncher({
   },
   // De heftruck en de pompwagen staan na een voltreffer weer in hun vak (als niemand ze gebruikt); wat erop stond
   // blijft erop. Robots en mensen komen terug waar de sim ze op dat moment heeft.
-  onExplode: (x, y, z) => multiplayer?.sendBlast(x, y, z),
+  onExplode: (x, y, z, nuke) => multiplayer?.sendBlast(x, y, z, nuke),
   onRestore: () => multiplayer?.sendRestore(),
   walls: { minX: -HALL.w / 2 + 0.4, maxX: HALL.w / 2 - 0.4, minZ: -HALL.d / 2 + 0.4, maxZ: HALL.d / 2 - 0.4, maxY: HALL.h - 1 },
   self: player,
@@ -240,6 +241,26 @@ const rocket = createRocketLauncher({
     if (unit === jack.group && !jack.held && !multiplayer?.jackHolder()) jack.applyState({ ...jack.getState(), x: jackHome.x, z: jackHome.z, r: jackHome.r });
   },
 });
+
+// De rode knop in de kantine, op de penant tussen de ramen: N laat ver weg (waar je op uitkijkt) een kernbom vallen.
+const strikeButton = new THREE.Group();
+{
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.28, 0.05), STYLE.dark);
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.03, 24).rotateX(Math.PI / 2), STYLE.steel);
+  collar.position.z = -0.035;
+  const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.058, 0.05, 24).rotateX(Math.PI / 2), STYLE.paint);
+  knob.position.z = -0.06;
+  strikeButton.add(plate, collar, knob);
+  strikeButton.traverse((o) => (o.castShadow = o.receiveShadow = true));
+  strikeButton.position.set((ROOMS.canteen.minX + ROOMS.canteen.maxX) / 2, 1.25, HALL.d / 2 - 0.37);
+  scene.add(strikeButton);
+}
+const nearStrikeButton = () => !driving && Math.hypot(player.position.x - strikeButton.position.x, player.position.z - strikeButton.position.z) < 2.6;
+function dropBomb() {
+  const x = strikeButton.position.x + (Math.random() - 0.5) * 30;
+  const z = HALL.d / 2 + 250; // recht voor de ramen van de kantine, in de verte
+  if (rocket.airstrike(x, z, true)) multiplayer?.sendStrike(x, z);
+}
 
 let driving = false;
 /** De 6-7 (toets 6 of 7): je figuur weegt een paar tellen met beide handen; andere spelers zien het ook. */
@@ -404,6 +425,7 @@ window.addEventListener('keydown', (e) => {
   }
   const typing = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement;
   if (!typing && !e.repeat && ['Digit6', 'Digit7', 'Numpad6', 'Numpad7'].includes(e.code)) emoteUntil = performance.now() + 2800;
+  if (!typing && !e.repeat && e.code === 'KeyN' && nearStrikeButton() && strikeButton.visible) dropBomb();
   if (e.code === 'KeyP' && !e.repeat && !(e.target instanceof HTMLInputElement)) postFx = !postFx;
 });
 
@@ -755,7 +777,10 @@ renderer.setAnimationLoop((now) => {
     if (action) list.push({ key: 'E', html: esc(action.label), off: !action.enabled });
     if (handheld.aimed && !rocket.active)
       list.push({ key: 'Klik', html: `${handheld.aimed.startsWith('PAL-') ? 'Palletsticker' : 'Label'} <b>${esc(handheld.aimed)}</b> scannen` });
-    if (rocket.active) list.push({ key: 'Klik', html: 'Raket afvuren' });
+    if (rocket.active) {
+      list.push({ key: 'Klik', html: rocket.nukeLoaded ? '<b>Kernbom</b> afvuren' : 'Raket afvuren' });
+      if (!rocket.nukeLoaded) list.push(rocket.nukeWait ? { html: `Kernbom klaar over ${rocket.nukeWait} s`, off: true } : { key: '4', html: 'Kernbom laden' });
+    }
     if (chair) {
       list.push({ key: 'R', html: 'Opstaan' });
     } else if (driving) {
@@ -772,6 +797,8 @@ renderer.setAnimationLoop((now) => {
       list.push(otherDriver ? { html: `De heftruck is bezet door ${esc(otherDriver)}`, off: true } : { key: 'R', html: 'In de heftruck stappen' });
     }
   }
+  if (nearStrikeButton() && strikeButton.visible)
+    list.push(rocket.striking ? { html: 'Kernbom onderweg: kijk uit het raam', off: true } : { key: 'N', html: 'Kernbom laten vallen (kijk uit het raam)' });
   if (radio.hint) list.push(hintPrompt(radio.hint));
   if (printer.hint) list.push(hintPrompt(printer.hint));
   prompts.set(list);

@@ -28,7 +28,7 @@ interface Options {
   /** Iets wat kapot was (robot, voertuig, mens) is er weer: de aanroeper mag het op een andere plek neerzetten. */
   onRespawn?: (unit: THREE.Object3D) => void;
   /** Een eigen raket is ingeslagen: de andere spelers moeten dezelfde inslag zien. */
-  onExplode?: (x: number, y: number, z: number) => void;
+  onExplode?: (x: number, y: number, z: number, nuke: boolean) => void;
   /** De speler heeft het magazijn hersteld: dat geldt voor iedereen. */
   onRestore?: () => void;
   /** De binnenkant van de hal: puin dat binnen begint ketst tegen de wanden en het dak en blijft dus binnen. */
@@ -50,6 +50,10 @@ const MAX_HOLES = 48;
 const SPEED = 60;
 const RANGE = 160;
 const COOLDOWN = 0.7;
+/** Kernbom (4): één raket met een veel grotere ontploffing (straal in m); daarna duurt het even voor de volgende klaar is. */
+const NUKE = 32;
+const NUKE_COOLDOWN = 20;
+const NUKE_DEBRIS = 420;
 const GRAVITY = 18;
 /** Zoveel losse stukken puin liggen er hooguit; de oudste verdwijnen. */
 const MAX_DEBRIS = 600;
@@ -65,12 +69,12 @@ const ABOVE = 0.5;
 const reach = (p: THREE.Vector3, x: number, y: number, z: number) => Math.hypot(x - p.x, (y - p.y) * (y > p.y ? ABOVE : 1), z - p.z);
 
 type Zone = { p: THREE.Vector3; r: number };
-type Puff = { mesh: THREE.Mesh; vel: THREE.Vector3; age: number; life: number; size: number; gravity: number };
+type Puff = { mesh: THREE.Mesh; vel: THREE.Vector3; age: number; life: number; size: number; gravity: number; /** Hoe snel hij afremt (per s). */ drag: number };
 /** Een los stuk dat wegvliegt, stuitert en blijft liggen. state: 0 = vliegt, 1 = gaat liggen, 2 = ligt. */
 type Debris = { pivot: THREE.Group; /** Begon binnen de hal: blijft daar. */ indoor: boolean; vel: THREE.Vector3; axis: THREE.Vector3; spin: number; thin: THREE.Vector3; rest: number; state: 0 | 1 | 2; flat: THREE.Quaternion; settle: number };
-type Rocket = { group: THREE.Group; dir: THREE.Vector3; left: number; smoke: number; /** Stopt het razen van de raket. */ hush: () => void };
+type Rocket = { group: THREE.Group; dir: THREE.Vector3; left: number; smoke: number; nuke: boolean; /** Stopt het razen van de raket. */ hush: () => void };
 type Piece = { geometry: THREE.BufferGeometry; material: THREE.Material | THREE.Material[]; matrix: THREE.Matrix4; size: number };
-type Ring = { mesh: THREE.Mesh; age: number };
+type Ring = { mesh: THREE.Mesh; age: number; r: number };
 type Fire = { at: THREE.Vector3; left: number; size: number; flame: number; fume: number };
 type Dead = { scale: THREE.Vector3; until: number; body?: Debris };
 
@@ -346,8 +350,9 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     const vel = at.clone().sub(p);
     vel.y = Math.abs(vel.y) * 0.5 + 0.4;
     // dichter bij de inslag en lichter = harder weg
-    vel.normalize().multiplyScalar((rnd(5, 9) + 9 * Math.max(0, 1 - d / r)) / (1 + size * 0.35));
-    vel.y += rnd(2, 6) / (1 + size * 0.2);
+    const force = r > BLAST ? 2 : 1; // een kernbom slingert alles veel verder weg
+    vel.normalize().multiplyScalar(((rnd(5, 9) + 9 * Math.max(0, 1 - d / r)) * force) / (1 + size * 0.35));
+    vel.y += (rnd(2, 6) * force) / (1 + size * 0.2);
     const indoor = !!walls && at.x > walls.minX && at.x < walls.maxX && at.z > walls.minZ && at.z < walls.maxZ && at.y < walls.maxY;
     const piece: Debris = { pivot, indoor, vel, axis: scatter(1), spin: rnd(2, 9) / (1 + size), thin: AXES[i].clone().applyQuaternion(dQuat), rest: Math.max(half.getComponent(i), 0.01), state: 0, flat: new THREE.Quaternion(), settle: 0 };
     debris.push(piece);
@@ -515,18 +520,18 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
 
   // ---------- Rook, vuur en vonken ----------
   /** @param gravity valt (vonken) of stijgt op eigen snelheid (0) */
-  function puff(material: THREE.Material, at: THREE.Vector3, vel: THREE.Vector3, size: number, life: number, gravity = 0) {
+  function puff(material: THREE.Material, at: THREE.Vector3, vel: THREE.Vector3, size: number, life: number, gravity = 0, drag = gravity ? 0.6 : 2.2) {
     const mesh = new THREE.Mesh(BALL, material);
     mesh.position.copy(at);
     mesh.scale.setScalar(0.001);
     mesh.userData.noAO = true; // geen omgevingsschaduw van rook en vuur (zie main.ts)
     fx.add(mesh);
-    puffs.push({ mesh, vel, age: 0, life, size, gravity });
+    puffs.push({ mesh, vel, age: 0, life, size, gravity, drag });
   }
   /** Een brandje dat een tijd nasmeult: vlammen en een rookpluim. */
   function burn(at: THREE.Vector3, seconds: number, size: number) {
     fires.push({ at, left: seconds, size, flame: 0, fume: 0 });
-    if (fires.length > 14) fires.shift();
+    if (fires.length > 30) fires.shift();
   }
 
   const scorchMat = onTop(
@@ -556,11 +561,11 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
 
   /** Inslagen die al verwerkt zijn (op 10 cm): dezelfde inslag komt soms twee keer binnen. */
   const seen = new Set<string>();
-  function scorch(p: THREE.Vector3) {
+  function scorch(p: THREE.Vector3, r: number) {
     const mark = new THREE.Mesh(scorchGeo, scorchMat);
     mark.position.set(p.x, 0.005, p.z);
     mark.rotation.y = rnd(0, 6);
-    mark.scale.setScalar(BLAST * rnd(1.6, 2.1));
+    mark.scale.setScalar(r * rnd(1.6, 2.1));
     mark.receiveShadow = true;
     fx.add(mark);
     scorches.push(mark);
@@ -569,34 +574,37 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
    * Een inslag. Zonder `from` is het een eigen raket; die gaat ook naar de andere spelers.
    * @param from by = naam van de speler die schoot, spare = zijn figuur (zijn eigen raket doet hem niets);
    *             quiet = schade van eerder (voor wie later binnenkomt): alleen het gat, zonder knal en puin.
+   * @param nuke een kernbom: een veel grotere ontploffing, die ook de schutter zelf niet spaart.
    */
-  function explode(p: THREE.Vector3, from?: { by?: string; spare?: THREE.Object3D; quiet?: boolean }) {
+  function explode(p: THREE.Vector3, from?: { by?: string; spare?: THREE.Object3D; quiet?: boolean }, nuke = false) {
+    const r = nuke ? NUKE : BLAST;
     const key = `${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)}`;
     if (seen.has(key)) return;
     seen.add(key);
     shots++;
-    zones.push({ p: p.clone(), r: BLAST });
+    zones.push({ p: p.clone(), r });
     refreshHoles();
     if (from?.quiet) {
-      destroy(p, BLAST, 'units');
-      if (p.y < 2.2) scorch(p);
+      destroy(p, r, 'units');
+      if (p.y < 2.2) scorch(p, r);
       passFrom = null;
       refreshPanel();
       return;
     }
-    if (!from) onExplode?.(+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2));
-    else if (self && !flight) {
-      // de raket van een ander: sta je erin, dan vlieg je weg
+    if (!from) onExplode?.(+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2), nuke);
+    if ((from || nuke) && self && !flight) {
+      // de raket van een ander (of je eigen kernbom): sta je erin, dan vlieg je weg
       const me = self.position;
-      if (reach(p, me.x, THREE.MathUtils.clamp(p.y, me.y, me.y + 1.8), me.z) <= BLAST * 0.8) killed(from.by ?? 'iemand', p);
+      if (reach(p, me.x, THREE.MathUtils.clamp(p.y, me.y, me.y + 1.8), me.z) <= r * 0.8) killed(from?.by ?? 'je eigen kernbom', p, r);
     }
-    const pieces = destroy(p, BLAST, from?.spare);
+    const pieces = destroy(p, r, nuke ? undefined : from?.spare);
+    const budget = nuke ? NUKE_DEBRIS : DEBRIS_PER_BLAST;
     // Puin: de grote stukken (staanders, liggers, pallets) allemaal, van de rest (dozen) een greep
     pieces.sort((a, b) => b.size - a.size);
     const big = pieces.findIndex((piece) => piece.size < 0.55);
-    const keep = pieces.splice(0, Math.min(big < 0 ? pieces.length : big, Math.round(DEBRIS_PER_BLAST * 0.55)));
-    while (keep.length < DEBRIS_PER_BLAST && pieces.length) keep.push(pieces.splice(Math.floor(Math.random() * pieces.length), 1)[0]);
-    for (const piece of keep) throwPiece(piece, p, BLAST);
+    const keep = pieces.splice(0, Math.min(big < 0 ? pieces.length : big, Math.round(budget * 0.55)));
+    while (keep.length < budget && pieces.length) keep.push(pieces.splice(Math.floor(Math.random() * pieces.length), 1)[0]);
+    for (const piece of keep) throwPiece(piece, p, r);
     // te veel puin: de oudste stukken die al liggen gaan weg (een lichaam blijft tot de mens terug is)
     const bodies = new Set([...dead.values()].map((d) => d.body));
     bodies.add(flight?.body);
@@ -607,37 +615,66 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
 
     // Vuurbal: witheet hart, oranje bol, uitwaaierende vlammen, vonken, en een zwarte rookwolk die blijft hangen
     const still = new THREE.Vector3();
-    puff(hot, p, still.clone(), BLAST * 0.5, 0.26);
-    puff(fire, p, still.clone(), BLAST * 0.95, 0.5);
-    for (let i = 0; i < 16; i++) puff(fire, p, scatter(rnd(5, 14)), rnd(0.5, 1.3), rnd(0.3, 0.65));
+    const k = Math.sqrt(r / BLAST); // een kernbom: alles groter, verder en langer
+    puff(hot, p, still.clone(), r * 0.5, 0.26 * k * k);
+    puff(fire, p, still.clone(), r * 0.95, 0.5 * k * k);
+    for (let i = 0; i < 16; i++) puff(fire, p, scatter(rnd(5, 14) * k * k), rnd(0.5, 1.3) * k * k, rnd(0.3, 0.65) * k);
     for (let i = 0; i < 34; i++) {
-      const vel = scatter(rnd(7, 20));
+      const vel = scatter(rnd(7, 20) * k);
       vel.y = Math.abs(vel.y) + rnd(1, 5);
       puff(ember, p, vel, rnd(0.04, 0.1), rnd(0.7, 1.5), 14);
     }
     for (let i = 0; i < 18; i++) {
       const vel = scatter(rnd(1.5, 5));
       vel.y = Math.abs(vel.y) * 0.8 + rnd(0.8, 2.4);
-      puff(i % 3 ? soot : smoke, p, vel, rnd(1.3, 3), rnd(2.5, 5.5));
+      puff(i % 3 ? soot : smoke, p, vel.multiplyScalar(k * k), rnd(1.3, 3) * k, rnd(2.5, 5.5) * k);
     }
+    if (nuke) mushroom(p, r);
     // Drukgolf over de vloer
     const ring = new THREE.Mesh(RING, onTop(new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }), 4));
     (ring.material as THREE.MeshBasicMaterial).color.setRGB(2.4, 1.8, 1.2);
     ring.position.set(p.x, Math.max(0.03, Math.min(p.y, 0.5)), p.z);
     ring.userData.noAO = true;
     fx.add(ring);
-    rings.push({ mesh: ring, age: 0 });
+    rings.push({ mesh: ring, age: 0, r });
     // Wat er lag blijft nabranden
     const ground = p.y < 2.5 ? 0.1 : p.y;
     burn(new THREE.Vector3(p.x, ground, p.z), rnd(6, 9), 1.2);
     for (let i = 0; i < 3; i++) burn(new THREE.Vector3(p.x + rnd(-3, 3), 0.1, p.z + rnd(-3, 3)), rnd(4, 10), rnd(0.5, 0.9));
+    if (nuke) for (let i = 0; i < 14; i++) burn(new THREE.Vector3(p.x + rnd(-0.7, 0.7) * r, 0.1, p.z + rnd(-0.7, 0.7) * r), rnd(8, 18), rnd(0.9, 1.8));
 
-    if (p.y < 2.2) scorch(p);
+    if (p.y < 2.2 || nuke) scorch(p, r);
     const d = camera.getWorldPosition(center).distanceTo(p);
-    shake = Math.max(shake, THREE.MathUtils.clamp(1.5 - d / 35, 0, 1));
-    boomSound(p);
+    shake = Math.max(shake, nuke ? 2 : THREE.MathUtils.clamp(1.5 - d / 35, 0, 1));
+    if (nuke) {
+      // de lichtflits: even is alles wit
+      flash.style.transition = 'none';
+      flash.style.opacity = '1';
+      void flash.offsetWidth;
+      flash.style.transition = 'opacity 3.5s ease-out 0.25s';
+      flash.style.opacity = '0';
+    }
+    boomSound(p, nuke);
     refreshPanel();
   }
+
+  /** De paddenstoelwolk van een kernbom: een stam van rook en vuur die opstijgt, met een hoed die uitwaaiert. */
+  function mushroom(p: THREE.Vector3, r: number) {
+    for (let i = 0; i < 28; i++) {
+      const at = new THREE.Vector3(p.x + rnd(-2.5, 2.5), rnd(0.5, r * 0.5), p.z + rnd(-2.5, 2.5));
+      puff(i % 4 ? soot : fire, at, new THREE.Vector3(rnd(-0.6, 0.6), rnd(5, 9), rnd(-0.6, 0.6)), rnd(3.5, 6), i % 4 ? rnd(7, 11) : rnd(2.5, 4), 0, 0.22);
+    }
+    for (let i = 0; i < 34; i++) {
+      const a = rnd(0, Math.PI * 2);
+      const out = rnd(0, 5);
+      const at = new THREE.Vector3(p.x + Math.cos(a) * out, r * 0.55 + rnd(0, 5), p.z + Math.sin(a) * out);
+      const vel = new THREE.Vector3(Math.cos(a) * rnd(1.5, 4.5), rnd(3, 5.5), Math.sin(a) * rnd(1.5, 4.5));
+      puff(i % 5 ? (i % 2 ? soot : smoke) : fire, at, vel, rnd(6, 10), i % 5 ? rnd(9, 13) : rnd(3, 5), 0, 0.2);
+    }
+  }
+  const flash = document.createElement('div');
+  flash.style.cssText = 'position:fixed;inset:0;z-index:56;pointer-events:none;opacity:0;background:#fffdf0';
+  document.body.appendChild(flash);
 
   // ---------- Opgeblazen: even een rood scherm, en terug naar de startplek ----------
   const overlay = document.createElement('div');
@@ -647,7 +684,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
   /** De speler zelf vliegt weg: zijn lichaam als puin, de camera volgt het tot het ligt. */
   let flight: { body: Debris; by: string; time: number; down: number } | null = null;
   const chase = new THREE.Vector3();
-  function killed(by: string, p: THREE.Vector3) {
+  function killed(by: string, p: THREE.Vector3, r: number) {
     if (!self) return;
     overlay.textContent = `Opgeblazen door ${by}`;
     overlay.style.transition = 'none';
@@ -664,7 +701,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     });
     center.setFromMatrixPosition(self.matrixWorld);
     center.y += 0.9;
-    const piece = launch(body, self.matrixWorld, center, dSize.set(0.28, 0.9, 0.16), p, BLAST);
+    const piece = launch(body, self.matrixWorld, center, dSize.set(0.28, 0.9, 0.16), p, r);
     piece.vel.y += 6; // hoog genoeg om jezelf te zien gaan
     piece.spin = Math.max(piece.spin, 4);
     flight = { body: piece, by, time: 0, down: 0 };
@@ -801,11 +838,11 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     };
   }
   /** De inslag op punt `p`: hoe verder weg, hoe zachter, doffer en later. */
-  function boomSound(p: THREE.Vector3) {
+  function boomSound(p: THREE.Vector3, nuke = false) {
     if (!ready()) return;
     camera.getWorldPosition(camPos);
     const d = camPos.distanceTo(p);
-    const level = THREE.MathUtils.clamp(1.2 / (1 + d / 22), 0.08, 1);
+    const level = nuke ? 1 : THREE.MathUtils.clamp(1.2 / (1 + d / 22), 0.08, 1); // een kernbom hoor je overal
     step.setFromMatrixColumn(camera.matrixWorld, 0); // rechts van de camera
     const pan = d < 1 ? 0 : THREE.MathUtils.clamp(((p.x - camPos.x) * step.x + (p.z - camPos.z) * step.z) / d, -1, 1) * 0.75;
     const t = audio!.currentTime + Math.min(d / 340, 0.6);
@@ -814,11 +851,141 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     hiss('lowpass', 2600 - 1700 * far, 55, 1.2 * level, t, 1.9, pan); // de dreun die uitrolt
     thud('sine', 110, 24, 1.3 * level, t, 1.0, pan);
     thud('triangle', 62, 30, 0.6 * level, t + 0.02, 0.6, pan);
+    if (nuke) {
+      // de kernbom: een dreun die seconden doorrolt, met een tweede golf erachteraan
+      hiss('lowpass', 1400, 28, 2, t, 7, pan);
+      thud('sine', 75, 16, 2.2, t, 4.5, pan);
+      thud('sawtooth', 48, 20, 0.7, t + 0.1, 3, pan);
+      hiss('lowpass', 500, 30, 1.2, t + 1.4, 6, -pan);
+    }
     // puin dat neerklettert
-    for (let i = 0; i < 9; i++) {
-      const at = t + 0.35 + Math.random() * 1.5;
+    for (let i = 0; i < (nuke ? 30 : 9); i++) {
+      const at = t + 0.35 + Math.random() * (nuke ? 5 : 1.5);
       hiss('bandpass', 1200 + Math.random() * 2600, 500 + Math.random() * 600, 0.16 * level * (1 - 0.6 * far), at, 0.05 + Math.random() * 0.09, THREE.MathUtils.clamp(pan + (Math.random() - 0.5) * 0.6, -1, 1), 3);
     }
+  }
+
+  // ---------- Kernbom uit de lucht (de knop in de kantine): ver weg valt een bom ----------
+  // Je ziet hem vallen, dan de flits en de paddenstoelwolk in de verte, en een paar tellen later is de drukgolf bij
+  // de hal: dan ontploft alles om je heen. Wat ver weg staat tekent zonder nevel (fog: false), anders zie je het niet.
+  const FALL = 4.5; // zo lang valt de bom (s)
+  const SHOCK = 3.4; // zo lang doet de drukgolf erover van de inslag naar de hal (s)
+  const WAVE = 12; // zoveel ontploffingen om je heen als hij aankomt
+  const far = (r: number, g: number, b: number, opacity = 1) => {
+    const m = new THREE.MeshBasicMaterial({ fog: false, transparent: opacity < 1, opacity, depthWrite: opacity >= 1 });
+    m.color.setRGB(r, g, b);
+    return m;
+  };
+  const farHot = far(16, 12, 6);
+  const farFire = far(7, 2.6, 0.5);
+  const farSoot = far(0.05, 0.05, 0.055, 0.8);
+  const farDust = far(0.75, 0.72, 0.66, 0.5);
+  const WALL_GEO = new THREE.CylinderGeometry(1, 1, 1, 96, 1, true);
+  type Strike = { t: number; at: THREE.Vector3; own: boolean; bomb: THREE.Group; trail: number; hit: boolean; arrived: boolean; wave: number; next: number; ring?: THREE.Mesh; wall?: THREE.Mesh; reach: number };
+  let strike: Strike | null = null;
+
+  /** Laat ver weg een kernbom vallen op (x, z). own: deze speler drukte op de knop; bij hem slaat de drukgolf in. */
+  function airstrike(x: number, z: number, own: boolean) {
+    if (strike) return false;
+    const bomb = new THREE.Group(); // neus naar +Z
+    const dark = far(0.06, 0.065, 0.07);
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(1.1, 4.2, 8, 16).rotateX(Math.PI / 2), dark);
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(1.12, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2).rotateX(Math.PI / 2), far(0.9, 0.72, 0.05));
+    nose.position.z = 2.1;
+    bomb.add(body, nose);
+    for (let i = 0; i < 4; i++) {
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.2, 1.6), dark);
+      fin.position.set(Math.sin((i * Math.PI) / 2) * 1.3, Math.cos((i * Math.PI) / 2) * 1.3, -2.6);
+      fin.rotation.z = (-i * Math.PI) / 2;
+      bomb.add(fin);
+    }
+    bomb.scale.setScalar(1.6); // van 250 m nog te zien
+    bomb.traverse((o) => (o.userData.noAO = true));
+    fx.add(bomb);
+    camera.getWorldPosition(camPos);
+    strike = { t: 0, at: new THREE.Vector3(x, 0, z), own, bomb, trail: 0, hit: false, arrived: false, wave: 0, next: 0, reach: Math.hypot(x - camPos.x, z - camPos.z) };
+    return true;
+  }
+
+  function strikeStep(dt: number) {
+    const s = strike;
+    if (!s) return;
+    s.t += dt;
+    if (!s.hit) {
+      // de bom valt, steeds sneller, met een rookspoor
+      const k = Math.min(1, s.t / FALL);
+      const from = step.set(s.at.x - 55, 240, s.at.z + 20);
+      s.bomb.position.set(from.x + (s.at.x - from.x) * k, 240 * (1 - k * k), from.z + (s.at.z - from.z) * k);
+      s.bomb.quaternion.setFromUnitVectors(FORWARD, local.set(55, -480 * k - 20, -20).normalize());
+      for (s.trail += dt * 14; s.trail >= 1; s.trail--) puff(farDust, s.bomb.position.clone(), new THREE.Vector3(), rnd(2.5, 4), rnd(2, 3.5), 0, 0.5);
+      if (s.t < FALL) return;
+      s.hit = true;
+      fx.remove(s.bomb);
+      // De flits: een witte bol die opzwelt, en even is je hele beeld wit
+      const still = () => new THREE.Vector3();
+      puff(farHot, new THREE.Vector3(s.at.x, 12, s.at.z), still(), 110, 2.2);
+      puff(farFire, new THREE.Vector3(s.at.x, 18, s.at.z), still(), 150, 4.5);
+      flash.style.transition = 'none';
+      flash.style.opacity = '0.92';
+      void flash.offsetWidth;
+      flash.style.transition = 'opacity 4s ease-out 0.3s';
+      flash.style.opacity = '0';
+      // De paddenstoelwolk: een stam die opstijgt en een hoed die uitrolt
+      for (let i = 0; i < 20; i++) {
+        const at = new THREE.Vector3(s.at.x + rnd(-9, 9), rnd(5, 75), s.at.z + rnd(-9, 9));
+        puff(i % 4 ? farSoot : farFire, at, new THREE.Vector3(rnd(-1, 1), rnd(11, 18), rnd(-1, 1)), rnd(22, 32), i % 4 ? rnd(13, 17) : rnd(4, 7), 0, 0.1);
+      }
+      for (let i = 0; i < 30; i++) {
+        const a = rnd(0, Math.PI * 2);
+        const out = rnd(0, 22);
+        const at = new THREE.Vector3(s.at.x + Math.cos(a) * out, rnd(92, 112), s.at.z + Math.sin(a) * out);
+        const vel = new THREE.Vector3(Math.cos(a) * rnd(5, 12), rnd(5, 9), Math.sin(a) * rnd(5, 12));
+        puff(i % 5 ? farSoot : farFire, at, vel, rnd(38, 58), i % 5 ? rnd(14, 18) : rnd(5, 8), 0, 0.12);
+      }
+      // De drukgolf: een ring over de grond en een muur van stof die op je af komt
+      s.ring = new THREE.Mesh(RING, far(3, 2.6, 2, 0.7));
+      (s.ring.material as THREE.Material).blending = THREE.AdditiveBlending;
+      s.ring.position.set(s.at.x, 0.4, s.at.z);
+      s.wall = new THREE.Mesh(WALL_GEO, farDust.clone());
+      (s.wall.material as THREE.Material).side = THREE.DoubleSide;
+      s.wall.position.set(s.at.x, 9, s.at.z);
+      for (const m of [s.ring, s.wall]) {
+        m.userData.noAO = true;
+        m.frustumCulled = false;
+        fx.add(m);
+      }
+    }
+    const after = s.t - FALL;
+    const radius = Math.max(1, (s.reach + 6) * (after / SHOCK)); // precies op tijd bij de kijker
+    s.ring!.scale.setScalar(radius);
+    s.wall!.scale.set(radius, 18, radius);
+    (s.wall!.material as THREE.Material).opacity = 0.5 * Math.max(0, 1 - (after - SHOCK) / 1.2);
+    (s.ring!.material as THREE.Material).opacity = 0.7 * Math.max(0, 1 - (after - SHOCK) / 1.2);
+    if (after < SHOCK) return;
+    if (!s.arrived) {
+      // Hij is er: de klap, en alles schudt
+      s.arrived = true;
+      shake = 2;
+      camera.getWorldPosition(camPos);
+      boomSound(camPos.clone().addScaledVector(local.copy(s.at).sub(camPos).normalize(), 12), true);
+    }
+    // Wie op de knop drukte: om hem heen ontploft alles (die inslagen gaan gewoon naar alle spelers)
+    if (s.own && s.wave < WAVE && after >= SHOCK + s.next) {
+      const me = self?.position ?? camPos;
+      const a = rnd(0, Math.PI * 2);
+      const out = s.wave === 0 ? 3.5 : rnd(4, 15);
+      const toBomb = local.copy(s.at).sub(me).setY(0).normalize();
+      // de eerste slaat de ramen eruit, aan de kant van de bom
+      const at = s.wave === 0 ? new THREE.Vector3(me.x + toBomb.x * out, 1.6, me.z + toBomb.z * out) : new THREE.Vector3(me.x + Math.cos(a) * out, rnd(0.3, 2.5), me.z + Math.sin(a) * out);
+      explode(at);
+      s.wave++;
+      s.next += rnd(0.08, 0.2);
+    }
+    if (after < SHOCK + 4) return;
+    fx.remove(s.ring!, s.wall!);
+    (s.ring!.material as THREE.Material).dispose();
+    (s.wall!.material as THREE.Material).dispose();
+    strike = null;
   }
 
   // ---------- Vuren ----------
@@ -827,10 +994,23 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
   const camDir = new THREE.Vector3();
   const FORWARD = new THREE.Vector3(0, 0, 1);
 
-  function buildRocket() {
+  /** Waarschuwingsgeel: de kop van de kernbom. */
+  const nukeMat = new THREE.MeshStandardMaterial({ color: '#f0c20a', roughness: 0.6, metalness: 0.05 });
+  let nukeLoaded = false;
+  /** Vanaf dit tijdstip (clock) is de volgende kernbom klaar. */
+  let nukeReadyAt = 0;
+  function loadNuke(on: boolean) {
+    if (on && clock < nukeReadyAt) return;
+    nukeLoaded = on;
+    if (on && !equipped) setEquipped(true);
+    refreshPanel();
+  }
+
+  function buildRocket(nuke: boolean) {
     const g = new THREE.Group(); // voorkant naar +Z
+    if (nuke) g.scale.setScalar(1.8);
     const body = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.42, 16).rotateX(Math.PI / 2), STYLE.dark);
-    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.046, 0.14, 16).rotateX(Math.PI / 2), STYLE.paint);
+    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.046, 0.14, 16).rotateX(Math.PI / 2), nuke ? nukeMat : STYLE.paint);
     nose.position.z = 0.28;
     g.add(body, nose);
     for (let i = 0; i < 4; i++) {
@@ -850,8 +1030,14 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
 
   function shoot() {
     if (cooldown > 0) return;
-    cooldown = COOLDOWN;
-    kick = 1;
+    const nuke = nukeLoaded;
+    if (nuke) {
+      nukeLoaded = false;
+      nukeReadyAt = clock + NUKE_COOLDOWN;
+      refreshPanel();
+    }
+    cooldown = nuke ? 1.5 : COOLDOWN;
+    kick = nuke ? 1.8 : 1;
     camera.getWorldPosition(camPos);
     camera.getWorldDirection(camDir);
     // Waar de raket inslaat: het eerste wat je in het vizier hebt
@@ -868,7 +1054,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
       target.copy(h.point).addScaledVector(camDir, -0.05);
       break;
     }
-    const group = buildRocket();
+    const group = buildRocket(nuke);
     rig.updateWorldMatrix(true, false);
     group.position.copy(rig.localToWorld(new THREE.Vector3(0, 0, -0.62)));
     const dir = target.clone().sub(group.position);
@@ -876,7 +1062,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     dir.normalize();
     group.quaternion.setFromUnitVectors(FORWARD, dir);
     fx.add(group);
-    rockets.push({ group, dir, left, smoke: 0, hush: flightSound(left / SPEED) });
+    rockets.push({ group, dir, left, smoke: 0, nuke, hush: flightSound(left / SPEED) });
     for (let i = 0; i < 6; i++) puff(smoke, camPos.clone().addScaledVector(camDir, -0.6), scatter(1.2).addScaledVector(camDir, -3), rnd(0.25, 0.5), rnd(0.5, 1));
     launchSound();
   }
@@ -890,34 +1076,43 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     const t = e.target;
     if (e.repeat || t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return;
     if (e.code === 'Digit3' || e.code === 'Numpad3') setEquipped(!equipped);
+    else if (e.code === 'Digit4' || e.code === 'Numpad4') loadNuke(!nukeLoaded);
     else if (equipped && (e.code === 'Digit1' || e.code === 'Numpad1')) setEquipped(false, 'scanner');
     else if (equipped && (e.code === 'Digit2' || e.code === 'Numpad2')) setEquipped(false, 'tablet');
   });
   function setEquipped(on: boolean, tool: 'scanner' | 'tablet' | null = null) {
     if (on === equipped) return;
     equipped = on;
+    if (!on) nukeLoaded = false;
     refreshPanel();
     onChange(tool);
   }
 
   // ---------- Menu: pakken en herstellen ----------
   const panel = document.createElement('div');
-  panel.innerHTML = `<div><b>3</b>: raketwerper pakken of wegleggen (te voet, in first person) · <b>Klik</b>: vuren · <b>1</b>/<b>2</b>: terug naar scanner of tablet</div>
-    <div style="margin-top:6px;color:#9aa0a6">Alles kan kapot: stellingen, voorraad, robots, karren, vrachtwagens en mensen, en in wanden, gevels en dak sla je gaten (ook van buitenaf). Robots, voertuigen en mensen komen na een paar tellen vanzelf terug. Iedereen in de kamer ziet dezelfde schade, en de raket van een ander blaast jou op (je begint dan weer op de startplek). Herstellen geldt ook voor iedereen. De schade is alleen beeld: de voorraad en de WMS merken er niets van.</div>
+  panel.innerHTML = `<div><b>3</b>: raketwerper pakken of wegleggen (te voet, in first person) · <b>Klik</b>: vuren · <b>4</b>: kernbom laden (één schot, daarna ${NUKE_COOLDOWN} s wachten) · <b>1</b>/<b>2</b>: terug naar scanner of tablet</div>
+    <div style="margin-top:6px;color:#9aa0a6">Alles kan kapot: stellingen, voorraad, robots, karren, vrachtwagens en mensen, en in wanden, gevels en dak sla je gaten (ook van buitenaf). Robots, voertuigen en mensen komen na een paar tellen vanzelf terug. Iedereen in de kamer ziet dezelfde schade, en de raket van een ander blaast jou op (je begint dan weer op de startplek). Herstellen geldt ook voor iedereen. Een kernbom vaagt een groot deel van de hal weg en spaart ook jezelf niet. De schade is alleen beeld: de voorraad en de WMS merken er niets van.</div>
     <div class="state" style="margin-top:10px"></div>
     <div style="display:flex;gap:8px;margin-top:10px">
       <button class="restore" style="padding:8px 14px;border:0;border-radius:6px;background:#2e7d4f;color:#fff;font:600 14px system-ui,sans-serif;cursor:pointer">Magazijn herstellen</button>
       <button class="equip" style="padding:8px 14px;border:0;border-radius:6px;background:#3a4047;color:#fff;font:14px system-ui,sans-serif;cursor:pointer"></button>
+      <button class="nuke" style="padding:8px 14px;border:0;border-radius:6px;background:#8a6d00;color:#fff;font:14px system-ui,sans-serif;cursor:pointer"></button>
     </div>`;
   const stateEl = panel.querySelector<HTMLDivElement>('.state')!;
   const restoreBtn = panel.querySelector<HTMLButtonElement>('.restore')!;
   const equipBtn = panel.querySelector<HTMLButtonElement>('.equip')!;
+  const nukeBtn = panel.querySelector<HTMLButtonElement>('.nuke')!;
+  nukeBtn.addEventListener('click', () => {
+    loadNuke(!nukeLoaded);
+    nukeBtn.blur();
+  });
   function refreshPanel() {
     stateEl.textContent = shots ? `${shots} ${shots === 1 ? 'inslag' : 'inslagen'}: het magazijn is beschadigd.` : 'Het magazijn is heel.';
     restoreBtn.disabled = !shots;
     restoreBtn.style.opacity = shots ? '1' : '0.45';
     restoreBtn.style.cursor = shots ? 'pointer' : 'default';
     equipBtn.textContent = equipped ? 'Raketwerper wegleggen' : 'Raketwerper pakken';
+    nukeBtn.textContent = nukeLoaded ? 'Kernbom eruit halen' : 'Kernbom laden';
   }
   restoreBtn.addEventListener('click', () => {
     restore(); // geldt voor iedereen in de kamer
@@ -939,7 +1134,10 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     kick = Math.max(0, kick - dt * 5);
     rig.visible = raise > 0.02;
     crosshair.style.display = active() ? 'block' : 'none';
+    crosshair.style.borderColor = nukeLoaded ? '#ffd21f' : 'rgba(255,255,255,.8)';
     tip.visible = cooldown < COOLDOWN * 0.45; // herladen: de volgende raket schuift erin
+    tip.material = nukeLoaded ? nukeMat : STYLE.paint;
+    tip.scale.setScalar(nukeLoaded ? 1.35 : 1);
     rig.position.set(0.2, -0.17 - (1 - raise) * 0.5 + kick * 0.012, -0.34 + kick * 0.07);
     rig.rotation.set(kick * 0.09, 0.02, 0);
 
@@ -958,7 +1156,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
       r.hush();
       fx.remove(r.group);
       rockets.splice(i, 1);
-      explode(r.group.position);
+      explode(r.group.position, undefined, r.nuke);
     }
 
     for (let i = fires.length - 1; i >= 0; i--) {
@@ -986,21 +1184,21 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
       }
       p.vel.y -= p.gravity * dt;
       p.mesh.position.addScaledVector(p.vel, dt);
-      p.vel.multiplyScalar(Math.exp(-dt * (p.gravity ? 0.6 : 2.2)));
+      p.vel.multiplyScalar(Math.exp(-dt * p.drag));
       p.mesh.scale.setScalar(p.size * (t < 0.25 ? t / 0.25 : 1 - (t - 0.25) / 0.75) + 0.001); // snel opzwellen, langzaam oplossen
     }
 
     for (let i = rings.length - 1; i >= 0; i--) {
       const r = rings[i];
       r.age += dt;
-      const t = r.age / 0.45;
+      const t = r.age / (0.45 * Math.sqrt(r.r / BLAST));
       if (t >= 1) {
         fx.remove(r.mesh);
         (r.mesh.material as THREE.Material).dispose();
         rings.splice(i, 1);
         continue;
       }
-      r.mesh.scale.setScalar(0.5 + BLAST * 2.6 * (1 - (1 - t) ** 2));
+      r.mesh.scale.setScalar(0.5 + r.r * 2.6 * (1 - (1 - t) ** 2));
       (r.mesh.material as THREE.Material).opacity = 0.8 * (1 - t);
     }
 
@@ -1052,6 +1250,7 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
       }
     }
 
+    strikeStep(dt);
     fly(dt);
     for (const [unit, entry] of dead) if (clock >= entry.until) respawn(unit, entry);
     if (zones.length) keepDestroyed();
@@ -1092,16 +1291,30 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     /** Zet alles terug zoals het was. remote: een andere speler deed dat (niet nog eens rondsturen). */
     restore,
     /** De inslag van de raket van een andere speler (by = zijn naam, spare = zijn figuur: dat blijft heel). */
-    remoteBlast: (x: number, y: number, z: number, by: string, spare?: THREE.Object3D) => explode(new THREE.Vector3(x, y, z), { by, spare }),
+    remoteBlast: (x: number, y: number, z: number, by: string, spare?: THREE.Object3D, nuke = false) => explode(new THREE.Vector3(x, y, z), { by, spare }, nuke),
     /** Alle inslagen tot nu toe, voor een speler die later binnenkomt. */
-    zones: () => zones.map((z) => [+z.p.x.toFixed(2), +z.p.y.toFixed(2), +z.p.z.toFixed(2)]),
+    zones: () => zones.map((z) => [+z.p.x.toFixed(2), +z.p.y.toFixed(2), +z.p.z.toFixed(2), z.r > BLAST ? 1 : 0]), // het vierde getal: 1 = kernbom
     /** Schade van voor je binnenkwam overnemen: alleen de gaten, zonder knal. */
     applyZones(list: number[][]) {
-      for (const [x, y, z] of list) explode(new THREE.Vector3(x, y, z), { quiet: true });
+      for (const [x, y, z, n] of list) explode(new THREE.Vector3(x, y, z), { quiet: true }, n === 1);
     },
     /** Vuurt (voor testen: zonder vastgezette muis). */
     shoot,
     /** Voor testen: een inslag op deze plek. */
-    blastAt: (x: number, y: number, z: number) => explode(new THREE.Vector3(x, y, z)),
+    blastAt: (x: number, y: number, z: number, nuke = false) => explode(new THREE.Vector3(x, y, z), undefined, nuke),
+    /** Laat ver weg een kernbom vallen (de knop in de kantine). Geeft false als er al een onderweg is. */
+    airstrike,
+    /** Is er een kernbom uit de lucht onderweg (of rolt de drukgolf nog)? */
+    get striking() {
+      return !!strike;
+    },
+    /** Zit er een kernbom in de werper? */
+    get nukeLoaded() {
+      return nukeLoaded;
+    },
+    /** Seconden tot de volgende kernbom klaar is (0 = klaar). */
+    get nukeWait() {
+      return Math.max(0, Math.ceil(nukeReadyAt - clock));
+    },
   };
 }

@@ -118,7 +118,8 @@ interface Options {
   };
   /** De raketwerper: inslagen en herstellen gelden voor alle spelers (src/ui/rocketLauncher.ts). */
   rocket: {
-    remoteBlast(x: number, y: number, z: number, by: string, spare?: THREE.Object3D): void;
+    remoteBlast(x: number, y: number, z: number, by: string, spare?: THREE.Object3D, nuke?: boolean): void;
+    airstrike(x: number, z: number, own: boolean): boolean;
     restore(remote: boolean): void;
     zones(): number[][];
     applyZones(list: number[][]): void;
@@ -518,11 +519,13 @@ export function mountMultiplayer(o: Options) {
   // ---------- Raketwerper: inslagen gelden voor iedereen ----------
   const MAX_ZONES = 80;
   const lastBlastAt = new Map<string, number>();
+  const lastNukeAt = new Map<string, number>();
   /** Een punt uit een bericht, als het een zinnige plek is (de brokers zijn publiek). */
   const blastPoint = (v: unknown): number[] | null => {
     if (!Array.isArray(v) || v.length < 3) return null;
     const [x, y, z] = v.map(Number);
-    return [x, y, z].every(Number.isFinite) && Math.abs(x) < 400 && Math.abs(z) < 400 && y > -5 && y < 80 ? [x, y, z] : null;
+    // het vierde getal: 1 = kernbom
+    return [x, y, z].every(Number.isFinite) && Math.abs(x) < 400 && Math.abs(z) < 400 && y > -5 && y < 80 ? [x, y, z, v[3] === 1 ? 1 : 0] : null;
   };
 
   room.on((kind, from, data) => {
@@ -546,12 +549,21 @@ export function mountMultiplayer(o: Options) {
       if (room.isHost && o.rocket.zones().length) room.send('xz', o.rocket.zones().slice(-MAX_ZONES)); // wat er al kapot is
     } else if (kind === 'x' && isObj(data)) {
       // De raket van een andere speler is ingeslagen: hier dezelfde inslag (wie erin staat is er geweest)
-      const p = blastPoint([data.x, data.y, data.z]);
+      const p = blastPoint([data.x, data.y, data.z, data.n]);
       const now = performance.now();
       if (!p || now - (lastBlastAt.get(from.id) ?? 0) < 250) return; // sneller dan de werper kan vuren: onzin
+      if (p[3] && now - (lastNukeAt.get(from.id) ?? -1e9) < 10_000) return; // en een kernbom kan maar eens in de zoveel tijd
+      if (p[3]) lastNukeAt.set(from.id, now);
       lastBlastAt.set(from.id, now);
       const a = avatars.get(from.id);
-      o.rocket.remoteBlast(p[0], p[1], p[2], a?.pose.n ?? 'iemand', a?.character.group);
+      o.rocket.remoteBlast(p[0], p[1], p[2], a?.pose.n ?? 'iemand', a?.character.group, p[3] === 1);
+    } else if (kind === 'xs' && isObj(data)) {
+      // Iemand drukte op de knop in de kantine: ook hier valt de bom in de verte (de inslagen om hem heen komen los binnen)
+      const p = blastPoint([data.x, 0, data.z]);
+      const now = performance.now();
+      if (!p || now - (lastNukeAt.get(from.id) ?? -1e9) < 10_000) return;
+      lastNukeAt.set(from.id, now);
+      if (o.rocket.airstrike(p[0], p[2], false)) chat.system(`${avatars.get(from.id)?.pose.n ?? 'Iemand'} heeft een kernbom laten vallen.`);
     } else if (kind === 'xz' && Array.isArray(data)) {
       o.rocket.applyZones(data.slice(-MAX_ZONES).map(blastPoint).filter((p) => p !== null));
     } else if (kind === 'xr') {
@@ -821,8 +833,12 @@ export function mountMultiplayer(o: Options) {
     /** Naam van de speler die nu de pompwagen vasthoudt, of null. */
     jackHolder: () => remoteHolder()?.pose.n ?? null,
     /** Een eigen raket is ingeslagen: iedereen ziet dezelfde inslag. */
-    sendBlast(x: number, y: number, z: number) {
-      if (room.status === 'online') room.send('x', { x, y, z });
+    sendBlast(x: number, y: number, z: number, nuke: boolean) {
+      if (room.status === 'online') room.send('x', nuke ? { x, y, z, n: 1 } : { x, y, z });
+    },
+    /** Deze speler liet een kernbom vallen (de knop in de kantine): iedereen ziet hem vallen. */
+    sendStrike(x: number, z: number) {
+      if (room.status === 'online') room.send('xs', { x, z });
     },
     /** Deze speler heeft het magazijn hersteld: dat geldt voor iedereen. */
     sendRestore() {
