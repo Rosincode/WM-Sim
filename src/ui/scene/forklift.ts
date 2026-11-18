@@ -112,6 +112,7 @@ export function tube(pts: [number, number, number][], radius: number, corner: nu
 
 export function createForklift({ hall, colliders, bounds, take, place, onStockChange, obstacles }: Options) {
   const g = new THREE.Group();
+  g.userData.blastUnit = 'machine'; // één geheel voor de raketwerper (src/ui/rocketLauncher.ts): valt uit elkaar en komt terug
   // Materialen van de huisstijl, gedeeld met de pompwagen
   const { paint: red, dark, black, steel, rubber, seat } = STYLE;
   const tailLight = new THREE.MeshStandardMaterial({ color: '#7a0c08', emissive: '#ff2a1a', emissiveIntensity: 0.6 });

@@ -166,6 +166,7 @@ const doorParts = new Map<number, Built>();
 
 export function createTruck(direction: 'in' | 'out') {
   const group = new THREE.Group();
+  group.userData.blastUnit = 'machine'; // één geheel voor de raketwerper (src/ui/rocketLauncher.ts): valt uit elkaar en komt terug
   const accent = direction === 'in' ? STYLE.blue : STYLE.paint;
   meshes((body ??= buildBody()), accent, group);
   // Achterdeuren: dicht onderweg, opengeklapt langs de zijwanden aan het dock

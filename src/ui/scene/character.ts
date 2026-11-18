@@ -53,6 +53,7 @@ export interface HandTarget {
 }
 
 export function createCharacter(group: THREE.Group = new THREE.Group(), colors: { /** Kleur van het hesje (andere spelers krijgen een eigen kleur). */ vest?: string } = {}) {
+  group.userData.blastUnit = 'person'; // één geheel voor de raketwerper (src/ui/rocketLauncher.ts): wordt weggeblazen en komt terug
   const mat = (color: string, roughness = 0.85, metalness = 0) => new THREE.MeshStandardMaterial({ color, roughness, metalness });
   const vest = mat(colors.vest ?? '#f0590f', 0.8);
   const stripe = new THREE.MeshStandardMaterial({ color: '#e4e7e2', roughness: 0.3, metalness: 0.35, side: THREE.DoubleSide });

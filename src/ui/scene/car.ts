@@ -59,6 +59,7 @@ let built: Built | null = null;
 /** Een auto in de gegeven lak (een materiaal uit STYLE, zie CAR_PAINTS). */
 export function createCar(paint: THREE.Material) {
   const group = new THREE.Group();
+  group.userData.blastUnit = 'machine'; // één geheel voor de raketwerper (src/ui/rocketLauncher.ts): valt uit elkaar en komt terug
   meshes((built ??= build()), paint, group);
   return group;
 }

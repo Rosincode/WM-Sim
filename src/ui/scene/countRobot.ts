@@ -29,6 +29,7 @@ const makeGeo = () => ({
 export function createCountRobot() {
   const g = (geo ??= makeGeo());
   const group = new THREE.Group();
+  group.userData.blastUnit = 'machine'; // één geheel voor de raketwerper (src/ui/rocketLauncher.ts): valt uit elkaar en komt terug
   const add = (parent: THREE.Object3D, geometry: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number) => {
     const m = new THREE.Mesh(geometry, mat);
     m.position.set(x, y, z);

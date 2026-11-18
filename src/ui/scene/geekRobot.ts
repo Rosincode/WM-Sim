@@ -45,6 +45,7 @@ export function robotLogo() {
 export function createGeekRobot() {
   const p = (parts ??= makeParts());
   const group = new THREE.Group();
+  group.userData.blastUnit = 'machine'; // één geheel voor de raketwerper (src/ui/rocketLauncher.ts): valt uit elkaar en komt terug
   const part = (mat: THREE.Material, w: number, h: number, d: number, x: number, y: number, z: number) => {
     const m = new THREE.Mesh(UNIT_BOX, mat);
     m.scale.set(w, h, d);

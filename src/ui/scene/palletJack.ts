@@ -61,6 +61,7 @@ const MATERIALS = { jack_paint: twoSided(STYLE.paint), jack_rubber: twoSided(STY
 
 export function createPalletJack({ hall, bounds, take, place, onStockChange, loose }: Options) {
   const g = new THREE.Group();
+  g.userData.blastUnit = 'machine'; // één geheel voor de raketwerper (src/ui/rocketLauncher.ts): valt uit elkaar en komt terug
   /** Gaat omhoog bij het pompen: chassis en vorken. */
   const forks = new THREE.Group();
   /** Draait om het draaipunt op de pomp. */

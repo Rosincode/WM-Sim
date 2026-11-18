@@ -23,6 +23,7 @@ const GRIP = { x: 0.15, y: 1.08, z: -0.64 };
 export function createElectricJack() {
   const g = (geo ??= makeGeo());
   const group = new THREE.Group();
+  group.userData.blastUnit = 'machine'; // één geheel voor de raketwerper (src/ui/rocketLauncher.ts): valt uit elkaar en komt terug
   group.rotation.order = 'YXZ'; // eerst de rijrichting, dan de helling van de laadklep
   const add = (parent: THREE.Object3D, geometry: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number) => {
     const m = new THREE.Mesh(geometry, mat);

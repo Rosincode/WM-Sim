@@ -8,6 +8,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { createPlayerView, type ViewMode } from './ui/playerView';
 import { createHandheld } from './ui/handheld';
+import { createRocketLauncher } from './ui/rocketLauncher';
 import { createTabletApp } from './ui/tabletApp';
 import { createWarehouse, EXIT_X, HALL } from './ui/scene/warehouse';
 import { createForklift } from './ui/scene/forklift';
@@ -85,6 +86,7 @@ const character = createCharacter();
 const player = character.group;
 player.position.set(START.player.x, 0, START.player.z); // startplekken komen uit het model (src/sim/warehouse.json)
 player.rotation.y = START.player.r;
+player.userData.noBlast = true; // je eigen raketten doen jezelf niets
 scene.add(player);
 
 // --- Nabewerking: omgevingsschaduw (GTAO), gloed rond lampen, tonemapping ---
@@ -103,12 +105,13 @@ const gtaoSetSize = gtao.setSize.bind(gtao);
 gtao.setSize = (w: number, h: number) => gtaoSetSize(Math.ceil(w * AO_SCALE), Math.ceil(h * AO_SCALE));
 gtao.enabled = AO_SCALE > 0 && (fixedScale > 0 || LEVELS[scaleLevel].ao);
 // Tekstlabels (sprites) horen niet in de diepte/normaal-pass van GTAO: daar worden ze
-// als massieve vlakken getekend en verschijnen ze als zwarte balken in beeld.
+// als massieve vlakken getekend en verschijnen ze als zwarte balken in beeld. Hetzelfde geldt voor
+// rook en vuur (userData.noAO): een rookwolk vlak voor de camera maakt anders het hele beeld donker.
 const gtaoRender = gtao.render.bind(gtao);
 gtao.render = (...args: Parameters<GTAOPass['render']>) => {
   const hidden: THREE.Object3D[] = [];
   scene.traverseVisible((o) => {
-    if ((o as THREE.Sprite).isSprite) hidden.push(o);
+    if ((o as THREE.Sprite).isSprite || o.userData.noAO) hidden.push(o);
   });
   for (const o of hidden) o.visible = false;
   try {
@@ -195,6 +198,24 @@ const handheld = createHandheld({
 // De echte WMS-app op het scherm van de tablet (2); F haalt hem dichtbij om te bedienen.
 const tabletApp = createTabletApp({ camera, display: handheld.tabletDisplay, onClose: () => handheld.setFocus(false) });
 
+// Raketwerper (3): schiet het magazijn kapot; herstellen kan in het menu. Alleen beeld, zie src/ui/rocketLauncher.ts.
+const rocket = createRocketLauncher({
+  scene,
+  camera,
+  canvas: renderer.domElement,
+  onChange: (tool) => {
+    if (tool) handheld.setTool(tool);
+    applyMode(view.mode);
+  },
+  // De heftruck en de pompwagen staan na een voltreffer weer in hun vak (als niemand ze gebruikt); wat erop stond
+  // blijft erop. Robots en mensen komen terug waar de sim ze op dat moment heeft.
+  onRespawn: (unit) => {
+    if (unit === forklift.group && !driving && !multiplayer?.forkliftDriver())
+      forklift.applyState({ ...forklift.getState(), x: forkliftHome.x, z: forkliftHome.z, r: forkliftHome.r, h: forkliftHome.h }, false);
+    if (unit === jack.group && !jack.held && !multiplayer?.jackHolder()) jack.applyState({ ...jack.getState(), x: jackHome.x, z: jackHome.z, r: jackHome.r });
+  },
+});
+
 let driving = false;
 /** De stoel waar de speler op zit (in het kantoor achter een bureau met de WMS-app, of in de kantine), anders null. */
 let chair: THREE.Object3D | null = null;
@@ -220,7 +241,10 @@ function applyMode(mode: ViewMode) {
   // In de heftruck: linkerhand op het stuur, scanner/tablet in de rechterhand, eigen lichaam (zonder hoofd) in beeld
   // Met de pompwagen: beide handen op de handgreep, dus geen scanner of tablet in beeld
   // Aan het bureau: handen bij het toetsenbord, dus ook geen scanner of tablet
-  handheld.setActive(mode === 'first' && !pushing && !chair);
+  // De raketwerper houd je met twee handen vast: dan geen scanner of tablet, en alleen te voet
+  const hands = mode === 'first' && !pushing && !chair;
+  rocket.setAllowed(hands && !driving);
+  handheld.setActive(hands && !rocket.active);
   handheld.setSeated(driving);
   character.setFirstPerson(mode === 'first' && (driving || pushing || !!chair));
 }
@@ -259,10 +283,11 @@ const view = createPlayerView({
   bounds: BOUNDS,
   // Ook buiten: het terrein rond het gebouw, via de chauffeursdeuren en de nooduitgang
   walkable: exterior.walkable,
-  solids: [hall.solids, () => forklift.solids(), () => jack.solids(), ...otherSolids, ...outdoorSolids],
+  // wat met de raketwerper is weggeschoten houdt je niet meer tegen
+  solids: [() => rocket.passable(hall.solids()), () => forklift.solids(), () => jack.solids(), ...otherSolids, ...outdoorSolids],
   // Wat je voor je uit hebt botst ook: de pallet die je draagt, of de pompwagen met wat erop staat
   probes: () => (jack.held ? jack.probes() : warehouse.carrying() ? [{ ahead: CARRY_AHEAD, radius: CARRY_RADIUS }] : []),
-  probeSolids: [hall.solids, () => forklift.solids(), ...otherSolids, ...outdoorSolids],
+  probeSolids: [() => rocket.passable(hall.solids()), () => forklift.solids(), ...otherSolids, ...outdoorSolids],
   initialMode: params.get('view') === 'overview' ? 'overview' : params.get('view') === 'third' ? 'third' : 'first',
   onModeChange: applyMode,
 });
@@ -408,7 +433,7 @@ const forklift = createForklift({
 forklift.group.position.set(START.forklift.x, 0, START.forklift.z);
 forklift.group.rotation.y = START.forklift.r;
 scene.add(forklift.group, forklift.marker);
-if (import.meta.env.DEV) Object.assign(window, { wmDebug: { forklift, hall, warehouse, wms, setDriving: (on: boolean) => setDriving(on) } });
+if (import.meta.env.DEV) Object.assign(window, { wmDebug: { forklift, hall, warehouse, wms, rocket, setDriving: (on: boolean) => setDriving(on) } });
 
 // --- Radio op het bureau naast de pc: M schakelt tussen de live zenders ---
 const radio = createRadio();
@@ -596,6 +621,7 @@ renderer.setAnimationLoop((now) => {
 
   forklift.update(dt, now / 1000);
   view.update(dt);
+  rocket.update(dt); // na de camera: de klap van een inslag laat hem even schudden
   // In het overzicht staat de camera ver weg en is de dieptebuffer met een voorvlak op 5 cm te grof: onderdelen
   // die een paar cm voor elkaar liggen (grille en ruiten van een vrachtwagen) flikkeren dan door elkaar heen.
   // Het voorvlak schuift daarom mee met de afstand tot waar je naar kijkt.
@@ -655,8 +681,9 @@ renderer.setAnimationLoop((now) => {
     if (jack.held && jack.hint) list.push(hintPrompt(jack.hint));
     const action = warehouse.action();
     if (action) list.push({ key: 'E', html: esc(action.label), off: !action.enabled });
-    if (handheld.aimed)
+    if (handheld.aimed && !rocket.active)
       list.push({ key: 'Klik', html: `${handheld.aimed.startsWith('PAL-') ? 'Palletsticker' : 'Label'} <b>${esc(handheld.aimed)}</b> scannen` });
+    if (rocket.active) list.push({ key: 'Klik', html: 'Raket afvuren' });
     if (chair) {
       list.push({ key: 'R', html: 'Opstaan' });
     } else if (driving) {
