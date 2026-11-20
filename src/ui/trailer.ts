@@ -416,10 +416,10 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
 
   const text = (l: Line) => (typeof l === 'string' ? l : l.text);
   /**
-   * Zoals de verteller het moet uitspreken: 'pellet' (niet 'pallet'), en fizor. als 'fai-zor' (fonetisch 'Fijzor';
+   * Zoals de verteller het moet uitspreken: 'pellet' (niet 'pallet'), en fizor. als 'fai-zor' (fonetisch 'Faaajzor';
    * een andere spelling proberen kan met ?fizor=..., zonder de code aan te passen).
    */
-  const FIZOR = params.get('fizor') || 'Fijzor';
+  const FIZOR = params.get('fizor') || 'Faaajzor';
   const pronounce = (s: string) => s.replace(/pallet/gi, (m) => (m[0] === 'P' ? 'Pellet' : 'pellet')).replace(/fizor/gi, FIZOR);
   const spoken = (l: Line) => pronounce(typeof l === 'string' ? l : l.say);
   const narration = { lines: [] as Line[], i: 0, done: true, token: 0, rate: 1, pitch: 1, onLine: undefined as Scene['onLine'] };
@@ -437,8 +437,10 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
     timers.forEach(clearTimeout);
     timers = [];
     Object.assign(narration, { lines, i: -1, done: lines.length === 0, onLine, rate: color ? 1.04 : 0.97, pitch: color ? 0.8 : 0.9 });
-    sub.classList.remove('on');
-    if (!lines.length) return;
+    if (!lines.length) {
+      sub.classList.remove('on');
+      return;
+    }
     const show = (i: number) => {
       if (my !== narration.token || i <= narration.i) return;
       narration.i = i;
@@ -449,7 +451,8 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
     const end = () => {
       if (my !== narration.token || narration.done) return;
       narration.done = true;
-      sub.classList.remove('on');
+      // de laatste zin blijft staan tot de volgende scène (de ondertitel verdwijnt niet als de stem eerder klaar meldt)
+      if (lines.length) show(lines.length - 1); // alle zinnen gehad? dan in elk geval de laatste
     };
     const later = (fn: () => void, s: number) => timers.push(window.setTimeout(fn, s * 1000));
     const byClock = (from: number) => {
