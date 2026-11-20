@@ -465,6 +465,8 @@ export function mountWarehouse({
     truckSolids: view.truckSolids,
     /** Hoe ver de slagboom van het terrein open moet staan (0..1): omhoog als er een vrachtwagen aankomt. */
     gateOpen: view.gateOpen,
+    /** Het scherm van de pc in de hal (voor de trailer, src/ui/trailer.ts). */
+    pcDisplay: view.pcDisplay,
     /** Vaste obstakels voor de heftruck (die rijdt nergens onderdoor): het bureau. */
     colliders: view.colliders,
     /** De telrobot bij de inslagbanen: waar hij staat en waar hij voor stopt. */

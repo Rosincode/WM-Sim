@@ -780,11 +780,13 @@ renderer.setAnimationLoop((now) => {
   const listener = trailer?.listener ?? player.position;
   radio.update(listener);
   printer.update(dt, listener);
-  warehouse.update(dt);
+  // Op het startscherm van de trailer loopt de sim sneller, zodat er al vrachtwagens staan als de film begint
+  const simDt = dt * (trailer?.simSpeed ?? 1);
+  warehouse.update(simDt);
   exterior.setGate(warehouse.gateOpen());
-  robots.update(dt);
-  drivers.update(dt);
-  staff.update(dt);
+  robots.update(simDt);
+  drivers.update(simDt);
+  staff.update(simDt);
   thieves.update(dt);
   // De nooduitgang gaat open voor wie ervoor staat, binnen of buiten
   const atExit = entrants().some((w) => Math.hypot(w.x - EXIT_X, w.z - HALL.d / 2) < 2.2);
@@ -834,8 +836,10 @@ renderer.setAnimationLoop((now) => {
   if (printer.hint) list.push(hintPrompt(printer.hint));
   prompts.set(trailer ? [] : list);
 
-  refreshShadows();
-  if (postFx) composer.render(dt);
-  else renderer.render(scene, camera);
+  if (!trailer?.covered) {
+    refreshShadows();
+    if (postFx) composer.render(dt);
+    else renderer.render(scene, camera);
+  }
   tabletApp.update(handheld.tabletVisible, handheld.focus);
 });

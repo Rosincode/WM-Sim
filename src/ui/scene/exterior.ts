@@ -260,7 +260,8 @@ export function createExterior(scene: THREE.Scene) {
   for (const dx of [-0.74, 0.74]) windows.add(EXIT_X + dx, 1.2, ZF, 0.42, 2.4, 0.06);
   windows.add(EXIT_X, 2.27, ZF, 1.06, 0.26, 0.06);
   const canopy = new Batch();
-  canopy.add(EXIT_X, 2.85, D / 2 + 1.1, 4.2, 0.16, 2.2);
+  // de achterkant 5 mm voor de gevel (die ligt 3 cm buiten de binnenwand): anders schemert hij van binnen door de wand
+  canopy.add(EXIT_X, 2.85, D / 2 + 0.035 + 1.1, 4.2, 0.16, 2.2);
   for (const dx of [-1.9, 1.9]) {
     canopy.add(EXIT_X + dx, 1.4, D / 2 + 2.05, 0.12, 2.8, 0.12);
     solid(EXIT_X + dx, D / 2 + 2.05, 0.12, 0.12, 0, 2.8);

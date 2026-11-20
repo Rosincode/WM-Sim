@@ -1,10 +1,13 @@
 import * as THREE from 'three';
 import { AISLE_Z, CANTEEN, DESK, DOCKS, HALL, ROOMS, SECTION_X, START, WALKWAY_X } from '../sim/layout';
+import { truckPoseOf } from '../sim/yard';
 import logoUrl from './assets/fizor-logo-wit.svg?url';
+import wmsUrl from './assets/wms-voorbeeld.png';
 import type { createHandheld } from './handheld';
 import { menu } from './menu';
 import type { createRadio } from './radio';
 import type { createRocketLauncher } from './rocketLauncher';
+import { onTop } from './scene/style';
 import type { Hall } from './scene/warehouse';
 import type { mountThieves } from './thieves';
 import type { mountWarehouse } from './warehouse';
@@ -53,6 +56,8 @@ interface Scene {
   shot?: Shot;
   /** Volgcamera: hoe snel de camera zijn doel bijhoudt (zonder: precies op het doel). */
   smooth?: number;
+  /** Volgcamera: binnen de muren houden (zie contain). */
+  contain?: boolean;
   /** In kleur (het tweede deel) in plaats van sepia. */
   color?: boolean;
   tool?: Tool;
@@ -83,20 +88,64 @@ function orbit(center: THREE.Vector3, r: number, y: number, a0: number, a1: numb
     c.look.set(center.x, lookY, center.z);
   };
 }
-type Subject = () => { x: number; z: number } | null;
-/** Camera die iets volgt: op afstand dist, hoogte up, vanuit een wereldrichting die langzaam meedraait. */
+/** Iets om te volgen: waar het is, en (als bekend) zijn rijrichting: vooruit = (sin r, cos r). */
+type Subject = () => { x: number; z: number; r?: number } | null;
+/**
+ * Camera die iets volgt op afstand dist en hoogte up. Met een rijrichting kijkt hij van achteren mee (yaw = hoek
+ * opzij daarvan), zodat hij in hetzelfde pad blijft als wat hij volgt; de richting draait traag mee, zodat de camera
+ * niet om de robot heen zwiept als die omkeert. Zonder rijrichting: vanuit wereldrichting yaw, langzaam draaiend.
+ */
 function follow(get: Subject, o: { dist: number; up: number; yaw: number; spin?: number; lookY?: number }, fallback: Shot): Shot {
+  let heading: number | null = null;
+  let last = 0;
   return (c, t, k) => {
     const p = get();
     if (!p) return fallback(c, t, k);
-    const a = o.yaw + (o.spin ?? 0.06) * t;
+    const dt = Math.max(0, Math.min(0.2, t - last));
+    last = t;
+    let a: number;
+    if (p.r !== undefined) {
+      const want = p.r + Math.PI + o.yaw;
+      if (heading === null || t < 0.05) heading = want;
+      const diff = Math.atan2(Math.sin(want - heading), Math.cos(want - heading));
+      heading += diff * (1 - Math.exp(-dt * 0.9));
+      a = heading;
+    } else a = o.yaw + (o.spin ?? 0.06) * t;
     c.pos.set(p.x + Math.sin(a) * o.dist, o.up, p.z + Math.cos(a) * o.dist);
     c.look.set(p.x, o.lookY ?? 0.9, p.z);
   };
 }
 
+const IN_HALL = (x: number, z: number) => Math.abs(x) < HALL.w / 2 && Math.abs(z) < HALL.d / 2;
+const ROOMS_AREA = { minX: ROOMS.office.minX, maxX: ROOMS.canteen.maxX, minZ: ROOMS.office.minZ };
+const IN_ROOMS = (x: number, z: number) => x > ROOMS_AREA.minX && x < ROOMS_AREA.maxX && z > ROOMS_AREA.minZ - 0.4;
+/**
+ * De camera nooit achter een muur: kijkt hij naar iets in de hal, dan blijft hij binnen de wanden, onder het dak en
+ * buiten kantoor en kantine (tenzij hij daar juist naar kijkt); kijkt hij naar iets buiten, dan staat hij ook buiten.
+ */
+function contain(c: Cam) {
+  const W = HALL.w / 2 - 0.6;
+  const D = HALL.d / 2 - 0.6;
+  if (IN_HALL(c.look.x, c.look.z)) {
+    c.pos.x = THREE.MathUtils.clamp(c.pos.x, -W, W);
+    c.pos.z = THREE.MathUtils.clamp(c.pos.z, -D, D);
+    c.pos.y = Math.min(c.pos.y, HALL.h - 1);
+    const lookInRooms = IN_ROOMS(c.look.x, c.look.z);
+    if (lookInRooms && !IN_ROOMS(c.pos.x, c.pos.z)) c.pos.z = Math.max(c.pos.z, ROOMS_AREA.minZ + 0.6);
+    if (!lookInRooms && IN_ROOMS(c.pos.x, c.pos.z)) c.pos.z = ROOMS_AREA.minZ - 0.8;
+  } else if (Math.abs(c.pos.x) < HALL.w / 2 + 1 && Math.abs(c.pos.z) < HALL.d / 2 + 1) {
+    // naar buiten de dichtstbijzijnde wand door
+    const out = [HALL.w / 2 + 1 - c.pos.x, c.pos.x + HALL.w / 2 + 1, HALL.d / 2 + 1 - c.pos.z, c.pos.z + HALL.d / 2 + 1];
+    const i = out.indexOf(Math.min(...out));
+    if (i === 0) c.pos.x = HALL.w / 2 + 1;
+    else if (i === 1) c.pos.x = -HALL.w / 2 - 1;
+    else if (i === 2) c.pos.z = HALL.d / 2 + 1;
+    else c.pos.z = -HALL.d / 2 - 1;
+  }
+}
+
 const CSS = `
-.wm-trailer > *:not(#app):not(.wm-trailer-ui):not([style*="z-index: 56"]):not(:has(iframe)) { visibility: hidden !important; }
+.wm-trailer > *:not(#app):not(.wm-trailer-ui):not([style*="z-index: 56"]) { visibility: hidden !important; }
 .wm-trailer.wm-show-menu > .menu-panel.menu-panel.menu-panel:not(#app) { visibility: visible !important; right: auto; left: 50%; top: 16vh;
   transform: translateX(-50%) scale(1.2); transform-origin: top center; max-height: 52vh; }
 .wm-trailer.wm-show-menu > .menu-panel:not(#app) .tabs { display: none; }
@@ -150,6 +199,12 @@ const CSS = `
 .wm-trailer-ui .leader .num { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 700 30vh Georgia, serif; color: #111; }
 .wm-trailer-ui .burn { position: absolute; inset: 0; z-index: 7; opacity: 0;
   background: radial-gradient(circle at 62% 44%, #fff 0, #fff3c4 calc(var(--b) * 18%), #ff8a1e calc(var(--b) * 34%), #3a1200 calc(var(--b) * 52%), #000 calc(var(--b) * 70%), rgba(0,0,0,0) calc(var(--b) * 70% + 1%)); }
+.wm-trailer-ui .wms { position: absolute; left: 50%; top: 47%; z-index: 3; width: min(78vw, 140vh); padding: 1.2vh; border-radius: 1.4vh;
+  background: #15171b; box-shadow: 0 2vh 6vh rgba(0,0,0,.6); transform: translate(-50%, -50%) scale(.35); opacity: 0;
+  transition: transform .9s cubic-bezier(.2,.9,.25,1), opacity .5s; }
+.wm-trailer-ui .wms.on { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+.wm-trailer-ui .wms img { display: block; width: 100%; border-radius: .6vh; }
+.wm-trailer-ui.vintage .wms { filter: sepia(.55) contrast(1.08) brightness(.93); } /* lichter dan de film: de app moet leesbaar blijven */
 .wm-trailer-ui .whiteout { position: absolute; inset: 0; z-index: 7; background: #fff; opacity: 0; }
 .wm-trailer-ui .start { position: absolute; inset: 0; z-index: 9; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 4vh; background: #0c0a06; color: #efe4c8; pointer-events: auto; }
@@ -176,6 +231,7 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
     <div class="leader"><div class="ring"><div class="cross"></div></div><div class="num"></div></div>
     <div class="grain film"></div><div class="vignette film"></div><div class="flicker film"></div><div class="scratches film"></div>
     <div class="bar top"></div><div class="bar bottom"></div>
+    <div class="wms"><img alt="WMS"></div>
     <div class="sub"></div><div class="burn"></div><div class="whiteout"></div>
     <div class="start"><h1>WM-SIM</h1><p>Een voorlichtingsfilm in kleur en zwart-wit. Met geluid.</p><button>▶ Projector aan</button></div>`;
   document.body.appendChild(ui);
@@ -191,6 +247,31 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
   const burn = $<HTMLDivElement>('.burn');
   const whiteout = $<HTMLDivElement>('.whiteout');
   const startScreen = $<HTMLDivElement>('.start');
+  const wmsScreen = $<HTMLDivElement>('.wms');
+  wmsScreen.querySelector('img')!.src = wmsUrl;
+  const showWms = (on: boolean) => wmsScreen.classList.toggle('on', on);
+
+  // De WMS-app op de monitoren (de pc in de hal en de bureaus op kantoor): een schermafdruk van de app als beeld,
+  // passend in een 16:9-scherm. Zonder login (de app als iframe) zou het scherm anders leeg blijven.
+  {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = 1600;
+      c.height = 900;
+      const g = c.getContext('2d')!;
+      g.fillStyle = '#f4f6f9';
+      g.fillRect(0, 0, c.width, c.height);
+      const h = (img.height / img.width) * c.width;
+      g.drawImage(img, 0, (c.height - h) / 2, c.width, h);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = 4;
+      const mat = onTop(new THREE.MeshBasicMaterial({ map: tex }));
+      for (const s of [warehouse.pcDisplay, ...hall.desks.map((d) => d.display)]) if (s instanceof THREE.Mesh) s.material = mat;
+    };
+    img.src = wmsUrl;
+  }
 
   // Filmkorrel: een vaste ruistextuur die elk beeld een stukje verspringt
   {
@@ -225,7 +306,7 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
     card.classList.add('on');
   }
 
-  // ---------- Geluid: projector, piepjes, dreun en een slagwerkbed (Web Audio) ----------
+  // ---------- Geluid: projector, piepjes en een dreun (Web Audio) ----------
   let ac: AudioContext | null = null;
   let master: GainNode | null = null;
   let noise: AudioBuffer | null = null;
@@ -314,52 +395,6 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
     projector?.stop();
     projector = null;
   }
-  /** Het slagwerk onder het tweede deel: een trage dreun en een bas. */
-  let bed: { stop: () => void } | null = null;
-  let beat = 0;
-  function bedOn() {
-    if (!ac || !master || bed) return;
-    const o1 = ac.createOscillator();
-    const o2 = ac.createOscillator();
-    o1.type = o2.type = 'sawtooth';
-    o1.frequency.value = 55;
-    o2.frequency.value = 55.6;
-    const f = ac.createBiquadFilter();
-    f.type = 'lowpass';
-    f.frequency.value = 260;
-    const g = ac.createGain();
-    g.gain.setValueAtTime(0, ac.currentTime);
-    g.gain.linearRampToValueAtTime(0.05, ac.currentTime + 2);
-    o1.connect(f);
-    o2.connect(f);
-    f.connect(g).connect(master);
-    o1.start();
-    o2.start();
-    beat = 0;
-    bed = {
-      stop() {
-        if (!ac) return;
-        const t = ac.currentTime;
-        g.gain.setValueAtTime(g.gain.value, t);
-        g.gain.linearRampToValueAtTime(0, t + 1.5);
-        o1.stop(t + 1.6);
-        o2.stop(t + 1.6);
-      },
-    };
-  }
-  function bedOff() {
-    bed?.stop();
-    bed = null;
-  }
-  function bedStep(dt: number) {
-    if (!bed) return;
-    beat += dt;
-    if (beat < 0.6) return;
-    beat -= 0.6;
-    tone(70, 0.35, { vol: 0.16, slide: 38 });
-    hiss(0.05, 0.03, 7000, 0.3);
-  }
-
   // ---------- De verteller (spraaksynthese) ----------
   const synth = 'speechSynthesis' in window ? window.speechSynthesis : null;
   let voice: SpeechSynthesisVoice | null = null;
@@ -376,70 +411,94 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
   pickVoice();
 
   const text = (l: Line) => (typeof l === 'string' ? l : l.text);
-  const spoken = (l: Line) => (typeof l === 'string' ? l : l.say);
+  /** Zoals de verteller het moet uitspreken: 'pellet' (niet 'pallet'), en fizor. als 'faizor'. */
+  const pronounce = (s: string) => s.replace(/pallet/gi, (m) => (m[0] === 'P' ? 'Pellet' : 'pellet')).replace(/fizor/gi, 'Faizor');
+  const spoken = (l: Line) => pronounce(typeof l === 'string' ? l : l.say);
   const narration = { lines: [] as Line[], i: 0, done: true, token: 0, rate: 1, pitch: 1, onLine: undefined as Scene['onLine'] };
   const estimate = (s: string) => Math.max(1.1, s.length / 14 / narration.rate);
+  let timers: number[] = [];
+  /**
+   * Leest de regels van een scène voor. Alle zinnen gaan in één keer in de wachtrij van de spraaksynthese: dan haalt
+   * de (online) stem de volgende zin al op terwijl hij de vorige uitspreekt, zonder stilte ertussen. De ondertitel
+   * wisselt op het begin van elke zin. Praat de browser niet (geen klik, geen stem), dan lopen de regels op een klok.
+   */
   function narrate(lines: Line[], color: boolean, onLine?: Scene['onLine']) {
     narration.token++;
-    synth?.cancel();
-    Object.assign(narration, { lines, i: 0, done: lines.length === 0, onLine, rate: color ? 1.02 : 0.94, pitch: color ? 0.8 : 0.9 });
-    sub.classList.remove('on');
-    if (lines.length) speakLine();
-  }
-  function speakLine() {
     const my = narration.token;
-    if (narration.i >= narration.lines.length) {
+    synth?.cancel();
+    timers.forEach(clearTimeout);
+    timers = [];
+    Object.assign(narration, { lines, i: -1, done: lines.length === 0, onLine, rate: color ? 1.04 : 0.97, pitch: color ? 0.8 : 0.9 });
+    sub.classList.remove('on');
+    if (!lines.length) return;
+    const show = (i: number) => {
+      if (my !== narration.token || i <= narration.i) return;
+      narration.i = i;
+      sub.textContent = text(lines[i]);
+      sub.classList.add('on');
+      onLine?.[i]?.();
+    };
+    const end = () => {
+      if (my !== narration.token || narration.done) return;
       narration.done = true;
       sub.classList.remove('on');
-      return;
-    }
-    const line = narration.lines[narration.i];
-    sub.textContent = text(line);
-    sub.classList.add('on');
-    narration.onLine?.[narration.i]?.();
-    const say = spoken(line);
-    const est = estimate(say);
-    let finished = false;
-    let timer = 0;
-    const finish = () => {
-      if (finished || my !== narration.token) return;
-      finished = true;
-      clearTimeout(timer);
-      narration.i++;
-      setTimeout(() => my === narration.token && speakLine(), 280);
     };
-    const fallback = () => {
-      clearTimeout(timer);
-      timer = window.setTimeout(finish, est * 1000);
+    const later = (fn: () => void, s: number) => timers.push(window.setTimeout(fn, s * 1000));
+    const byClock = (from: number) => {
+      let t = 0;
+      for (let i = from; i < lines.length; i++) {
+        const at = t;
+        later(() => show(i), at);
+        t += estimate(spoken(lines[i])) + 0.1;
+      }
+      later(end, t);
     };
-    if (!synth || muted) return fallback();
-    timer = window.setTimeout(finish, (est * 2.5 + 3) * 1000); // voor als het einde van de zin nooit gemeld wordt
-    const u = new SpeechSynthesisUtterance(say);
-    u.lang = 'nl-NL';
-    if (voice) u.voice = voice;
-    u.rate = narration.rate;
-    u.pitch = narration.pitch;
+    if (!synth || muted) return byClock(0);
     let started = false;
-    u.onstart = () => (started = true);
-    u.onend = finish;
-    u.onerror = fallback;
-    synth.speak(u);
-    setTimeout(() => !started && !finished && my === narration.token && fallback(), 1500);
+    let failed = false;
+    const fail = () => {
+      if (failed || my !== narration.token) return;
+      failed = true;
+      synth.cancel();
+      byClock(Math.max(0, narration.i + 1));
+    };
+    lines.forEach((l, i) => {
+      const u = new SpeechSynthesisUtterance(spoken(l));
+      u.lang = 'nl-NL';
+      if (voice) u.voice = voice;
+      u.rate = narration.rate;
+      u.pitch = narration.pitch;
+      u.onstart = () => {
+        started = true;
+        show(i);
+      };
+      u.onerror = (e) => e.error !== 'interrupted' && e.error !== 'canceled' && fail();
+      if (i === lines.length - 1) u.onend = end;
+      synth.speak(u);
+    });
+    show(0);
+    later(() => !started && fail(), 2.5); // de stem begint niet: dan op de klok
+    const total = lines.reduce((n, l) => n + estimate(spoken(l)), 0);
+    later(end, total * 2.2 + 4); // voor als het einde nooit gemeld wordt
   }
   /** Zonder klik (testen met ?auto) mag de browser niet praten: dan lopen de regels op een klok. */
-  let muted = false;
+  let muted = params.has('mute'); // ?mute: zonder stem (testen)
 
   // ---------- Onderwerpen om te volgen ----------
   const drivers = warehouse.docks.drivers;
   function driverSubject(prefer: (d: (typeof drivers.drivers)[number]) => boolean): Subject {
     let id = '';
+    let last: { x: number; z: number; r: number } | null = null;
     return () => {
       let d = drivers.drivers.find((x) => x.id === id);
       if (!d) {
-        d = drivers.drivers.find(prefer) ?? drivers.drivers[0];
+        d = drivers.drivers.find((x) => prefer(x) && IN_HALL(x.x, x.z)) ?? drivers.drivers.find(prefer) ?? drivers.drivers[0];
         id = d?.id ?? '';
       }
-      return d ? { x: d.x, z: d.z } : null;
+      if (!d) return null;
+      // De volgcamera blijft in de hal: loopt de chauffeur de wagen in of naar buiten, dan wacht hij bij de deur
+      if (IN_HALL(d.x, d.z) || !last) last = { x: d.x, z: d.z, r: d.r };
+      return last;
     };
   }
   const fleet = warehouse.robots.fleet;
@@ -451,18 +510,41 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
         r = fleet.robots.find((x) => x.phase !== 'idle' && x.kind !== 'count') ?? fleet.robots.find((x) => x.phase !== 'idle') ?? fleet.robots[0];
         id = r?.id ?? '';
       }
-      return r ? { x: r.x, z: r.z } : null;
+      return r ? { x: r.x, z: r.z, r: r.r } : null;
+    };
+  }
+  /** Een vrachtwagen: het liefst een die op het terrein rijdt, anders een aan zijn dock, anders een die nog over de weg komt. */
+  function truckSubject(): Subject {
+    let id = '';
+    return () => {
+      const list = warehouse.docks.trucks();
+      const yard = (t: (typeof list)[number]) => {
+        const p = truckPoseOf(t);
+        return p.x < -HALL.w / 2 && p.z < HALL.d / 2 + 14;
+      };
+      let t = list.find((x) => x.id === id);
+      if (!t) {
+        t = list.find((x) => (x.status === 'arriving' || x.status === 'parking') && yard(x)) ?? list.find((x) => x.t >= 1) ?? list.find(yard) ?? list[0]; // anders een die nog over de weg komt
+        id = t?.id ?? '';
+      }
+      if (!t) return null;
+      const p = truckPoseOf(t);
+      // het midden van de wagen: het nulpunt is de achterkant, de cabine zit naar -x (in de draaiing r)
+      return { x: p.x - Math.cos(p.r) * 5.5, z: p.z + Math.sin(p.r) * 5.5 };
     };
   }
   /** De boef die het dichtst bij de vorige staat, zodat de camera niet heen en weer springt. */
   function thiefSubject(): Subject {
-    let last: { x: number; z: number } | null = null;
+    let last: { x: number; z: number; r?: number } | null = null;
     return () => {
-      const list = thieves.walkers().filter((w) => w.z < HALL.d / 2 + 4 && w.x > -HALL.w / 2 - 4);
+      const list = thieves.walkers().filter((w) => IN_HALL(w.x, w.z));
       if (!list.length) return last;
       const ref = last;
       const best = ref ? list.reduce((a, b) => (Math.hypot(b.x - ref.x, b.z - ref.z) < Math.hypot(a.x - ref.x, a.z - ref.z) ? b : a)) : list[0];
-      last = { x: best.x, z: best.z };
+      // Looprichting uit de verplaatsing (de boeven geven die niet mee)
+      const moved = ref ? Math.hypot(best.x - ref.x, best.z - ref.z) : 0;
+      const r = ref && moved > 0.02 && moved < 2 ? Math.atan2(best.x - ref.x, best.z - ref.z) : ref?.r;
+      last = { x: best.x, z: best.z, r };
       return last;
     };
   }
@@ -494,43 +576,47 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
     { leader: true, min: 4.2, shot: dolly(V(-95, 55, -95), V(-95, 55, -95), V(-8, 0, -10)) },
     {
       card: { style: 'old', html: '<div class="frame"><div class="small">een productie van</div><div class="big">fizor.</div><div class="small">in samenwerking met de toekomst</div></div>' },
-      lines: [{ text: 'Een productie van fizor.', say: 'Een productie van Fizor.' }],
+      lines: [{ text: 'Een productie van fizor.', say: 'Een productie van fizor.' }],
       min: 4,
-      hold: 1,
+      hold: 0.35,
     },
     {
       card: { style: 'old', html: '<div class="frame"><div class="small">presenteert</div><div class="big">WM-SIM</div><div class="mid">Het magazijn van morgen.<br>Vandaag.</div></div>' },
-      lines: [{ text: 'WM-Sim. Het magazijn van morgen. Vandaag.', say: 'W M Sim. Het magazijn van morgen. Vandaag.' }],
+      lines: [{ text: 'WM-Sim. Het magazijn van morgen. Vandaag.', say: 'WM Sim. Het magazijn van morgen. Vandaag.' }],
       min: 4.5,
-      hold: 1.2,
+      hold: 0.42,
     },
     {
       shot: dolly(V(-100, 60, -100), V(-85, 40, 75), V(-8, 0, -12), V(-8, 0, 5)),
       lines: ['Stelt u zich eens voor.', 'U bent Henk.', 'Henk verkoopt robots.', 'Stofzuigrobots. Robothonden. Dansrobots.', 'En Henk heeft een probleem.'],
-      hold: 0.8,
+      hold: 0.28,
     },
     {
       shot: dolly(V(-72, 9, -42), V(-52, 6, -14), V(-30, 3, -22), V(-30, 2, 0)),
       lines: ['Henk wil zijn proces in kaart brengen.', 'Van vrachtwagen tot klant.', 'Pallet voor pallet.', 'Doos voor doos.', 'Henk is, laten we zeggen... ambitieus.'],
-      hold: 0.8,
+      hold: 0.28,
     },
-    { card: { style: 'old', html: '<div class="frame"><div class="small">hoofdstuk I</div><div class="mid">De ontvangst</div></div>' }, lines: ['Hoofdstuk één. De ontvangst.'], min: 3, hold: 0.6 },
+    { card: { style: 'old', html: '<div class="frame"><div class="small">hoofdstuk I</div><div class="mid">De ontvangst</div></div>' }, lines: ['Hoofdstuk één. De ontvangst.'], min: 2.3, hold: 0.25 },
     {
-      shot: dolly(V(-45, 3.5, 34), V(-47, 3.5, 24), V(-36, 1.8, 2), V(-34, 1.8, -14)),
+      shot: follow(truckSubject(), { dist: 17, up: 6, yaw: -2.2, spin: 0.05, lookY: 2 }, dolly(V(-45, 3.5, 34), V(-47, 3.5, 24), V(-36, 1.8, 2), V(-34, 1.8, -14))),
+      smooth: 2,
+      contain: true,
       lines: ['Om zes uur in de ochtend meldt de eerste vrachtwagen zich bij het dock.', 'Keurig op tijd.', 'Want in deze simulatie is iedereen keurig op tijd.'],
-      hold: 0.5,
+      hold: 0.17,
     },
     {
-      shot: follow(driverSubject((d) => d.jack), { dist: 4.6, up: 2.3, yaw: 0.9 }, dockFallback),
+      shot: follow(driverSubject((d) => d.jack), { dist: 4.6, up: 2.3, yaw: 0.6 }, dockFallback),
       smooth: 2.5,
+      contain: true,
       lines: ['De chauffeur lost zelf, met de elektrische pompwagen.', 'Pallet na pallet rolt de hal in, naar de inslagbaan.'],
-      hold: 0.5,
+      hold: 0.17,
     },
     {
-      shot: follow(() => warehouse.counter.robot, { dist: 3.8, up: 2, yaw: 2.2, spin: 0.1, lookY: 0.7 }, dockFallback),
+      shot: follow(() => warehouse.counter.robot, { dist: 3.8, up: 2, yaw: 0.7, lookY: 0.7 }, dockFallback),
       smooth: 2.5,
+      contain: true,
       lines: ['Dan komt de voorraadteller: een robot die elke doos natelt.', 'Want vertrouwen is goed.', 'Maar tellen is beter.'],
-      hold: 0.5,
+      hold: 0.17,
     },
     {
       enter: () => {
@@ -542,26 +628,34 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
         dolly(V(-26.3, 1.75, z - 1.2), V(-26.8, 1.6, z - 1.6), V(-28, 1.45, z - 1.95))(c, t, k);
       },
       lines: ['Op het dockscherm ziet iedereen wat er binnenkomt.', 'En waar het heen moet.'],
-      hold: 0.5,
+      hold: 0.17,
     },
-    { card: { style: 'old', html: '<div class="frame"><div class="small">hoofdstuk II</div><div class="mid">Het systeem</div></div>' }, lines: ['Hoofdstuk twee. Het systeem.'], min: 3, hold: 0.6 },
+    { card: { style: 'old', html: '<div class="frame"><div class="small">hoofdstuk II</div><div class="mid">Het systeem</div></div>' }, lines: ['Hoofdstuk twee. Het systeem.'], min: 2.3, hold: 0.25 },
     {
       shot: dolly(V(DESK.radio.x - 1.4, 2, DESK.radio.z - 2.6), V(DESK.radio.x - 0.5, 1.65, DESK.radio.z - 1.7), V(DESK.printer.x - 0.3, 1.1, DESK.printer.z)),
-      enter: () => {
-        menu.open('log');
-        document.body.classList.add('wm-show-menu');
+      onLine: {
+        0: () => showWms(true),
+        1: () => {
+          showWms(false);
+          // eerst het WMS-scherm weg, dan pas het log (anders staan ze even door elkaar)
+          later(0.55, () => {
+            menu.open('log');
+            document.body.classList.add('wm-show-menu');
+          });
+        },
       },
       exit: () => {
+        showWms(false);
         menu.close();
         document.body.classList.remove('wm-show-menu');
       },
       lines: [
-        { text: 'En alles, werkelijk alles, wordt geboekt in de WMS.', say: 'En alles, werkelijk alles, wordt geboekt in de W M S.' },
-        { text: 'Via een echte API-koppeling. Elke scan, elke pallet, elke doos.', say: 'Via een echte A P I koppeling. Elke scan, elke pallet, elke doos.' },
+        { text: 'En alles, werkelijk alles, wordt geboekt in de WMS.', say: 'En alles, werkelijk alles, wordt geboekt in de WMS.' },
+        { text: 'Via een echte API-koppeling. Elke scan, elke pallet, elke doos.', say: 'Via een echte API-koppeling. Elke scan, elke pallet, elke doos.' },
         'Geen Excel. Geen briefjes.',
         'Geen Henk die het even onthoudt.',
       ],
-      hold: 0.8,
+      hold: 0.28,
     },
     {
       shot: officeDesk
@@ -585,20 +679,20 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
         'Op kantoor draait dezelfde WMS-app.',
         'Voorraad, orders, leveringen en robotopdrachten.',
         'Eén waarheid.',
-        { text: 'De WMS is leidend. De hal volgt vanzelf.', say: 'De W M S is leidend. De hal volgt vanzelf.' },
+        { text: 'De WMS is leidend. De hal volgt vanzelf.', say: 'De WMS is leidend. De hal volgt vanzelf.' },
       ],
-      hold: 0.8,
+      hold: 0.28,
     },
-    { card: { style: 'old', html: '<div class="frame"><div class="small">hoofdstuk III</div><div class="mid">De opslag</div></div>' }, lines: ['Hoofdstuk drie. De opslag.'], min: 3, hold: 0.6 },
+    { card: { style: 'old', html: '<div class="frame"><div class="small">hoofdstuk III</div><div class="mid">De opslag</div></div>' }, lines: ['Hoofdstuk drie. De opslag.'], min: 2.3, hold: 0.25 },
     {
       shot: dolly(V(SECTION_X[0] - 6, 1.7, aisle), V(lastX + 1, 2.4, aisle), V(SECTION_X[0] + 2, 2, aisle), V(lastX + 12, 3.2, aisle)),
       lines: [
         'Tien paden. Twintig stellingen, rug aan rug.',
         'Elke locatie een code. Elk artikel een vaste plek.',
-        { text: 'R1A-03-2.', say: 'R. Eén. A. Nul drie. Twee.' },
+        { text: 'R1A-03-2.', say: 'R één A, nul drie, twee.' },
         'Poëzie, voor wie het ziet.',
       ],
-      hold: 0.6,
+      hold: 0.21,
     },
     {
       tool: 'scanner',
@@ -611,40 +705,42 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
         : dolly(V(0, 1.6, aisle), V(1, 1.6, aisle), V(4, 1.2, aisle - 1)),
       lines: [
         'Met de handscanner scant de medewerker elk label en elke palletsticker.',
-        { text: 'De WMS beslist. Goed...', say: 'De W M S beslist. Goed...' },
+        { text: 'De WMS beslist. Goed...', say: 'De WMS beslist. Goed...' },
         '...of fout.',
         'En voor de bovenste plank? Daar is een jetpack voor. Volledig verantwoord.',
       ],
-      hold: 0.5,
+      hold: 0.17,
     },
     {
-      shot: follow(robotSubject(), { dist: 5.5, up: 3, yaw: 0.5, spin: 0.08, lookY: 0.6 }, dolly(V(lastX + 6, 3, aisle), V(lastX + 5, 3, aisle - 3), V(lastX - 4, 0.5, aisle))),
+      shot: follow(robotSubject(), { dist: 5, up: 7.4, yaw: 0.2, lookY: 0.4 }, dolly(V(lastX + 6, 3, aisle), V(lastX + 5, 3, aisle - 3), V(lastX - 4, 0.5, aisle))),
       smooth: 2,
+      contain: true,
       lines: [
         'Waar mensen moe worden, rijden de robots gewoon door.',
         'Tilrobots. Robot-heftrucks. Pickrobots.',
-        { text: 'Hun opdrachten halen ze rechtstreeks uit de WMS.', say: 'Hun opdrachten halen ze rechtstreeks uit de W M S.' },
+        { text: 'Hun opdrachten halen ze rechtstreeks uit de WMS.', say: 'Hun opdrachten halen ze rechtstreeks uit de WMS.' },
         'En ze klagen nooit.',
       ],
-      hold: 0.5,
+      hold: 0.17,
     },
     {
       shot: dolly(V(START.forklift.x + 6, 2.4, START.forklift.z - 7), V(START.forklift.x + 3.5, 1.9, START.forklift.z - 5.5), V(START.forklift.x + 1, 1, START.forklift.z)),
       lines: ['Voor het echte handwerk: een heftruck en een pompwagen.', 'Met echte vorken.', 'En echte verantwoordelijkheid.'],
-      hold: 0.5,
+      hold: 0.17,
     },
-    { card: { style: 'old', html: '<div class="frame"><div class="small">hoofdstuk IV</div><div class="mid">Orders en verzending</div></div>' }, lines: ['Hoofdstuk vier. Orders en verzending.'], min: 3, hold: 0.6 },
+    { card: { style: 'old', html: '<div class="frame"><div class="small">hoofdstuk IV</div><div class="mid">Orders en verzending</div></div>' }, lines: ['Hoofdstuk vier. Orders en verzending.'], min: 2.3, hold: 0.25 },
     {
-      shot: dolly(V(DESK.printer.x + 0.8, 1.5, DESK.printer.z - 1), V(DESK.printer.x + 0.4, 1.35, DESK.printer.z - 0.75), V(DESK.printer.x, 1.02, DESK.printer.z)),
+      shot: dolly(V(DESK.printer.x - 1.4, 1.6, DESK.printer.z - 1), V(DESK.printer.x - 0.9, 1.4, DESK.printer.z - 0.7), V(DESK.printer.x, 1.02, DESK.printer.z)),
       at: [[0.6, () => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyB', key: 'b' }))]],
       lines: ['Picklijsten komen gewoon uit de printer.', 'Op papier.', 'Zoals het hoort.'],
-      hold: 0.8,
+      hold: 0.28,
     },
     {
       shot: follow(driverSubject((d) => d.direction === 'out' && !!d.load), { dist: 5, up: 2.6, yaw: 0.6 }, dockFallback),
       smooth: 2.5,
+      contain: true,
       lines: ['Orders worden gepickt, klaargezet en ingeladen.', 'De vrachtwagen vertrekt.', 'De klant is blij.', 'Henk is blij.'],
-      hold: 0.5,
+      hold: 0.17,
     },
     {
       shot: dolly(V(DESK.radio.x - 0.5, 1.4, DESK.radio.z - 1.1), V(DESK.radio.x - 0.2, 1.3, DESK.radio.z - 0.75), V(DESK.radio.x, 1.08, DESK.radio.z)),
@@ -658,12 +754,12 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
         radio.setVolume(radioLevel);
       },
       lines: ['En omdat werk ook gezellig moet zijn: een radio.', 'Met echte zenders.'],
-      hold: 2.2,
+      hold: 0.77,
     },
     {
-      shot: dolly(V(ROOMS.canteen.maxX - 0.8, 2.3, ROOMS.canteen.minZ + 1), V(ROOMS.canteen.maxX - 1.2, 2.1, ROOMS.canteen.minZ + 1.4), V(CANTEEN.tables[0]?.x ?? canteenX, 0.9, CANTEEN.tables[0]?.z ?? 36)),
+      shot: dolly(V(ROOMS.canteen.maxX - 0.45, 2.75, ROOMS.canteen.minZ + 0.45), V(ROOMS.canteen.maxX - 0.6, 2.6, ROOMS.canteen.minZ + 0.6), V(CANTEEN.tables[0]?.x ?? canteenX, 0.9, CANTEEN.tables[0]?.z ?? 36)),
       lines: ["Collega's komen met de auto, werken op kantoor en halen koffie in de kantine.", 'Precies volgens planning.', 'Meestal.'],
-      hold: 0.6,
+      hold: 0.21,
     },
     {
       shot: orbit(V(0, 0, 0), 72, 88, -0.7, 0.15),
@@ -672,15 +768,15 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
       lines: [
         'Met multiplayer werkt het hele team in hetzelfde magazijn.',
         'Met de editor past u de indeling aan.',
-        { text: 'En zonder WMS draait alles gewoon op een mock.', say: 'En zonder W M S draait alles gewoon op een mok.' },
+        { text: 'En zonder WMS draait alles gewoon op een mock.', say: 'En zonder WMS draait alles gewoon op een mok.' },
         'Want een demo die het niet doet... is óók een proces.',
       ],
-      hold: 0.8,
+      hold: 0.28,
     },
     {
       card: { style: 'old', html: '<div class="frame"><div class="mid">Ontvangst. Opslag.<br>Orders. Verzending.</div><div class="small">alles in kaart</div></div>' },
       lines: ['Ontvangst. Opslag. Orders. Verzending.', 'Alles in kaart.', 'Henk is tevreden.', 'Henk slaapt eindelijk weer.'],
-      hold: 1.2,
+      hold: 0.42,
     },
 
     // ===== De film breekt =====
@@ -698,7 +794,7 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
       color: true,
       lines: ['Maar.', 'We zijn er nog niet.'],
       min: 3,
-      hold: 1,
+      hold: 0.35,
       enter: () => {
         burnStart = -Infinity;
         burn.style.opacity = '0';
@@ -710,33 +806,35 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
       color: true,
       shot: exitShot,
       enter: () => {
-        bedOn();
         boom(0.5);
+        pirateRadio(true); // de boeven komen binnen met PiratenRadio op de achtergrond
         thieves.request({ a: 'start' });
       },
       lines: ['Want wat als Henk...', '...wordt beroofd?'],
       min: 6.5,
-      hold: 0.5,
+      hold: 0.17,
     },
     {
       color: true,
-      shot: follow(thiefSubject(), { dist: 4.2, up: 2.1, yaw: 3.6, spin: 0.15, lookY: 1 }, exitShot),
+      shot: follow(thiefSubject(), { dist: 4.2, up: 2.1, yaw: Math.PI - 0.5, lookY: 1 }, exitShot),
       smooth: 3,
+      contain: true,
       lines: ['Boeven. In boevenpak. Met bivakmuts.', 'En ze komen voor de dansrobots.'],
-      hold: 0.8,
+      hold: 0.28,
     },
     {
       color: true,
       card: { style: 'action', html: '<div class="t">Gelukkig is<br>WM-Sim <span class="y">voorbereid</span></div>' },
       enter: () => boom(0.7),
-      lines: [{ text: 'Gelukkig is WM-Sim voorbereid.', say: 'Gelukkig is W M Sim voorbereid.' }],
+      lines: [{ text: 'Gelukkig is WM-Sim voorbereid.', say: 'Gelukkig is WM Sim voorbereid.' }],
       min: 2.6,
-      hold: 0.4,
+      hold: 0.15,
     },
     {
       color: true,
       tool: 'rocket',
       smooth: 7,
+      contain: true,
       enter: () => {
         const p = shooter.thief() ?? { x: 0, z: aisle };
         const az = AISLE_Z.reduce((a, b) => (Math.abs(b - p.z) < Math.abs(a - p.z) ? b : a));
@@ -755,7 +853,7 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
       ],
       lines: ['Maak kennis met de raketwerper.', 'Volledig geïntegreerd in uw magazijnproces.', 'Voorraadverschil?', 'Opgelost.'],
       min: 7,
-      hold: 1,
+      hold: 0.35,
     },
     {
       color: true,
@@ -802,16 +900,16 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
         },
       },
       lines: ['En daarna?', 'Eén klik op herstellen.', 'Alsof er nooit iets is gebeurd.'],
-      hold: 1.2,
+      hold: 0.42,
     },
     {
       color: true,
       card: { style: 'fizor', html: `<div class="t"><img src="${logoUrl}" alt="fizor."><div class="tag">Overal op voorbereid.</div></div><div class="hint">Esc: zelf spelen · ${LOOP ? 'de film begint zo opnieuw' : 'Enter: nog een keer'}</div>` },
       enter: () => {
-        bedOff();
+        pirateRadio(false);
         [261.6, 329.6, 392, 523.3].forEach((f, i) => tone(f, 4.5, { type: 'triangle', vol: 0.07, delay: i * 0.06 }));
       },
-      lines: [{ text: 'fizor. Overal op voorbereid.', say: 'Fizor. Overal op voorbereid.' }],
+      lines: [{ text: 'fizor. Overal op voorbereid.', say: 'fizor. Overal op voorbereid.' }],
       min: 6,
       hold: Infinity,
       at: [
@@ -824,6 +922,7 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
   // ---------- Afspelen ----------
   /** Weer van voren af aan: de hal heel, geen boeven meer. */
   function restart() {
+    pirateRadio(false);
     rocket.restore();
     thieves.request({ a: 'stop' });
     go(0);
@@ -838,12 +937,35 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
   let burnStart = -Infinity;
   let flashStart = -Infinity;
   let radioLevel = radio.volume;
+  let pirate = false;
+  /** PiratenRadio (zender 0) aan of uit; het volume gaat daarna terug naar waar het stond. */
+  function pirateRadio(on: boolean) {
+    if (on === pirate) return;
+    pirate = on;
+    if (on) {
+      radioLevel = radio.volume;
+      radio.setVolume(10);
+      radio.setStation(0);
+    } else {
+      radio.setStation(-1);
+      radio.setVolume(radioLevel);
+    }
+  }
   let leaderBeep = -1;
   let snap = true;
+  let covered = false;
+  let coverTimer = 0;
+  let lastFrame = 0;
+  let hideLabels = 0;
   const want: Cam = { pos: new THREE.Vector3(), look: new THREE.Vector3() };
   const cam: Cam = { pos: V(-95, 55, -95), look: V(-8, 0, -10) };
   let tool: Tool = null;
 
+  /** Iets later in dezelfde scène (vervalt als de scène voorbij is). */
+  function later(s: number, fn: () => void) {
+    const at = index;
+    window.setTimeout(() => at === index && fn(), s * 1000);
+  }
   function go(i: number) {
     scenes[index]?.exit?.();
     index = Math.max(0, Math.min(scenes.length - 1, i));
@@ -860,6 +982,10 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
     if (!s.color) projectorOn();
     showCard(s.card);
     leader.classList.toggle('on', !!s.leader);
+    // Een dichte kaart (of de aftelfilm) staat voor het hele beeld: dan hoeft de hal niet getekend te worden
+    clearTimeout(coverTimer);
+    covered = false;
+    if (s.leader || (s.card && s.card.style !== 'action')) coverTimer = window.setTimeout(() => (covered = true), 900);
     leaderBeep = -1;
     s.enter?.();
     narrate(s.lines ?? [], !!s.color, s.onLine);
@@ -896,6 +1022,14 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
   if (import.meta.env.DEV) Object.assign(window, { wmTrailer: { go, get index() { return index; }, scenes: scenes.length } });
 
   return {
+    /** Staat er een dichte kaart voor het beeld? Dan hoeft de hal niet getekend te worden. */
+    get covered() {
+      return covered;
+    },
+    /** Hoe snel de sim loopt: voor de start (op het startscherm) vier keer zo snel, tijdens de film gewoon. */
+    get simSpeed() {
+      return started ? 1 : 4;
+    },
     /** Wat de camera in handen heeft: scanner, raketwerper of niets. */
     get tool() {
       return tool;
@@ -906,9 +1040,22 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
     get near() {
       return THREE.MathUtils.clamp(cam.pos.distanceTo(cam.look) * 0.004, 0.05, 0.6);
     },
-    update(dt: number) {
+    update(frameDt: number) {
+      // De film loopt op de klok van de muur (net als de verteller), niet op de begrensde tijd per beeld van de sim:
+      // anders duurt een scène langer zodra de framerate even zakt.
+      const now = performance.now();
+      const dt = Math.min(0.25, lastFrame ? (now - lastFrame) / 1000 : frameDt);
+      lastFrame = now;
       clock += dt;
       player.visible = false;
+      // Zwevende labels (taken, banen, namen) worden door muren heen getekend: in de film horen die niet
+      if ((hideLabels -= dt) <= 0) {
+        hideLabels = 0.5;
+        camera.parent?.traverse((o) => {
+          const m = (o as THREE.Sprite).material;
+          if ((o as THREE.Sprite).isSprite && m && !m.depthTest) o.layers.set(31); // de camera kijkt alleen naar laag 0
+        });
+      }
       handheld.setActive(tool === 'scanner');
       rocket.setAllowed(tool === 'rocket');
       const s = scenes[index];
@@ -919,6 +1066,7 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
         const k = clamp01(clockScene / Math.max(span, 0.1));
         if (s.shot) {
           s.shot(want, clockScene, k);
+          if (s.contain) contain(want);
           const f = snap || !s.smooth ? 1 : 1 - Math.exp(-dt * s.smooth);
           cam.pos.lerp(want.pos, f);
           cam.look.lerp(want.look, f);
@@ -962,7 +1110,6 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
       burn.style.setProperty('--b', String(0.15 + b * 2.2));
       const w = (clock - flashStart) / 1.4;
       whiteout.style.opacity = w >= 0 && w < 1 ? String(1 - w) : '0';
-      bedStep(dt);
 
       if (!started) {
         // Voor de start: langzaam rond het gebouw, achter het startscherm

@@ -280,3 +280,99 @@ export function truckPose(dock: number, departing: boolean, t: number): VehicleP
 /** Staat er een voertuig bij de slagboom (dan gaat hij open)? */
 export const atGate = (p: { x: number; z: number }) =>
   p.x > YARD_DRIVE.minX - 1 && p.x < YARD_DRIVE.maxX + 1 && p.z > GATE.z - 22 && p.z < GATE.z + 20;
+
+// ========== Verkeer: vrachtwagens rijden niet door elkaar heen ==========
+
+/** Zo ver (m) moeten de hartlijnen van twee wagens minstens uit elkaar blijven (twee halve breedtes plus speling; de
+ * rijstroken op de weg liggen 3 m uit elkaar). */
+export const TRUCK_CLEAR = 2.8;
+/** Een wagen als lijnstuk over de grond: van net voor de achterkant van de laadbak tot de neus van de cabine. */
+export function truckSpan(p: VehiclePose) {
+  const fx = -Math.cos(p.r); // het model kijkt naar -x: de cabine zit in die richting
+  const fz = Math.sin(p.r);
+  return { ax: p.x + fx * 0.3, az: p.z + fz * 0.3, bx: p.x + fx * 11, bz: p.z + fz * 11 };
+}
+type Span = ReturnType<typeof truckSpan>;
+/** Kortste afstand tussen twee lijnstukken in het vlak. */
+export function spanGap(a: Span, b: Span) {
+  const toSeg = (px: number, pz: number, s: Span) => {
+    const dx = s.bx - s.ax;
+    const dz = s.bz - s.az;
+    const k = Math.max(0, Math.min(1, ((px - s.ax) * dx + (pz - s.az) * dz) / (dx * dx + dz * dz || 1)));
+    return Math.hypot(px - (s.ax + dx * k), pz - (s.az + dz * k));
+  };
+  const cross = (o: [number, number], p: [number, number], q: [number, number]) => (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
+  const a1: [number, number] = [a.ax, a.az], a2: [number, number] = [a.bx, a.bz], b1: [number, number] = [b.ax, b.az], b2: [number, number] = [b.bx, b.bz];
+  if (cross(a1, a2, b1) * cross(a1, a2, b2) < 0 && cross(b1, b2, a1) * cross(b1, b2, a2) < 0) return 0; // ze snijden
+  return Math.min(toSeg(a.ax, a.az, b), toSeg(a.bx, a.bz, b), toSeg(b.ax, b.az, a), toSeg(b.bx, b.bz, a));
+}
+
+/** Zoveel afstand (m) houdt een wagen tot een wagen recht voor hem: ruimte om te steken of achteruit in te parkeren. */
+export const TRUCK_FOLLOW = 12;
+/** Een wagen voor het verkeer: waar hij nu staat, en waar hij zo meteen is als hij doorrijdt (null = hij staat stil). */
+export type Mover = {
+  id: string;
+  rank: number;
+  now: VehiclePose;
+  next: VehiclePose | null;
+  /** Staat hij op het terrein stil en wil hij nu gaan rijden (vertrekken van zijn dock, of van zijn wachtplaats)? */
+  starting?: boolean;
+};
+/** Het vrachtwagenterrein achter de slagboom (zonder de weg): hier manoeuvreert maar één wagen tegelijk. */
+const onYard = (p: VehiclePose) => p.z < GATE.z && p.x < X0;
+/**
+ * Welke wagens blijven deze stap staan. Op het terrein rijdt er maar één tegelijk: wie het terrein op wil (van de weg,
+ * van zijn dock of van zijn wachtplaats) wacht tot de wagen die er rijdt stilstaat; daarmee zit niemand een ander in de
+ * weg bij steken of achteruit insturen. Verder wacht een wagen als hij dichter dan TRUCK_CLEAR bij een andere zou komen, of
+ * binnen TRUCK_FOLLOW van een wagen recht voor hem rijdt (dan houdt hij afstand, ook als die voorste nog rijdt). Wachten ze op elkaar, dan rijdt er één: wie al reed blijft
+ * rijden (wie al stond blijft staan), anders de wagen met de laagste rank, dan het laagste id.
+ * held = wacht op afstand (de sim laat hem na lang wachten toch gaan, zodat niets voor altijd vastzit),
+ * queued = wacht tot het terrein vrij is (dat komt altijd).
+ */
+export function trafficHolds(list: Mover[], heldBefore: Set<string>) {
+  const now = new Map(list.map((m) => [m, truckSpan(m.now)]));
+  const next = new Map(list.flatMap((m) => (m.next ? [[m, truckSpan(m.next)] as const] : [])));
+  /** Het eind van de wagen waarmee hij rijdt (de neus vooruit, de achterkant achteruit) en de rijrichting. */
+  const lead = (m: Mover) => {
+    const a = now.get(m)!;
+    const b = next.get(m)!;
+    const dx = (b.ax + b.bx - a.ax - a.bx) / 2;
+    const dz = (b.az + b.bz - a.az - a.bz) / 2;
+    const len = Math.hypot(dx, dz) || 1;
+    const forward = dx * (a.bx - a.ax) + dz * (a.bz - a.az) > 0;
+    return { x: forward ? b.bx : b.ax, z: forward ? b.bz : b.az, dx: dx / len, dz: dz / len };
+  };
+  const blocks = (m: Mover, o: Mover) => {
+    const n = next.get(m);
+    if (!n) return false;
+    const gap = spanGap(n, now.get(o)!);
+    if (gap >= TRUCK_FOLLOW) return false;
+    const closer = gap < spanGap(now.get(m)!, now.get(o)!) - 1e-3;
+    if (gap < TRUCK_CLEAR) return closer;
+    // Binnen de volgafstand: alleen achter een wagen die dezelfde kant op rijdt (of in de rij staat) en recht voor hem is.
+    // Een wagen aan zijn dock of op een wachtplaats staat buiten de rijroute.
+    if (!o.next || o.starting) return false;
+    const l = lead(m);
+    const lo = lead(o);
+    if (l.dx * lo.dx + l.dz * lo.dz < 0.3) return false; // een tegenligger op de andere rijstrook
+    const s = now.get(o)!;
+    const mid = { x: (s.ax + s.bx) / 2, z: (s.az + s.bz) / 2 };
+    return [s.ax, s.bx, mid.x].some((x, i) => {
+      const z = [s.az, s.bz, mid.z][i];
+      const d = Math.hypot(x - l.x, z - l.z) || 1;
+      return d < TRUCK_FOLLOW + 1 && ((x - l.x) * l.dx + (z - l.z) * l.dz) / d > 0.8;
+    });
+  };
+  const first = (a: Mover, b: Mover) => {
+    const ha = heldBefore.has(a.id);
+    if (ha !== heldBefore.has(b.id)) return !ha;
+    return (a.rank - b.rank || (a.id < b.id ? -1 : 1)) < 0;
+  };
+  const held = new Set(list.filter((m) => list.some((o) => o !== m && blocks(m, o) && !(blocks(o, m) && first(m, o)))).map((m) => m.id));
+  // Eén wagen tegelijk op het terrein
+  const entering = (m: Mover) => !!m.next && (m.starting || (!onYard(m.now) && onYard(m.next)));
+  const busy = list.some((m) => m.next && onYard(m.now) && !m.starting);
+  const wanting = list.filter(entering).sort((a, b) => (first(a, b) ? -1 : 1));
+  const queued = new Set(wanting.filter((_, i) => busy || i > 0).map((m) => m.id));
+  return { held, queued };
+}

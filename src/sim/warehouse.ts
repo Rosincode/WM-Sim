@@ -9,7 +9,7 @@ import { createCounter } from './counter';
 import { WAIT_BAYS, createDrivers, dockScreen } from './drivers';
 import { createRobotFleet } from './robots';
 import { offlineGateway, type WmsGateway, type WmsReply } from './wms';
-import { bayDriveSeconds, parkSeconds, truckSeconds } from './yard';
+import { bayDriveSeconds, parkSeconds, trafficHolds, truckPoseOf, truckSeconds } from './yard';
 
 // De fysieke wereld van het magazijn: vrachtwagens, pallets, de pallets van orders en wat er in de stellingen staat.
 // Die wereld is van de game en voor alle spelers dezelfde. De WMS is de administratie ervan: hij hoort wat
@@ -1505,6 +1505,7 @@ export function createWarehouse({
    * tot het zijn tijd is. true = hij staat nu tegen zijn dock.
    */
   function approach(t: Truck, dt: number) {
+    if (held.has(t)) return false; // er staat een andere wagen in de weg
     if (t.status === 'parking') {
       t.t = Math.min(1, t.t + dt / parkSeconds(t.bay ?? -1));
       if (t.t < 1) return false;
@@ -1532,7 +1533,7 @@ export function createWarehouse({
     if (approach(t, dt)) {
       t.status = 'waiting';
       say(`${t.id} staat aan ${t.dockId}: aanmelden.`);
-    } else if (t.status === 'departing') {
+    } else if (t.status === 'departing' && !held.has(t)) {
       t.t = Math.max(0, t.t - dt / truckSeconds(t.dock, true));
       if (t.t === 0) {
         trucks[slot] = null;
@@ -1565,8 +1566,41 @@ export function createWarehouse({
     });
   }
 
+  // ---------- Verkeer op het terrein ----------
+  /** De wagens die deze stap blijven staan omdat er een andere voor ze staat. */
+  let held = new Set<Truck>();
+  /** Zo lang (s) wacht alles wat wil rijden al op elkaar (dan zit het vast). */
+  let stuck = 0;
+  /** Waar een rijdende wagen over `s` seconden is (zonder hem echt te verplaatsen); null = hij staat stil. */
+  function ahead(t: Truck, s: number): Truck | null {
+    if (t.status === 'parking' && t.t < 1) return { ...t, t: Math.min(1, t.t + s / parkSeconds(t.bay ?? -1)) };
+    if (t.status === 'arriving' && t.t < 1)
+      return { ...t, t: Math.min(1, t.t + s / (t.bay === undefined ? truckSeconds(t.dock, false) : bayDriveSeconds(t.bay, t.dock))) };
+    if (t.status === 'departing' && t.t > 0) return { ...t, t: Math.max(0, t.t - s / truckSeconds(t.dock, true)) };
+    return null;
+  }
+  /**
+   * Vrachtwagens rijden niet door elkaar heen: wie te dicht bij een andere wagen zou komen wacht (de regels staan in
+   * trafficHolds in yard.ts). Bij gelijke kansen gaat wie vertrekt voor (die maakt plaats), dan wie naar zijn dock rijdt.
+   */
+  function traffic(dt: number) {
+    const all = [trucks.in, trucks.out, ...deliveries].filter((t): t is Truck => !!t);
+    const movers = all.map((t) => {
+      const a = ahead(t, Math.max(dt, 0.4));
+      const starting = (t.status === 'departing' && t.t >= 1) || (t.status === 'arriving' && t.bay !== undefined && t.t <= 0);
+      return { id: t.id, rank: t.status === 'departing' ? 0 : t.status === 'arriving' ? 1 : 2, now: truckPoseOf(t), next: a ? truckPoseOf(a) : null, starting };
+    });
+    const stop = trafficHolds(movers, new Set([...held].map((t) => t.id)));
+    // Staat alles wat wil rijden al een tijd stil (ze wachten op elkaar), dan mag de wagen met voorrang toch gaan
+    const wants = movers.filter((m) => m.next);
+    stuck = wants.length && wants.every((m) => stop.held.has(m.id) || stop.queued.has(m.id)) ? stuck + dt : 0;
+    const release = stuck > 20 ? wants.filter((m) => stop.held.has(m.id)).sort((a, b) => a.rank - b.rank)[0]?.id : undefined;
+    held = new Set(all.filter((t) => t.id !== release && (stop.held.has(t.id) || stop.queued.has(t.id))));
+  }
+
   function update(dt: number) {
     clock += dt;
+    traffic(dt);
     driveTruck('in', dt);
     driveTruck('out', dt);
     for (let i = deliveries.length - 1; i >= 0; i--) {
@@ -1575,6 +1609,7 @@ export function createWarehouse({
         t.status = 'checkedIn'; // de WMS heeft hem al aangemeld
         say(`${t.id} staat aan ${t.dockId}, aangemeld door de WMS (${plural(t.cargo.length, 'pallet')}).`);
       } else if (t.status === 'departing') {
+        if (held.has(t)) continue;
         t.t = Math.max(0, t.t - dt / truckSeconds(t.dock, true));
         if (t.t > 0) continue;
         departed.add(t.id);
