@@ -462,23 +462,51 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
       synth.cancel();
       byClock(Math.max(0, narration.i + 1));
     };
-    lines.forEach((l, i) => {
-      const u = new SpeechSynthesisUtterance(spoken(l));
-      u.lang = 'nl-NL';
-      if (voice) u.voice = voice;
-      u.rate = narration.rate;
-      u.pitch = narration.pitch;
-      u.onstart = () => {
-        started = true;
-        show(i);
-      };
-      u.onerror = (e) => e.error !== 'interrupted' && e.error !== 'canceled' && fail();
-      if (i === lines.length - 1) u.onend = end;
-      synth.speak(u);
-    });
+    // De hele scène als één tekst: dan leest de stem door zonder stilte tussen de zinnen (elke losse zin is voor de
+    // online stem een nieuw verzoek, met een pauze ervoor). De ondertitel volgt via de woordgrenzen die de stem meldt;
+    // meldt hij die niet, dan op de geschatte duur van elke zin vanaf het begin.
+    const parts = lines.map(spoken);
+    const starts: number[] = [];
+    let all = '';
+    for (const p of parts) {
+      if (all) all += ' ';
+      starts.push(all.length);
+      all += p;
+    }
+    let boundaries = false;
+    const guesses: number[] = [];
+    const u = new SpeechSynthesisUtterance(all);
+    u.lang = 'nl-NL';
+    if (voice) u.voice = voice;
+    u.rate = narration.rate;
+    u.pitch = narration.pitch;
+    u.onstart = () => {
+      started = true;
+      let t = 0;
+      parts.forEach((p, i) => {
+        if (i > 0) {
+          const id = window.setTimeout(() => !boundaries && show(i), t * 1000);
+          guesses.push(id);
+          timers.push(id);
+        }
+        t += estimate(p) * 0.92;
+      });
+    };
+    u.onboundary = (e) => {
+      if (!boundaries) {
+        boundaries = true;
+        guesses.forEach(clearTimeout);
+      }
+      let i = 0;
+      while (i + 1 < starts.length && e.charIndex >= starts[i + 1]) i++;
+      show(i);
+    };
+    u.onend = end;
+    u.onerror = (e) => e.error !== 'interrupted' && e.error !== 'canceled' && fail();
+    synth.speak(u);
     show(0);
     later(() => !started && fail(), 2.5); // de stem begint niet: dan op de klok
-    const total = lines.reduce((n, l) => n + estimate(spoken(l)), 0);
+    const total = parts.reduce((n, p) => n + estimate(p), 0);
     later(end, total * 2.2 + 4); // voor als het einde nooit gemeld wordt
   }
   /** Zonder klik (testen met ?auto) mag de browser niet praten: dan lopen de regels op een klok. */
