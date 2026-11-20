@@ -865,16 +865,7 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
   }
   const startButton = startScreen.querySelector('button')!;
   startButton.addEventListener('click', start);
-  // Eerst warmdraaien: de knop komt pas als de eerste vrachtwagen er is (of na een minuut)
-  startButton.disabled = true;
-  startButton.textContent = 'Het magazijn draait warm…';
-  const opened = performance.now();
-  const gate = setInterval(() => {
-    if (!drivers.drivers.length && performance.now() - opened < 60_000) return;
-    clearInterval(gate);
-    startButton.disabled = false;
-    startButton.textContent = '▶ Projector aan';
-  }, 500);
+
   if (params.has('auto')) {
     muted = true;
     setTimeout(start, 300);
