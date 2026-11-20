@@ -756,8 +756,10 @@ renderer.setAnimationLoop((now) => {
   jack.update(dt, player);
   // heupen net boven de zitting; forklift.seat is de plek van het hoofd
   handheld.update(dt, view.moving, driving ? view.look : undefined);
-  jetpack.group.visible = view.jetpack.on;
-  jetpack.update(dt, view.jetpack.thrust);
+  // In de trailer vliegt de speler als figurant met de jetpack (src/ui/trailer.ts)
+  const actor = trailer?.actor.on ? trailer.actor : null;
+  jetpack.group.visible = actor ? true : view.jetpack.on;
+  jetpack.update(dt, actor ? actor.thrust : view.jetpack.thrust);
   if (player.visible) {
     // Rijdend: linkerhand plat op het stuur; in first person houdt de rechterhand de scanner of tablet vast
     let leftHand: HandTarget | undefined;
@@ -772,7 +774,7 @@ renderer.setAnimationLoop((now) => {
       jack.grip(-1, jackHands[1].point);
       [leftHand, rightHand] = jackHands;
     }
-    character.update(dt, { seated: driving || !!chair, seatHipY: chair ? CHAIR_HIP_Y : forklift.seat.y - 0.56, carrying: warehouse.carrying(), emote: emoting(), leftHand, rightHand, walk: view.walk, airborne: view.airborne });
+    character.update(dt, { seated: driving || !!chair, seatHipY: chair ? CHAIR_HIP_Y : forklift.seat.y - 0.56, carrying: warehouse.carrying(), emote: emoting(), leftHand, rightHand, walk: view.walk, airborne: actor ? actor.y > 0.05 : view.airborne });
   }
 
   multiplayer?.update(dt);

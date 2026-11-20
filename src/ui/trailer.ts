@@ -56,6 +56,10 @@ interface Scene {
   shot?: Shot;
   /** Volgcamera: hoe snel de camera zijn doel bijhoudt (zonder: precies op het doel). */
   smooth?: number;
+  /** Is er nu te zien wat de verteller gaat zeggen (een chauffeur die lost, een robot die telt)? Zo niet, dan wacht de
+   * scène hooguit `wait` seconden met praten, terwijl de sim even sneller loopt. */
+  ready?: () => boolean;
+  wait?: number;
   /** Volgcamera: binnen de muren houden (zie contain). */
   contain?: boolean;
   /** In kleur (het tweede deel) in plaats van sepia. */
@@ -519,7 +523,9 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
     let last: { x: number; z: number; r: number } | null = null;
     return () => {
       let d = drivers.drivers.find((x) => x.id === id);
-      if (!d) {
+      if (!d || (!prefer(d) && drivers.drivers.some(prefer))) {
+        // (nog) niemand gekozen, of de gekozen chauffeur doet niet (meer) wat de verteller zegt en een ander wel
+        last = null;
         d = drivers.drivers.find((x) => prefer(x) && IN_HALL(x.x, x.z)) ?? drivers.drivers.find(prefer) ?? drivers.drivers[0];
         id = d?.id ?? '';
       }
@@ -529,6 +535,11 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
       return last;
     };
   }
+  const UNLOADING = ['toCargo', 'lifting', 'toLane', 'dropping'];
+  const LOADING = ['toStaged', 'lifting', 'toTrailer', 'dropping'];
+  type Driver = (typeof drivers.drivers)[number];
+  const unloads = (d: Driver) => d.direction === 'in' && UNLOADING.includes(d.phase);
+  const loads = (d: Driver) => d.direction === 'out' && LOADING.includes(d.phase);
   const fleet = warehouse.robots.fleet;
   function robotSubject(): Subject {
     let id: string | number = '';
@@ -590,6 +601,10 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
   const label = hall.scanTargets.filter((s) => /^R4A-0[3-5]-\d$/.test(s.code)).sort((a, b) => Math.abs(a.position.y - 1.5) - Math.abs(b.position.y - 1.5))[0] ?? hall.scanTargets[0];
   const labelAisle = label ? AISLE_Z.reduce((a, b) => (Math.abs(b - label.position.z) < Math.abs(a - label.position.z) ? b : a)) : 0;
   const officeDesk = hall.desks[0];
+  /** Waar de jetpack wordt gedemonstreerd: in het pad bij het label van de scanner. */
+  const jetSpot = { x: label ? label.position.x : 0, rackZ: label ? label.position.z : 0 };
+  /** De speler als figurant (de jetpack-demonstratie): in beeld, met de jetpack aan, zo hoog en zoveel stuwkracht. */
+  const actor = { on: false, y: 0, thrust: 0 };
   const dockFallback = dolly(V(-19, 3, dock.z + 6), V(-20, 2.6, dock.z + 3), V(-27, 1, dock.z), V(-27, 1, dock.z - 2));
   const exitShot = dolly(V(15.5, 2.4, 27), V(17.5, 2, 30.5), V(20.5, 1.3, 38.5));
 
@@ -633,7 +648,9 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
       hold: 0.17,
     },
     {
-      shot: follow(driverSubject((d) => d.jack), { dist: 4.6, up: 2.3, yaw: 0.6 }, dockFallback),
+      shot: follow(driverSubject(unloads), { dist: 4.6, up: 2.3, yaw: 0.6 }, dockFallback),
+      ready: () => drivers.drivers.some(unloads),
+      wait: 7,
       smooth: 2.5,
       contain: true,
       lines: ['De chauffeur lost zelf, met de elektrische pompwagen.', 'Pallet na pallet rolt de hal in, naar de inslagbaan.'],
@@ -641,6 +658,8 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
     },
     {
       shot: follow(() => warehouse.counter.robot, { dist: 3.8, up: 2, yaw: 0.7, lookY: 0.7 }, dockFallback),
+      ready: () => warehouse.counter.robot.phase !== 'idle',
+      wait: 5,
       smooth: 2.5,
       contain: true,
       lines: ['Dan komt de voorraadteller: een robot die elke doos natelt.', 'Want vertrouwen is goed.', 'Maar tellen is beter.'],
@@ -735,9 +754,29 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
         'Met de handscanner scant de medewerker elk label en elke palletsticker.',
         { text: 'De WMS beslist. Goed...', say: 'De WMS beslist. Goed...' },
         '...of fout.',
-        'En voor de bovenste plank? Daar is een jetpack voor. Volledig verantwoord.',
       ],
       hold: 0.17,
+    },
+    {
+      // De jetpack: een medewerker vliegt langs de stelling omhoog naar de bovenste plank
+      enter: () => (actor.on = true),
+      exit: () => {
+        actor.on = false;
+        player.position.copy(PARK);
+      },
+      shot: (c, t) => {
+        const side = Math.sign(labelAisle - jetSpot.rackZ) || 1; // vanaf de stelling naar het pad
+        const rise = ease((t - 0.6) / 3.2);
+        actor.y = 4.3 * rise + Math.sin(t * 2.2) * 0.05 * rise;
+        actor.thrust = rise > 0 && rise < 1 ? 1 : rise >= 1 ? 0.5 : 0;
+        player.position.set(jetSpot.x, actor.y, labelAisle - side * 0.2);
+        player.rotation.y = side > 0 ? Math.PI : 0; // gezicht naar de stelling
+        c.pos.set(jetSpot.x + 3.4, 1.3 + actor.y * 0.8, labelAisle + side * 0.9);
+        c.look.set(jetSpot.x, actor.y + 1.1, labelAisle - side * 0.2);
+      },
+      lines: ['En voor de bovenste plank?', 'Daar is een jetpack voor.', 'Volledig verantwoord.'],
+      min: 5.5,
+      hold: 0.6,
     },
     {
       shot: follow(robotSubject(), { dist: 5, up: 7.4, yaw: 0.2, lookY: 0.4 }, dolly(V(lastX + 6, 3, aisle), V(lastX + 5, 3, aisle - 3), V(lastX - 4, 0.5, aisle))),
@@ -764,7 +803,9 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
       hold: 0.28,
     },
     {
-      shot: follow(driverSubject((d) => d.direction === 'out' && !!d.load), { dist: 5, up: 2.6, yaw: 0.6 }, dockFallback),
+      shot: follow(driverSubject(loads), { dist: 5, up: 2.6, yaw: 0.6 }, dockFallback),
+      ready: () => drivers.drivers.some(loads),
+      wait: 7,
       smooth: 2.5,
       contain: true,
       lines: ['Orders worden gepickt, klaargezet en ingeladen.', 'De vrachtwagen vertrekt.', 'De klant is blij.', 'Henk is blij.'],
@@ -981,6 +1022,8 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
   }
   let leaderBeep = -1;
   let snap = true;
+  /** De scène wacht tot er te zien is wat de verteller gaat zeggen (zie Scene.ready). */
+  let holding = false;
   let covered = false;
   let coverTimer = 0;
   let lastFrame = 0;
@@ -1016,7 +1059,9 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
     if (s.leader || (s.card && s.card.style !== 'action')) coverTimer = window.setTimeout(() => (covered = true), 900);
     leaderBeep = -1;
     s.enter?.();
-    narrate(s.lines ?? [], !!s.color, s.onLine);
+    holding = !!s.ready && !s.ready();
+    if (holding) narrate([], !!s.color);
+    else narrate(s.lines ?? [], !!s.color, s.onLine);
   }
 
   function start() {
@@ -1054,10 +1099,14 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
     get covered() {
       return covered;
     },
-    /** Hoe snel de sim loopt: voor de start (op het startscherm) vier keer zo snel, tijdens de film gewoon. */
+    /** Hoe snel de sim loopt: op het startscherm, achter de eerste kaarten en als een scène op iets wacht sneller. */
     get simSpeed() {
-      return started ? 1 : 4;
+      if (!started) return 4;
+      if (holding) return 5; // even doorspoelen tot er iets te zien is
+      return index <= 2 ? 6 : 1; // tijdens de aftelfilm en de titelkaarten (dan zie je de hal niet)
     },
+    /** De speler als figurant met de jetpack (main.ts tekent de jetpack en de vliegende houding). */
+    actor,
     /** Wat de camera in handen heeft: scanner, raketwerper of niets. */
     get tool() {
       return tool;
@@ -1075,7 +1124,7 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
       const dt = Math.min(0.25, lastFrame ? (now - lastFrame) / 1000 : frameDt);
       lastFrame = now;
       clock += dt;
-      player.visible = false;
+      player.visible = actor.on;
       // Zwevende labels (taken, banen, namen) worden door muren heen getekend: in de film horen die niet
       if ((hideLabels -= dt) <= 0) {
         hideLabels = 0.5;
@@ -1087,9 +1136,17 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
       handheld.setActive(tool === 'scanner');
       rocket.setAllowed(tool === 'rocket');
       const s = scenes[index];
+      if (s && holding && (s.ready?.() || clockScene >= (s.wait ?? 6))) {
+        // nu is het te zien: de scène begint echt (de volgcamera zoekt opnieuw zijn onderwerp)
+        holding = false;
+        clockScene = 0;
+        snap = true;
+        speechEnd = Infinity;
+        narrate(s.lines ?? [], !!s.color, s.onLine);
+      }
       if (s) {
         clockScene += dt;
-        if (narration.done && speechEnd === Infinity) speechEnd = clockScene;
+        if (narration.done && speechEnd === Infinity && !holding) speechEnd = clockScene;
         const span = Math.max(s.min ?? 0, (s.lines ?? []).reduce((n, l) => n + estimate(spoken(l)) + 0.28, 0) + (s.hold === Infinity ? 0 : (s.hold ?? 0)));
         const k = clamp01(clockScene / Math.max(span, 0.1));
         if (s.shot) {
@@ -1119,7 +1176,7 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
             tone(n === 1 ? 1320 : 1000, 0.09, { vol: 0.12 });
           }
         }
-        if (s.hold !== Infinity && narration.done && clockScene >= Math.max(s.min ?? 0, speechEnd + (s.hold ?? 0))) go(index + 1);
+        if (!holding && s.hold !== Infinity && narration.done && clockScene >= Math.max(s.min ?? 0, speechEnd + (s.hold ?? 0))) go(index + 1);
       }
       // Film: korrel, flikkering, krassen en een licht trillend beeld
       if (ui.classList.contains('vintage')) {
