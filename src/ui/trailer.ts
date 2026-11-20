@@ -473,52 +473,73 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
       synth.cancel();
       byClock(Math.max(0, narration.i + 1));
     };
-    // De hele scène als één tekst: dan leest de stem door zonder stilte tussen de zinnen (elke losse zin is voor de
-    // online stem een nieuw verzoek, met een pauze ervoor). De ondertitel volgt via de woordgrenzen die de stem meldt;
-    // meldt hij die niet, dan op de geschatte duur van elke zin vanaf het begin.
+    // De zinnen gaan in stukken van hooguit ~110 tekens naar de stem: per losse zin geeft de online stem telkens een
+    // pauze, maar een lange tekst breekt hij soms halverwege af (en meldt dan nooit dat hij klaar is). De ondertitel
+    // volgt binnen een stuk de woordgrenzen die de stem meldt, of anders de geschatte duur van elke zin.
     const parts = lines.map(spoken);
-    const starts: number[] = [];
-    let all = '';
-    for (const p of parts) {
-      if (all) all += ' ';
-      starts.push(all.length);
-      all += p;
+    const chunks: number[][] = [];
+    for (let i = 0; i < parts.length; i++) {
+      const last = chunks[chunks.length - 1];
+      const len = last ? last.reduce((n, j) => n + parts[j].length + 1, 0) : Infinity;
+      if (last && len + parts[i].length <= 110) last.push(i);
+      else chunks.push([i]);
     }
-    let boundaries = false;
-    const guesses: number[] = [];
-    const u = new SpeechSynthesisUtterance(all);
-    u.lang = 'nl-NL';
-    if (voice) u.voice = voice;
-    u.rate = narration.rate;
-    u.pitch = narration.pitch;
-    u.onstart = () => {
-      started = true;
-      let t = 0;
-      parts.forEach((p, i) => {
-        if (i > 0) {
-          const id = window.setTimeout(() => !boundaries && show(i), t * 1000);
-          guesses.push(id);
-          timers.push(id);
-        }
-        t += estimate(p) * 0.92;
-      });
-    };
-    u.onboundary = (e) => {
-      if (!boundaries) {
-        boundaries = true;
-        guesses.forEach(clearTimeout);
+    chunks.forEach((chunk, c) => {
+      const starts: number[] = [];
+      let all = '';
+      for (const i of chunk) {
+        if (all) all += ' ';
+        starts.push(all.length);
+        all += parts[i];
       }
-      let i = 0;
-      while (i + 1 < starts.length && e.charIndex >= starts[i + 1]) i++;
-      show(i);
-    };
-    u.onend = end;
-    u.onerror = (e) => e.error !== 'interrupted' && e.error !== 'canceled' && fail();
-    synth.speak(u);
+      let boundaries = false;
+      const guesses: number[] = [];
+      const u = new SpeechSynthesisUtterance(all);
+      u.lang = 'nl-NL';
+      if (voice) u.voice = voice;
+      u.rate = narration.rate;
+      u.pitch = narration.pitch;
+      u.onstart = () => {
+        started = true;
+        show(chunk[0]);
+        let t = 0;
+        chunk.forEach((i, k) => {
+          if (k > 0) {
+            const id = window.setTimeout(() => !boundaries && show(i), t * 1000);
+            guesses.push(id);
+            timers.push(id);
+          }
+          t += estimate(parts[i]) * 0.92;
+        });
+      };
+      u.onboundary = (e) => {
+        if (!boundaries) {
+          boundaries = true;
+          guesses.forEach(clearTimeout);
+        }
+        let k = 0;
+        while (k + 1 < starts.length && e.charIndex >= starts[k + 1]) k++;
+        show(chunk[k]);
+      };
+      if (c === chunks.length - 1) u.onend = end;
+      u.onerror = (e) => e.error !== 'interrupted' && e.error !== 'canceled' && fail();
+      synth.speak(u);
+    });
     show(0);
     later(() => !started && fail(), 2.5); // de stem begint niet: dan op de klok
+    // Waakhond: valt de stem stil zonder dat te melden, dan is de scène klaar (en loopt de film niet vast)
+    let quiet = 0;
+    const watch = window.setInterval(() => {
+      if (my !== narration.token || narration.done) return clearInterval(watch);
+      quiet = started && !synth.speaking && !synth.pending ? quiet + 1 : 0;
+      if (quiet >= 3) {
+        clearInterval(watch);
+        end();
+      }
+    }, 250);
+    timers.push(watch);
     const total = parts.reduce((n, p) => n + estimate(p), 0);
-    later(end, total * 2.2 + 4); // voor als het einde nooit gemeld wordt
+    later(end, total * 1.6 + 3); // uiterste grens
   }
   /** Zonder klik (testen met ?auto) mag de browser niet praten: dan lopen de regels op een klok. */
   let muted = params.has('mute'); // ?mute: zonder stem (testen)
