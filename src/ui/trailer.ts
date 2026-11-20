@@ -415,8 +415,12 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
   pickVoice();
 
   const text = (l: Line) => (typeof l === 'string' ? l : l.text);
-  /** Zoals de verteller het moet uitspreken: 'pellet' (niet 'pallet'). */
-  const pronounce = (s: string) => s.replace(/pallet/gi, (m) => (m[0] === 'P' ? 'Pellet' : 'pellet'));
+  /**
+   * Zoals de verteller het moet uitspreken: 'pellet' (niet 'pallet'), en fizor. als 'fai-zor' (fonetisch 'Fijzor';
+   * een andere spelling proberen kan met ?fizor=..., zonder de code aan te passen).
+   */
+  const FIZOR = params.get('fizor') || 'Fijzor';
+  const pronounce = (s: string) => s.replace(/pallet/gi, (m) => (m[0] === 'P' ? 'Pellet' : 'pellet')).replace(/fizor/gi, FIZOR);
   const spoken = (l: Line) => pronounce(typeof l === 'string' ? l : l.say);
   const narration = { lines: [] as Line[], i: 0, done: true, token: 0, rate: 1, pitch: 1, onLine: undefined as Scene['onLine'] };
   const estimate = (s: string) => Math.max(1.1, s.length / 14 / narration.rate);
