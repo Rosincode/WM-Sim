@@ -14,6 +14,7 @@ import type { mountWarehouse } from './warehouse';
 // en in kleur komt de rest: boeven, de raketwerper en de kernbom. Afsluiter: fizor. Overal op voorbereid.
 // De trailer stuurt de camera zelf aan en speelt alles af in de echte sim (solo: niets gaat naar andere spelers).
 // Toetsen: Esc stopt (terug naar de game), pijl rechts slaat een scène over. Testen: ?trailer&auto&from=12.
+// ?trailer&loop: na de eindkaart begint de film vanzelf opnieuw (voor een scherm op een beurs of in de kantine).
 
 type Rocket = ReturnType<typeof createRocketLauncher>;
 type Thieves = ReturnType<typeof mountThieves>;
@@ -161,6 +162,7 @@ const CSS = `
 
 export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio, handheld, player, setRoof }: Options) {
   const params = new URLSearchParams(location.search);
+  const LOOP = params.has('loop');
   const style = document.createElement('style');
   style.textContent = CSS;
   document.head.appendChild(style);
@@ -804,7 +806,7 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
     },
     {
       color: true,
-      card: { style: 'fizor', html: `<div class="t"><img src="${logoUrl}" alt="fizor."><div class="tag">Overal op voorbereid.</div></div><div class="hint">Esc: zelf spelen · Enter: nog een keer</div>` },
+      card: { style: 'fizor', html: `<div class="t"><img src="${logoUrl}" alt="fizor."><div class="tag">Overal op voorbereid.</div></div><div class="hint">Esc: zelf spelen · ${LOOP ? 'de film begint zo opnieuw' : 'Enter: nog een keer'}</div>` },
       enter: () => {
         bedOff();
         [261.6, 329.6, 392, 523.3].forEach((f, i) => tone(f, 4.5, { type: 'triangle', vol: 0.07, delay: i * 0.06 }));
@@ -812,11 +814,20 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
       lines: [{ text: 'fizor. Overal op voorbereid.', say: 'Fizor. Overal op voorbereid.' }],
       min: 6,
       hold: Infinity,
-      at: [[4, () => card.querySelector('.hint')?.classList.add('on')]],
+      at: [
+        [4, () => card.querySelector('.hint')?.classList.add('on')],
+        [12, () => LOOP && restart()],
+      ],
     },
   ];
 
   // ---------- Afspelen ----------
+  /** Weer van voren af aan: de hal heel, geen boeven meer. */
+  function restart() {
+    rocket.restore();
+    thieves.request({ a: 'stop' });
+    go(0);
+  }
   let index = -1;
   let started = false;
   let clock = 0;
@@ -875,14 +886,10 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
     if (e.code === 'Escape') {
       synth?.cancel();
       const p = new URLSearchParams(location.search);
-      for (const k of ['trailer', 'auto', 'from', 'voice']) p.delete(k);
+      for (const k of ['trailer', 'auto', 'from', 'voice', 'loop']) p.delete(k);
       location.search = p.toString();
     } else if (e.code === 'ArrowRight' && started) go(index + 1);
-    else if (e.code === 'Enter' && started && index === scenes.length - 1) {
-      rocket.restore();
-      thieves.request({ a: 'stop' });
-      go(0);
-    }
+    else if (e.code === 'Enter' && started && index === scenes.length - 1) restart();
   });
 
   player.position.copy(PARK);
