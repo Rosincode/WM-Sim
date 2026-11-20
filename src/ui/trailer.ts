@@ -411,8 +411,8 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
   pickVoice();
 
   const text = (l: Line) => (typeof l === 'string' ? l : l.text);
-  /** Zoals de verteller het moet uitspreken: 'pellet' (niet 'pallet'), en fizor. als 'faizor'. */
-  const pronounce = (s: string) => s.replace(/pallet/gi, (m) => (m[0] === 'P' ? 'Pellet' : 'pellet')).replace(/fizor/gi, 'Faizor');
+  /** Zoals de verteller het moet uitspreken: 'pellet' (niet 'pallet'). */
+  const pronounce = (s: string) => s.replace(/pallet/gi, (m) => (m[0] === 'P' ? 'Pellet' : 'pellet'));
   const spoken = (l: Line) => pronounce(typeof l === 'string' ? l : l.say);
   const narration = { lines: [] as Line[], i: 0, done: true, token: 0, rate: 1, pitch: 1, onLine: undefined as Scene['onLine'] };
   const estimate = (s: string) => Math.max(1.1, s.length / 14 / narration.rate);
@@ -576,7 +576,7 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
     { leader: true, min: 4.2, shot: dolly(V(-95, 55, -95), V(-95, 55, -95), V(-8, 0, -10)) },
     {
       card: { style: 'old', html: '<div class="frame"><div class="small">een productie van</div><div class="big">fizor.</div><div class="small">in samenwerking met de toekomst</div></div>' },
-      lines: [{ text: 'Een productie van fizor.', say: 'Een productie van fizor.' }],
+      lines: [{ text: 'Een productie van fizor.', say: 'Een productie van Fizor.' }],
       min: 4,
       hold: 0.35,
     },
@@ -909,7 +909,7 @@ export function createTrailer({ camera, hall, warehouse, thieves, rocket, radio,
         pirateRadio(false);
         [261.6, 329.6, 392, 523.3].forEach((f, i) => tone(f, 4.5, { type: 'triangle', vol: 0.07, delay: i * 0.06 }));
       },
-      lines: [{ text: 'fizor. Overal op voorbereid.', say: 'fizor. Overal op voorbereid.' }],
+      lines: [{ text: 'fizor. Overal op voorbereid.', say: 'Fizor. Overal op voorbereid.' }],
       min: 6,
       hold: Infinity,
       at: [
