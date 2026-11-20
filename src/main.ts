@@ -35,12 +35,15 @@ import { menu } from './ui/menu';
 import { createPrompts, esc, type Prompt } from './ui/prompts';
 import { createEditor } from './ui/editor';
 import { createSounds, objectSource } from './ui/sounds';
+import { createTrailer } from './ui/trailer';
 
 // De WMS-koppeling loopt via de poort van de sim (src/sim/wms.ts, ingevuld in src/ui/wmsGateway.ts):
 // elke handeling wacht op het antwoord van de WMS. De bridge op de bus (startWmsBridge) start daarom
 // niet meer; die zou dezelfde stappen een tweede keer boeken.
 
 const params = new URLSearchParams(location.search);
+/** De trailer (?trailer, src/ui/trailer.ts): de camera speelt een film af, solo, zonder besturing. */
+const TRAILER = params.has('trailer');
 
 // --- Renderer, scène, camera ---
 // Renderschaal (pixels per CSS-pixel): past zich tijdens het spelen aan de framerate aan, zie tuneScale().
@@ -394,6 +397,7 @@ try {
 }
 let savedPlace = '';
 function savePlace() {
+  if (TRAILER) return; // de trailer zet de speler zelf ergens neer
   let { x, y, z } = player.position;
   let r = player.rotation.y;
   if (chair) {
@@ -611,7 +615,7 @@ const thieves = mountThieves({
 if (import.meta.env.DEV) Object.assign((window as unknown as { wmDebug: object }).wmDebug, { thieves });
 
 // --- Multiplayer: iedereen speelt samen in één magazijn (?room=naam voor een eigen kamer, ?solo om alleen te spelen) ---
-const multiplayer = params.has('solo')
+const multiplayer = params.has('solo') || TRAILER
   ? null
   : mountMultiplayer({
       scene,
@@ -708,6 +712,19 @@ function refreshShadows() {
   renderer.shadowMap.needsUpdate = true;
 }
 
+// --- Trailer: neemt de camera over (alleen met ?trailer) ---
+const trailer = TRAILER
+  ? createTrailer({
+      camera, hall, warehouse, thieves, rocket, radio, handheld, player,
+      setRoof: (on) => {
+        hall.roof.visible = on;
+        sky.overview = !on;
+        applySky();
+      },
+    })
+  : null;
+if (trailer) view.setMode('first');
+
 // --- Loop ---
 let last = performance.now();
 const wheelHand: HandTarget = { point: new THREE.Vector3(), normal: new THREE.Vector3() };
@@ -724,13 +741,14 @@ renderer.setAnimationLoop((now) => {
     emoteShown = !emoteShown;
     applyMode(view.mode); // scanner, tablet of raketwerper even weg
   }
-  if (!rocket.flying) view.update(dt);
+  if (trailer) trailer.update(dt);
+  else if (!rocket.flying) view.update(dt);
   emoteHands.update(dt, emoteShown && view.mode === 'first'); // opgeblazen: je vliegt, lopen kan even niet
   rocket.update(dt); // na de camera: de klap van een inslag laat hem even schudden
   // In het overzicht staat de camera ver weg en is de dieptebuffer met een voorvlak op 5 cm te grof: onderdelen
   // die een paar cm voor elkaar liggen (grille en ruiten van een vrachtwagen) flikkeren dan door elkaar heen.
   // Het voorvlak schuift daarom mee met de afstand tot waar je naar kijkt.
-  const near = view.mode === 'overview' ? THREE.MathUtils.clamp(camera.position.distanceTo(controls.target) * 0.02, 0.05, 3) : 0.05;
+  const near = trailer ? trailer.near : view.mode === 'overview' ? THREE.MathUtils.clamp(camera.position.distanceTo(controls.target) * 0.02, 0.05, 3) : 0.05;
   if (Math.abs(near - camera.near) > camera.near * 0.05) {
     camera.near = near;
     camera.updateProjectionMatrix();
@@ -759,8 +777,9 @@ renderer.setAnimationLoop((now) => {
 
   multiplayer?.update(dt);
 
-  radio.update(player.position);
-  printer.update(dt, player.position);
+  const listener = trailer?.listener ?? player.position;
+  radio.update(listener);
+  printer.update(dt, listener);
   warehouse.update(dt);
   exterior.setGate(warehouse.gateOpen());
   robots.update(dt);
@@ -772,7 +791,7 @@ renderer.setAnimationLoop((now) => {
   const nextExit = THREE.MathUtils.clamp(exitOpen + (atExit ? dt : -dt) / 0.6, 0, 1);
   if (nextExit !== exitOpen) hall.setExitDoor((exitOpen = nextExit));
   // Buiten zie je de lucht en het terrein tot in de verte, binnen de nevel van de hal
-  const outdoors = exterior.isOutside(player.position.x, player.position.z);
+  const outdoors = exterior.isOutside(listener.x, listener.z);
   if (outdoors !== sky.outdoors) {
     sky.outdoors = outdoors;
     applySky();
@@ -813,7 +832,7 @@ renderer.setAnimationLoop((now) => {
   }
   if (radio.hint) list.push(hintPrompt(radio.hint));
   if (printer.hint) list.push(hintPrompt(printer.hint));
-  prompts.set(list);
+  prompts.set(trailer ? [] : list);
 
   refreshShadows();
   if (postFx) composer.render(dt);

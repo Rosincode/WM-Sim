@@ -1359,6 +1359,8 @@ export function createRocketLauncher({ scene, camera, canvas, onChange, onRespaw
     shoot,
     /** Voor testen: een inslag op deze plek. */
     blastAt: (x: number, y: number, z: number, nuke = false) => explode(new THREE.Vector3(x, y, z), undefined, nuke),
+    /** Kernbom laden of weer uit de werper halen (zoals toets 4); voor de trailer (src/ui/trailer.ts). */
+    loadNuke,
     /** Laat ver weg een kernbom vallen (de knop in de kantine). Geeft false als er al een onderweg is. */
     airstrike,
     /** Is er een kernbom uit de lucht onderweg (of rolt de drukgolf nog)? */
